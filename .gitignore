@@ -1,0 +1,58 @@
+# Build output
+build/
+src/Release/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# CMake generated
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.vcxproj
+*.vcxproj.filters
+*.sln
+*.dir/
+*_autogen/
+Win32/
+
+# Generated headers (regenerated during build)
+src/dll_payload.h
+src/encrypted_data.h
+src/padding_data.h
+src/version.rc
+
+# Server data
+server/data/
+certs/
+
+# Qt deployment
+src/*.dll
+src/*.exe
+src/platforms/
+src/imageformats/
+src/styles/
+src/translations/
+src/qt.conf
+
+# IDE
+.vs/
+.vscode/
+.claude/
+*.suo
+*.user
+*.ncb
+*.sdf
+*.opensdf
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Archives
+*.zip
+*.7z
+*.rar

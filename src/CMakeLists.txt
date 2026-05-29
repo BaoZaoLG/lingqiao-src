@@ -1,0 +1,132 @@
+# -- MinHook library (built as part of CefHook) -------------------------
+set(MINHOOK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vendor/minhook)
+
+# Check if MinHook source exists
+if(EXISTS "${MINHOOK_DIR}/src/hook.c")
+    set(MINHOOK_SOURCES
+        ${MINHOOK_DIR}/src/buffer.c
+        ${MINHOOK_DIR}/src/hook.c
+        ${MINHOOK_DIR}/src/trampoline.c
+    )
+
+    # HDE (Hacker Disassembler Engine) — platform-specific
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        # x64
+        if(EXISTS "${MINHOOK_DIR}/src/hde/hde64.c")
+            list(APPEND MINHOOK_SOURCES ${MINHOOK_DIR}/src/hde/hde64.c)
+        endif()
+    else()
+        # x86
+        if(EXISTS "${MINHOOK_DIR}/src/hde/hde32.c")
+            list(APPEND MINHOOK_SOURCES ${MINHOOK_DIR}/src/hde/hde32.c)
+        endif()
+    endif()
+
+    set(HAS_MINHOOK TRUE)
+    message(STATUS "MinHook found at ${MINHOOK_DIR}")
+else()
+    set(HAS_MINHOOK FALSE)
+    message(WARNING "MinHook not found! Run: powershell -File scripts/download_minhook.ps1")
+endif()
+
+# -- Hook DLL ----------------------------------------------------------
+add_library(CefHook SHARED
+    dllmain.cpp
+    thread.cpp
+    hook_engine.c
+    pch.cpp
+    pch.h
+    hook_engine.h
+    framework.h
+    ${MINHOOK_SOURCES}
+)
+
+set_target_properties(CefHook PROPERTIES
+    LINKER_LANGUAGE CXX
+    OUTPUT_NAME "CefHook"
+    PREFIX ""
+)
+
+target_include_directories(CefHook PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${MINHOOK_DIR}/include
+    ${MINHOOK_DIR}/src       # For HDE headers
+)
+
+target_link_libraries(CefHook PRIVATE shell32 comdlg32 advapi32 bcrypt)
+target_compile_options(CefHook PRIVATE /utf-8 /GS /guard:cf /O2 /GL)
+target_link_options(CefHook PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf /LTCG /OPT:REF /OPT:ICF /PDBALTPATH:%_PDB%)
+
+# Generate dll_payload.h (C header with DLL as byte array) after CefHook.dll is built
+set(DLL_HEADER "${CMAKE_CURRENT_BINARY_DIR}/dll_payload.h")
+add_custom_command(
+    OUTPUT ${DLL_HEADER}
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+        -File "${CMAKE_SOURCE_DIR}/scripts/embed_dll.ps1"
+        -DllPath "$<TARGET_FILE:CefHook>"
+        -OutHeader "${DLL_HEADER}"
+    DEPENDS CefHook
+    COMMENT "Embedding CefHook.dll as C byte array..."
+)
+
+# -- Injector EXE (Qt) -------------------------------------------------
+set(CMAKE_PREFIX_PATH "C:/Qt/5.15.2/msvc2019")
+find_package(Qt5 REQUIRED COMPONENTS Widgets Network WinExtras Concurrent)
+
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
+
+# Generate version resource from CMake APP_VERSION
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.rc.in
+               ${CMAKE_CURRENT_BINARY_DIR}/version.rc @ONLY)
+
+set(INJECTOR_HEADERS
+    antidebug.h
+    strcrypt.h
+    config.h
+    crypto.h
+    http_client.h
+    machine_fp.h
+    dll_extractor.h
+    workers.h
+    ui/theme.h
+    ui/title_bar.h
+    ui/inline_status.h
+    ui/animated_button.h
+    ui/main_window.h
+)
+
+add_executable(Injector WIN32
+    injector_qt.cpp
+    ${DLL_HEADER}
+    ${INJECTOR_HEADERS}
+    ${CMAKE_CURRENT_BINARY_DIR}/version.rc
+)
+set_target_properties(Injector PROPERTIES OUTPUT_NAME "CX_LingQiao")
+target_include_directories(Injector PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(Injector PRIVATE
+    Qt5::Widgets
+    Qt5::Network
+    Qt5::WinExtras
+    Qt5::Concurrent
+    comctl32
+    shell32
+    advapi32
+    iphlpapi
+    psapi
+    crypt32
+    ws2_32
+    version
+)
+target_compile_options(Injector PRIVATE /utf-8 /bigobj /GS /guard:cf /O2 /GL)
+target_link_options(Injector PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf /LTCG /OPT:REF /OPT:ICF /PDBALTPATH:%_PDB%)
+target_compile_definitions(Injector PRIVATE QT_DISABLE_DEPRECATED_BEFORE=0x050F00 _CRT_SECURE_NO_WARNINGS APP_VERSION="${APP_VERSION}")
+
+# Auto-deploy Qt DLLs after building Injector.exe
+add_custom_command(TARGET Injector POST_BUILD
+    COMMAND "${CMAKE_PREFIX_PATH}/bin/windeployqt.exe" --release --force
+        --no-translations
+        "$<TARGET_FILE:Injector>"
+    COMMENT "Deploying Qt runtime dependencies..."
+)
