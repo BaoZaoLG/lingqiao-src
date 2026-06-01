@@ -146,10 +146,30 @@ func (cm *CardManager) load() {
 // save persists current state. Must NOT be called while holding cm.mu.Lock().
 func (cm *CardManager) save() {
 	cm.mu.RLock()
+	// Deep copy all maps to avoid concurrent map iteration/write during JSON marshal
+	cards := make(map[string]*Card, len(cm.cards))
+	for k, v := range cm.cards {
+		cp := *v
+		cards[k] = &cp
+	}
+	sessions := make(map[string]*Session, len(cm.sessions))
+	for k, v := range cm.sessions {
+		cp := *v
+		sessions[k] = &cp
+	}
+	agents := make(map[string]*Agent, len(cm.agents))
+	for k, v := range cm.agents {
+		cp := *v
+		agents[k] = &cp
+	}
 	bl := make([]BlacklistEntry, 0, len(cm.blacklist))
 	for _, e := range cm.blacklist {
 		bl = append(bl, *e)
 	}
+	audit := make([]AuditEntry, len(cm.auditLog))
+	copy(audit, cm.auditLog)
+	cm.mu.RUnlock()
+
 	data := struct {
 		Cards     map[string]*Card    `json:"cards"`
 		Sessions  map[string]*Session `json:"sessions"`
@@ -157,13 +177,12 @@ func (cm *CardManager) save() {
 		Agents    map[string]*Agent   `json:"agents"`
 		Audit     []AuditEntry        `json:"audit"`
 	}{
-		Cards:     cm.cards,
-		Sessions:  cm.sessions,
+		Cards:     cards,
+		Sessions:  sessions,
 		Blacklist: bl,
-		Agents:    cm.agents,
-		Audit:     cm.auditLog,
+		Agents:    agents,
+		Audit:     audit,
 	}
-	cm.mu.RUnlock()
 
 	if err := cm.storage.Save("data", &data); err != nil {
 		log.Printf("[ERROR] Failed to persist data: %v", err)

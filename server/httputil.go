@@ -12,6 +12,14 @@ import (
 	"time"
 )
 
+// short returns the first n characters of s, or all of s if shorter.
+func short(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
 // ── JSON Response Helpers ────────────────────────────────────────────────────
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

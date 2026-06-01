@@ -357,7 +357,7 @@ func (h *PayloadHandler) HandleKeyExchange(w http.ResponseWriter, r *http.Reques
 	keyHmac := mac.Sum(nil)
 
 	log.Printf("[KEY-EXCHANGE] OK: card=%s machine=%s payload=%s",
-		session.CardCode[:8]+"...", req.MachineID[:8]+"...", req.PayloadID)
+		short(session.CardCode, 8)+"...", short(req.MachineID, 8)+"...", req.PayloadID)
 
 	writeJSON(w, map[string]interface{}{
 		"status":         "ok",

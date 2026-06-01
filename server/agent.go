@@ -211,11 +211,6 @@ func (h *AgentHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := ValidateAndUseInvite(req.InviteCode); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
 	req.Username = strings.TrimSpace(req.Username)
 	if len(req.Username) < 3 || len(req.Username) > 20 {
 		writeError(w, http.StatusBadRequest, "用户名长度需在3-20个字符之间")
@@ -241,6 +236,13 @@ func (h *AgentHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "密码加密失败")
 		return
 	}
+
+	// Consume invite code only after all validation passes
+	if err := ValidateAndUseInvite(req.InviteCode); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	agent, err := h.cm.CreateAgent(req.Username, string(bcryptHash), "")
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") {

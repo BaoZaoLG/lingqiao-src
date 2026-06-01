@@ -118,7 +118,7 @@ func (h *APIHandler) HandleActivate(w http.ResponseWriter, r *http.Request) {
 		cardExp = card.ExpiresAt.Unix()
 	}
 
-	log.Printf("[ACTIVATE] OK: card=%s machine=%s token=%s", req.Card, req.MachineID, session.Token[:8]+"...")
+	log.Printf("[ACTIVATE] OK: card=%s machine=%s token=%s", req.Card, req.MachineID, short(session.Token, 8)+"...")
 
 	_, updateInfo := h.checkVersion(w, req.ClientVersion)
 	resp := map[string]interface{}{
@@ -154,7 +154,7 @@ func (h *APIHandler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 	session, err := h.cm.Heartbeat(req.SessionToken, req.MachineID, getClientIP(r), req.ClientVersion)
 	if err != nil {
-		log.Printf("[HEARTBEAT] Failed: token=%s error=%v", req.SessionToken[:8]+"...", err)
+		log.Printf("[HEARTBEAT] Failed: token=%s error=%v", short(req.SessionToken, 8)+"...", err)
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
@@ -255,7 +255,7 @@ func (h *APIHandler) HandleDllDownload(w http.ResponseWriter, r *http.Request) {
 
 	mid := session.MachineID
 	if len(mid) > 8 {
-		mid = mid[:8] + "..."
+		mid = short(mid, 8) + "..."
 	}
 	log.Printf("[DLL] Served to machine=%s size=%d", mid, len(encrypted))
 
