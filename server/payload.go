@@ -65,7 +65,9 @@ func (ps *PayloadStore) save() {
 		Payloads map[string]*PayloadInfo `json:"payloads"`
 	}{Payloads: ps.payloads}
 	ps.mu.RUnlock()
-	ps.storage.Save("payloads", &data)
+	if err := ps.storage.Save("payloads", &data); err != nil {
+		log.Printf("[ERROR] Failed to persist payloads: %v", err)
+	}
 }
 
 func (ps *PayloadStore) Add(info *PayloadInfo) {

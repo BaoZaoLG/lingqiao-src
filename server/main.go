@@ -248,10 +248,12 @@ func newServer(addr string, handler http.Handler) *http.Server {
 		Addr:         addr,
 		Handler:      handler,
 		TLSConfig:    tlsConfig,
-		ReadTimeout:  300 * time.Second,
-		WriteTimeout: 300 * time.Second,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
+	// Note: payload upload endpoints need longer timeouts.
+	// Use http.TimeoutHandler or per-route wrappers for those.
 	srv.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
 	return srv
 }

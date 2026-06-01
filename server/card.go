@@ -165,7 +165,9 @@ func (cm *CardManager) save() {
 	}
 	cm.mu.RUnlock()
 
-	cm.storage.Save("data", &data)
+	if err := cm.storage.Save("data", &data); err != nil {
+		log.Printf("[ERROR] Failed to persist data: %v", err)
+	}
 	cm.rotateAuditLog()
 }
 
