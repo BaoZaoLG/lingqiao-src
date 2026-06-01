@@ -97,9 +97,9 @@ set(INJECTOR_HEADERS
     ui/inline_status.h
     ui/animated_button.h
     ui/main_window.h
-    ui/session_controller_impl.h
-    ui/ui_builder_impl.h
-    ui/update_controller_impl.h
+    ui/impl_session.h
+    ui/impl_builder.h
+    ui/impl_update.h
 )
 
 add_executable(Injector WIN32

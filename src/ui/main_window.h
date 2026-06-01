@@ -231,15 +231,14 @@ private:
     bool     m_updateDismissed  = false;   // session-level: suppress update banner after "稍后提醒"
     QPoint   m_dragPos;
 
-    // ── Local Logger ───────────────────────────────────────────────
-    // ── Session, Logging, Tray, History (session_controller_impl.h) ──
-    #include "session_controller_impl.h"
+    // ── Session, Logging, Tray, History ──
+    #include "impl_session.h"
 
-    // ── UI Construction (ui_builder_impl.h) ──
-    #include "ui_builder_impl.h"
+    // ── UI Construction ──
+    #include "impl_builder.h"
 
-    // ── Update Logic (update_controller_impl.h) ──
-    #include "update_controller_impl.h"
+    // ── Update Logic ──
+    #include "impl_update.h"
 
 
     QLayout* buildActionRow() {
@@ -798,3 +797,4 @@ private:
             }
         }
     }
+};

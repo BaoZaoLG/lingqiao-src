@@ -47,7 +47,7 @@
                     Sleep(2000);
                 }
                 err = HttpDownloadFile(host, port, path, tempFile,
-                    [this, progressDlg, version](qint64 read, qint64 total) {
+                    [safeThis, progressDlg, version](qint64 read, qint64 total) {
                         if (total > 0) {
                             int pct = (int)(read * 100 / total);
                             QString msg = QString::fromUtf8(_S("发现新版本 v%1，正在下载更新...\n已下载 %2% (%3/%4 MB)"))
