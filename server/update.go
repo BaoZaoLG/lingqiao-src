@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +19,7 @@ type UpdateInfo struct {
 	Version    string    `json:"version"`
 	Filename   string    `json:"filename"`
 	FileSize   int64     `json:"file_size"`
+	SHA256     string    `json:"sha256"`
 	UploadedAt time.Time `json:"uploaded_at"`
 }
 
@@ -95,6 +98,15 @@ func (h *AdminHandler) HandleUpdateUpload(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Compute SHA-256 of uploaded file
+	hash := sha256.New()
+	f, _ := os.Open(savePath)
+	if f != nil {
+		io.Copy(hash, f)
+		f.Close()
+	}
+	sha256Hex := hex.EncodeToString(hash.Sum(nil))
+
 	updateMu.Lock()
 	if currentUpdate != nil && currentUpdate.Filename != safeFilename {
 		oldPath := filepath.Join("data/updates", currentUpdate.Filename)
@@ -104,6 +116,7 @@ func (h *AdminHandler) HandleUpdateUpload(w http.ResponseWriter, r *http.Request
 		Version:    version,
 		Filename:   safeFilename,
 		FileSize:   written,
+		SHA256:     sha256Hex,
 		UploadedAt: time.Now(),
 	}
 	currentUpdate = info

@@ -45,7 +45,7 @@
     }
 
     // Centralized update decision — called from heartbeat, announcement, and activation handlers
-    void handleUpdateCheck(const QString& latest, const QString& url, bool force) {
+    void handleUpdateCheck(const QString& latest, const QString& url, bool force, const QString& sha256 = QString()) {
         if (latest.isEmpty()) return;
         if (CompareVersion(GetClientVersion(), latest) >= 0) return;  // already up-to-date
         if (force) {
@@ -53,6 +53,7 @@
         } else if (!m_updateDismissed) {
             m_pendingUpdateVersion = latest;
             m_pendingUpdateUrl = url;
+            m_pendingUpdateSha256 = sha256;
             m_updateLabel->setText(QString::fromUtf8(_S("<b>新版本可用:</b> v%1 已发布")).arg(latest));
             m_updateNowBtn->setVisible(!url.isEmpty());
             m_remindLaterBtn->setVisible(true);
@@ -266,7 +267,7 @@
         m_updateNowBtn->setVisible(false);
         connect(m_updateNowBtn, &QPushButton::clicked, this, [this]() {
             if (!m_pendingUpdateUrl.isEmpty())
-                ApplyUpdate(m_pendingUpdateVersion, m_pendingUpdateUrl);
+                ApplyUpdate(m_pendingUpdateVersion, m_pendingUpdateUrl, m_pendingUpdateSha256);
         });
         lay->addWidget(m_updateNowBtn);
 
@@ -297,7 +298,7 @@
             dlg->setAttribute(Qt::WA_DeleteOnClose);
             dlg->show();
             QApplication::processEvents();
-            ApplyUpdate(latest, url, dlg);
+            ApplyUpdate(latest, url, QString(), dlg);
         } else {
             QMessageBox dlg(this);
             dlg.setWindowTitle(QString::fromUtf8(_S("需要更新")));

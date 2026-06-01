@@ -20,6 +20,7 @@ type AgentHandler struct {
 	cm            *CardManager
 	mu            sync.Mutex
 	sessions      map[string]time.Time
+	fileMu        sync.Mutex // protects JSON file reads/writes for token map
 	loginLimiter  *rateLimiter
 	regLimiter    *rateLimiter
 	pwLimiter     *rateLimiter
@@ -90,6 +91,8 @@ func (h *AgentHandler) checkSession(r *http.Request) (string, bool) {
 }
 
 func (h *AgentHandler) getAgentIDForToken(token string) string {
+	h.fileMu.Lock()
+	defer h.fileMu.Unlock()
 	data, err := os.ReadFile("data/agent_token_map.json")
 	if err != nil {
 		return ""
@@ -102,6 +105,8 @@ func (h *AgentHandler) getAgentIDForToken(token string) string {
 }
 
 func (h *AgentHandler) mapTokenToAgent(token, agentID string) {
+	h.fileMu.Lock()
+	defer h.fileMu.Unlock()
 	data, _ := os.ReadFile("data/agent_token_map.json")
 	m := make(map[string]string)
 	json.Unmarshal(data, &m)

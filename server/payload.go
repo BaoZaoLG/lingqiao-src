@@ -103,7 +103,7 @@ func NewPayloadHandler(store *PayloadStore) *PayloadHandler {
 			key = hex.EncodeToString(b)
 			os.MkdirAll("data", 0755)
 			os.WriteFile("data/upload_key", []byte(key), 0600)
-			log.Printf("[PAYLOAD] Generated upload key (saved to data/upload_key): %s", key)
+			log.Printf("[PAYLOAD] Generated upload key and saved to data/upload_key")
 		}
 	}
 	return &PayloadHandler{store: store, uploadKey: key}

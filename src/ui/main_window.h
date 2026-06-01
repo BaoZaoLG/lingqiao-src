@@ -221,7 +221,7 @@ private:
     QLabel*        m_updateLabel   = nullptr;
     AnimatedButton* m_remindLaterBtn = nullptr;
     AnimatedButton* m_updateNowBtn   = nullptr;
-    QString  m_pendingUpdateVersion, m_pendingUpdateUrl;
+    QString  m_pendingUpdateVersion, m_pendingUpdateUrl, m_pendingUpdateSha256;
 
     QString  m_sessionToken, m_machineID;
     bool     m_activated        = false;
@@ -500,7 +500,8 @@ private:
                             latest = latest.mid(1);
                         if (!latest.isEmpty()) {
                             safeThis->handleUpdateCheck(latest, anno["download_url"].toString(),
-                                              anno["force_update"].toBool(false));
+                                              anno["force_update"].toBool(false),
+                                              anno["sha256"].toString());
                         }
                     } else safeThis->m_announcement->setVisible(false);
                 }
@@ -733,8 +734,14 @@ private:
             m_injectBtn->setEnabled(true); m_injectBtn->setText(QString::fromUtf8(_S("▶  启动注入")));
             return;
         }
-        WaitForSingleObject(hThread, 15000);
-        DWORD result = 0; GetExitCodeThread(hThread, &result); CloseHandle(hThread);
+        DWORD waitResult = WaitForSingleObject(hThread, 15000);
+        DWORD result = 0;
+        if (waitResult == WAIT_OBJECT_0) {
+            GetExitCodeThread(hThread, &result);
+        } else {
+            logEvent("INJECT", QString("Inject thread wait result: %1 (timeout/error)").arg(waitResult));
+        }
+        CloseHandle(hThread);
         VirtualFreeEx(pi.hProcess, pRemote, 0, MEM_RELEASE);
         ResumeThread(pi.hThread); CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
         CleanupDll();

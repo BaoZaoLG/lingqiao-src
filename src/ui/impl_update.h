@@ -1,4 +1,4 @@
-    void ApplyUpdate(const QString& version, const QString& url, QMessageBox* progressDlg = nullptr) {
+    void ApplyUpdate(const QString& version, const QString& url, const QString& expectedSha256 = QString(), QMessageBox* progressDlg = nullptr) {
         // Build download path from URL
         std::wstring dlPathStr;
         if (url.startsWith("http://") || url.startsWith("https://")) {
@@ -31,7 +31,8 @@
 
         // Run download in background thread to avoid UI freeze
         QPointer<MainWindow> safeThis(this);
-        QtConcurrent::run([safeThis, sHost, port, sPath, sTempFile, sExe, sTempDir, version, progressDlg]() {
+        auto expectedSha = expectedSha256;
+        QtConcurrent::run([safeThis, sHost, port, sPath, sTempFile, sExe, sTempDir, version, progressDlg, expectedSha]() {
             const wchar_t* host = sHost.c_str();
             const wchar_t* path = sPath.c_str();
             const wchar_t* tempFile = sTempFile.c_str();
@@ -98,6 +99,18 @@
                     BCryptCloseAlgorithmProvider(hAlg, 0);
                 }
                 CloseHandle(hVerify);
+                // Verify SHA-256 if server provided expected hash
+                if (!expectedSha.isEmpty() && _stricmp(fileHashHex, expectedSha.toUtf8().constData()) != 0) {
+                    DeleteFileW(tempFile);
+                    QMetaObject::invokeMethod(safeThis, [safeThis, progressDlg]() {
+                        if (!safeThis) return;
+                        if (progressDlg) progressDlg->close();
+                        safeThis->setStatus("error", QString::fromUtf8(_S("更新文件哈希不匹配")));
+                        safeThis->m_injectBtn->setEnabled(!safeThis->m_forceUpdateBlocked);
+                        QMessageBox::warning(safeThis, QString::fromUtf8(_S("更新失败")), QString::fromUtf8(_S("下载的文件完整性校验失败，可能被篡改。")));
+                    }, Qt::QueuedConnection);
+                    return;
+                }
                 if (magic[0] != 'M' || magic[1] != 'Z' || fileSize < 4096) {
                     DeleteFileW(tempFile);
                     QMetaObject::invokeMethod(safeThis, [safeThis, progressDlg]() {
