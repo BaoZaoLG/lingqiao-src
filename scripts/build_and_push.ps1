@@ -30,17 +30,11 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  构建版本: v$Version" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 
-# ── 2. 更新 CMakeLists.txt 版本号 ──
-$content = Get-Content $CMakeLists -Raw
-$content = $content -replace 'set\(APP_VERSION "\d+\.\d+\.\d+"\)', "set(APP_VERSION `"$Version`")"
-Set-Content $CMakeLists -Value $content -NoNewline
-Write-Host "[1/5] 版本号更新为 v$Version" -ForegroundColor Green
-
-# ── 3. CMake 配置 ──
-Write-Host "[2/5] CMake 配置..." -ForegroundColor Yellow
+# ── 2. CMake 配置（版本号通过缓存变量传入，不修改源码） ──
+Write-Host "[1/5] CMake 配置 (v$Version)..." -ForegroundColor Yellow
 Push-Location $ProjectRoot
 try {
-    & cmake . -G "Visual Studio 17 2022" -A Win32 -DCMAKE_PREFIX_PATH="C:/Qt/5.15.2/msvc2019" 2>&1 | Out-Null
+    & cmake . -G "Visual Studio 17 2022" -A Win32 -DCMAKE_PREFIX_PATH="C:/Qt/5.15.2/msvc2019" -DAPP_VERSION="$Version" 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "CMake 配置失败" }
     Write-Host "  CMake 配置完成" -ForegroundColor DarkGray
 } finally {
@@ -48,7 +42,7 @@ try {
 }
 
 # ── 4. 编译 ──
-Write-Host "[3/5] 编译 Release..." -ForegroundColor Yellow
+Write-Host "[2/5] 编译 Release..." -ForegroundColor Yellow
 Push-Location $ProjectRoot
 try {
     & cmake --build . --config Release 2>&1 | ForEach-Object {

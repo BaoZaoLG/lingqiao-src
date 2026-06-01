@@ -5,7 +5,9 @@ set(CMAKE_CXX_STANDARD 17)
 # ============================================================
 # Version — embedded in PE resource, authoritative at runtime
 # ============================================================
-set(APP_VERSION "2.1.13")
+if(NOT APP_VERSION)
+    set(APP_VERSION "2.1.13")
+endif()
 string(REPLACE "." "," APP_VERSION_COMMA "${APP_VERSION}")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 

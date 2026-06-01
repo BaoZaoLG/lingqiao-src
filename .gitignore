@@ -26,6 +26,8 @@ src/version.rc
 
 # Server data
 server/data/
+server/bin/
+server/server.exe
 certs/
 
 # Qt deployment
@@ -51,6 +53,10 @@ src/qt.conf
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Backup files
+*.bak
+*.orig
 
 # Archives
 *.zip
