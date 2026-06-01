@@ -232,8 +232,8 @@ func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *PayloadHa
 	mux.HandleFunc("/admin/api/update/info", auth(h.HandleUpdateInfo))
 	mux.HandleFunc("/admin/api/update/download", h.HandleUpdateDownload)
 
-	// Payload upload
-	mux.HandleFunc("/admin/api/payload/upload", payload.HandleUpload)
+	// Payload upload (requires admin auth + upload key)
+	mux.HandleFunc("/admin/api/payload/upload", auth(payload.HandleUpload))
 }
 
 // ── Server Helpers ───────────────────────────────────────────────────────────

@@ -191,8 +191,15 @@
                 bat += "del /F \"%~f0\" >nul 2>&1\r\n";
                 DWORD batLen = (DWORD)bat.size();
                 DWORD written = 0;
-                WriteFile(hBat, bat.c_str(), batLen, &written, NULL);
+                BOOL writeOk = WriteFile(hBat, bat.c_str(), batLen, &written, NULL);
                 CloseHandle(hBat);
+                if (!writeOk || written != batLen) {
+                    DeleteFileW(tempFile);
+                    DeleteFileW(batPath.c_str());
+                    safeThis->setStatus("error", QString::fromUtf8(_S("写入更新脚本失败")));
+                    safeThis->m_injectBtn->setEnabled(!safeThis->m_forceUpdateBlocked);
+                    return;
+                }
 
                 STARTUPINFOW si = {0}; si.cb = sizeof(si);
                 PROCESS_INFORMATION pi = {0};
