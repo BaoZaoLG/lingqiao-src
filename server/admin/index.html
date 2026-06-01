@@ -928,7 +928,6 @@ td { font-size:13px; }
 <div class="toast" id="toast"></div>
 
 <script>
-let token = localStorage.getItem('adminToken');
 let currentAuditPage = 1;
 let selectedCards = new Set();
 let _extendCode = '';
@@ -987,8 +986,6 @@ document.addEventListener('keydown', e => {
 });
 
 function goLogin() {
-  token = null;
-  localStorage.removeItem('adminToken');
   document.getElementById('loginScreen').style.display = 'flex';
   document.getElementById('app').classList.remove('show');
 }
@@ -1003,7 +1000,7 @@ async function api(path, body) {
 }
 
 async function adminApi(path, body) {
-  const opts = { headers: { 'Authorization': 'Bearer ' + token } };
+  const opts = { credentials: 'include', headers: {} };
   if (body) { opts.method = 'POST'; opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
   const res = await fetch(path, opts);
   if (res.status === 401) { goLogin(); throw new Error('登录已过期，请重新登录'); }
@@ -1017,9 +1014,7 @@ async function doLogin() {
   const pw = document.getElementById('loginPassword').value;
   if (!pw) return;
   try {
-    const data = await api('/admin/api/login', { password: pw });
-    token = data.token;
-    localStorage.setItem('adminToken', token);
+    await api('/admin/api/login', { password: pw });
     document.getElementById('loginScreen').style.display = 'none';
     document.getElementById('app').classList.add('show');
     loadDashboard();
@@ -1032,14 +1027,13 @@ async function doLogin() {
 }
 
 async function checkAuth() {
-  if (!token) return;
   try {
     await adminApi('/admin/api/dashboard');
     document.getElementById('loginScreen').style.display = 'none';
     document.getElementById('app').classList.add('show');
     loadDashboard();
     loadAnnouncement();
-  } catch (e) { /* token invalid */ }
+  } catch (e) { /* not logged in */ }
 }
 checkAuth();
 
@@ -1227,7 +1221,7 @@ async function unbindCard(code) {
 }
 async function exportCards() {
   try {
-    const res = await fetch('/admin/api/cards/export', { headers: { 'Authorization': 'Bearer ' + token } });
+    const res = await fetch('/admin/api/cards/export', { credentials: 'include' });
     const blob = await res.blob(); const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = 'cards_export.csv'; a.click();
     showToast('导出成功');
@@ -1535,7 +1529,7 @@ async function uploadUpdate() {
   try {
     const res = await fetch('/admin/api/update/upload', {
       method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + token },
+      credentials: 'include',
       body: formData
     });
     if (res.status === 401) { goLogin(); throw new Error('登录已过期'); }

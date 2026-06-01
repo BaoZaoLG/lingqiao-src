@@ -312,7 +312,6 @@ td { font-size:13px; }
 <div class="toast" id="toast"></div>
 
 <script>
-let token = localStorage.getItem('agentToken');
 let _agentID = localStorage.getItem('agentID') || '';
 let _agentUser = localStorage.getItem('agentUser') || '';
 let _cards = [];
@@ -355,8 +354,8 @@ function showAuthTab(tab) {
   else { document.querySelectorAll('.auth-tab')[1].classList.add('active'); document.getElementById('loginBox').style.display='none'; document.getElementById('registerBox').style.display='block'; }
 }
 function goAuth() {
-  token=null; _agentID=''; _agentUser='';
-  localStorage.removeItem('agentToken'); localStorage.removeItem('agentID'); localStorage.removeItem('agentUser');
+  _agentID=''; _agentUser='';
+  localStorage.removeItem('agentID'); localStorage.removeItem('agentUser');
   document.getElementById('authScreen').style.display='flex';
   document.getElementById('app').classList.remove('show');
 }
@@ -369,7 +368,7 @@ async function api(path, body) {
   catch (e) { if (e instanceof SyntaxError) throw new Error('服务器响应异常'); throw e; }
 }
 async function agentApi(path, body) {
-  const opts = { headers: { 'Authorization': 'Bearer ' + token } };
+  const opts = { credentials: 'include', headers: {} };
   if (body) { opts.method='POST'; opts.headers['Content-Type']='application/json'; opts.body=JSON.stringify(body); }
   const res = await fetch(path, opts);
   if (res.status===401) { goAuth(); throw new Error('登录已过期，请重新登录'); }
@@ -383,8 +382,8 @@ async function doLogin() {
   if (!user || !pw) return;
   try {
     const data = await api('/api/login', { username: user, password: pw });
-    token = data.token; _agentID = data.agent_id; _agentUser = data.username;
-    localStorage.setItem('agentToken', token); localStorage.setItem('agentID', _agentID); localStorage.setItem('agentUser', _agentUser);
+    _agentID = data.agent_id; _agentUser = data.username;
+    localStorage.setItem('agentID', _agentID); localStorage.setItem('agentUser', _agentUser);
     document.getElementById('authScreen').style.display='none';
     document.getElementById('app').classList.add('show');
     document.getElementById('agentNameDisplay').textContent = '@' + _agentUser;
@@ -406,7 +405,7 @@ async function doRegister() {
   } catch (e) { errEl.textContent = e.message; errEl.style.display = 'block'; }
 }
 async function checkAuth() {
-  if (!token) return;
+  if (!_agentUser) return;
   try {
     await agentApi('/api/dashboard');
     document.getElementById('authScreen').style.display='none';
