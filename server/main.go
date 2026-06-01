@@ -17,10 +17,10 @@ import (
 	"time"
 )
 
-//go:embed admin/*.html
+//go:embed admin/*
 var adminFS embed.FS
 
-//go:embed agent/*.html
+//go:embed agent/*
 var agentFS embed.FS
 
 var (
