@@ -99,8 +99,20 @@ public:
 
         // Load saved settings
         QSettings settings(_S("LingQiao"), _S("Injector"));
-        QString savedKey = settings.value(_S("apiKey")).toString();
-        if (!savedKey.isEmpty()) m_apiKeyInput->setText(savedKey);
+        // API Key: stored as DPAPI-encrypted Base64
+        QString encKey = settings.value(_S("apiKeyEnc")).toString();
+        if (!encKey.isEmpty()) {
+            QByteArray plain = DpapiUnprotect(encKey);
+            if (!plain.isEmpty()) m_apiKeyInput->setText(QString::fromUtf8(plain));
+        } else {
+            // Migration: read legacy plaintext key and re-encrypt
+            QString legacyKey = settings.value(_S("apiKey")).toString();
+            if (!legacyKey.isEmpty()) {
+                m_apiKeyInput->setText(legacyKey);
+                settings.setValue("apiKeyEnc", DpapiProtect(legacyKey.toUtf8()));
+                settings.remove("apiKey");
+            }
+        }
 
         // Restore saved target path
         QString savedTarget = settings.value(_S("targetPath")).toString();
@@ -108,7 +120,7 @@ public:
             m_targetInput->setText(savedTarget);
         connect(m_apiKeyInput, &QLineEdit::textChanged, [](const QString& text) {
             QSettings s(_S("LingQiao"), _S("Injector"));
-            s.setValue("apiKey", text);
+            s.setValue("apiKeyEnc", DpapiProtect(text.toUtf8()));
         });
 
         // Debounced balance fetch on API key change
@@ -930,7 +942,8 @@ private:
         m_injectBtn->setEnabled(false);
 
         // Run download in background thread to avoid UI freeze
-        QtConcurrent::run([this, sHost, port, sPath, sTempFile, sExe, sTempDir, version, progressDlg]() {
+        QPointer<MainWindow> safeThis(this);
+        QtConcurrent::run([safeThis, sHost, port, sPath, sTempFile, sExe, sTempDir, version, progressDlg]() {
             const wchar_t* host = sHost.c_str();
             const wchar_t* path = sPath.c_str();
             const wchar_t* tempFile = sTempFile.c_str();
@@ -939,7 +952,7 @@ private:
             QString err;
             for (int attempt = 0; attempt < maxRetries; attempt++) {
                 if (attempt > 0) {
-                    QMetaObject::invokeMethod(this, [progressDlg, version, attempt, maxRetries]() {
+                    QMetaObject::invokeMethod(safeThis, [progressDlg, version, attempt, maxRetries]() {
                         if (progressDlg) progressDlg->setText(
                             QString::fromUtf8(_S("下载失败，正在重试 (%1/%2)...")).arg(attempt + 1).arg(maxRetries));
                     }, Qt::QueuedConnection);
@@ -953,7 +966,7 @@ private:
                                 .arg(version).arg(pct)
                                 .arg((double)read / 1048576.0, 0, 'f', 1)
                                 .arg((double)total / 1048576.0, 0, 'f', 1);
-                            QMetaObject::invokeMethod(this, [progressDlg, msg]() {
+                            QMetaObject::invokeMethod(safeThis, [progressDlg, msg]() {
                                 if (progressDlg) progressDlg->setText(msg);
                             }, Qt::QueuedConnection);
                         }
@@ -962,40 +975,59 @@ private:
             }
 
             if (!err.isEmpty()) {
-                QMetaObject::invokeMethod(this, [this, progressDlg, err]() {
+                QMetaObject::invokeMethod(safeThis, [safeThis, progressDlg, err]() {
+                    if (!safeThis) return;
                     if (progressDlg) progressDlg->close();
-                    setStatus("error", QString::fromUtf8(_S("更新下载失败: %1")).arg(err));
-                    m_injectBtn->setEnabled(!m_forceUpdateBlocked);
-                    QMessageBox::warning(this, QString::fromUtf8(_S("更新失败")),
+                    safeThis->setStatus("error", QString::fromUtf8(_S("更新下载失败: %1")).arg(err));
+                    safeThis->m_injectBtn->setEnabled(!safeThis->m_forceUpdateBlocked);
+                    QMessageBox::warning(safeThis, QString::fromUtf8(_S("更新失败")),
                         QString::fromUtf8(_S("自动更新下载失败:\n%1\n\n请手动下载更新。")).arg(err));
                 }, Qt::QueuedConnection);
                 return;
             }
 
-            // Verify PE magic and minimum file size
+            // Verify PE magic, minimum file size, and SHA-256 integrity
             HANDLE hVerify = CreateFileW(tempFile, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
             if (hVerify != INVALID_HANDLE_VALUE) {
                 char magic[2] = {0};
                 DWORD rd = 0;
                 ReadFile(hVerify, magic, 2, &rd, NULL);
                 DWORD fileSize = GetFileSize(hVerify, NULL);
+                // Compute SHA-256 over entire file
+                BCRYPT_ALG_HANDLE hAlg = nullptr;
+                BCRYPT_HASH_HANDLE hHash = nullptr;
+                char fileHashHex[65] = {0};
+                if (BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) == 0) {
+                    if (BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0) == 0) {
+                        SetFilePointer(hVerify, 0, nullptr, FILE_BEGIN);
+                        char buf[65536]; DWORD bytesRead = 0;
+                        while (ReadFile(hVerify, buf, sizeof(buf), &bytesRead, NULL) && bytesRead > 0)
+                            BCryptHashData(hHash, (PUCHAR)buf, bytesRead, 0);
+                        BYTE hash[32]; BCryptFinishHash(hHash, hash, 32, 0);
+                        ByteToHex(hash, 32, fileHashHex);
+                        BCryptDestroyHash(hHash);
+                    }
+                    BCryptCloseAlgorithmProvider(hAlg, 0);
+                }
                 CloseHandle(hVerify);
                 if (magic[0] != 'M' || magic[1] != 'Z' || fileSize < 4096) {
                     DeleteFileW(tempFile);
-                    QMetaObject::invokeMethod(this, [this, progressDlg]() {
+                    QMetaObject::invokeMethod(safeThis, [safeThis, progressDlg]() {
+                        if (!safeThis) return;
                         if (progressDlg) progressDlg->close();
-                        setStatus("error", QString::fromUtf8(_S("更新文件校验失败")));
-                        m_injectBtn->setEnabled(!m_forceUpdateBlocked);
-                        QMessageBox::warning(this, QString::fromUtf8(_S("更新失败")), QString::fromUtf8(_S("下载的文件不是有效的可执行文件。")));
+                        safeThis->setStatus("error", QString::fromUtf8(_S("更新文件校验失败")));
+                        safeThis->m_injectBtn->setEnabled(!safeThis->m_forceUpdateBlocked);
+                        QMessageBox::warning(safeThis, QString::fromUtf8(_S("更新失败")), QString::fromUtf8(_S("下载的文件不是有效的可执行文件。")));
                     }, Qt::QueuedConnection);
                     return;
                 }
             }
 
             // Create batch script that replaces exe and restarts
-            QMetaObject::invokeMethod(this, [this, progressDlg, sTempFile, sExe, sTempDir, version]() {
+            QMetaObject::invokeMethod(safeThis, [safeThis, progressDlg, sTempFile, sExe, sTempDir, version]() {
+                if (!safeThis) return;
                 if (progressDlg) progressDlg->close();
-                setStatus("ok", QString::fromUtf8(_S("更新下载完成，正在准备替换...")));
+                safeThis->setStatus("ok", QString::fromUtf8(_S("更新下载完成，正在准备替换...")));
 
                 const wchar_t* tempFile = sTempFile.c_str();
                 const wchar_t* exePath = sExe.c_str();
@@ -1007,8 +1039,8 @@ private:
                     CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
                 if (hBat == INVALID_HANDLE_VALUE) {
                     DeleteFileW(tempFile);
-                    setStatus("error", QString::fromUtf8(_S("无法创建更新脚本")));
-                    m_injectBtn->setEnabled(!m_forceUpdateBlocked);
+                    safeThis->setStatus("error", QString::fromUtf8(_S("无法创建更新脚本")));
+                    safeThis->m_injectBtn->setEnabled(!safeThis->m_forceUpdateBlocked);
                     return;
                 }
 
@@ -1068,13 +1100,13 @@ private:
                     CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
                     DeleteFileW(tempFile);
                     DeleteFileW(batPath.c_str());
-                    setStatus("error", QString::fromUtf8(_S("无法启动更新进程 (错误: %1)")).arg(GetLastError()));
-                    m_injectBtn->setEnabled(!m_forceUpdateBlocked);
+                    safeThis->setStatus("error", QString::fromUtf8(_S("无法启动更新进程 (错误: %1)")).arg(GetLastError()));
+                    safeThis->m_injectBtn->setEnabled(!safeThis->m_forceUpdateBlocked);
                     return;
                 }
                 if (pi.hProcess) { CloseHandle(pi.hProcess); CloseHandle(pi.hThread); }
 
-                QTimer::singleShot(500, this, &QMainWindow::close);
+                QTimer::singleShot(500, safeThis, &QMainWindow::close);
             }, Qt::QueuedConnection);
         });
     }
@@ -1162,21 +1194,23 @@ private:
     void downloadDllAsync() {
         setStatus("info", QString::fromUtf8(_S("正在下载核心组件...")));
         m_injectBtn->setEnabled(false);
-        QtConcurrent::run([this]() {
+        QPointer<MainWindow> safeThis(this);
+        QtConcurrent::run([safeThis, token = m_sessionToken]() {
             QString err = DownloadDll(SERVER_HOST, SERVER_PORT,
-                (const wchar_t*)m_sessionToken.utf16());
-            QMetaObject::invokeMethod(this, [this, err]() {
+                (const wchar_t*)token.utf16());
+            QMetaObject::invokeMethod(safeThis, [safeThis, err]() {
+                if (!safeThis) return;
                 if (err.isEmpty()) {
-                    if (!m_targetInput->text().trimmed().isEmpty()) {
-                        setStatus("ok", QString::fromUtf8(_S("就绪 — 点击启动注入")));
+                    if (!safeThis->m_targetInput->text().trimmed().isEmpty()) {
+                        safeThis->setStatus("ok", QString::fromUtf8(_S("就绪 — 点击启动注入")));
                     } else {
-                        setStatus("ok", QString::fromUtf8(_S("就绪 — 请选择目标程序")));
+                        safeThis->setStatus("ok", QString::fromUtf8(_S("就绪 — 请选择目标程序")));
                     }
-                    m_injectBtn->setEnabled(!m_forceUpdateBlocked);
-                    logEvent("DLL", "Download OK");
+                    safeThis->m_injectBtn->setEnabled(!safeThis->m_forceUpdateBlocked);
+                    safeThis->logEvent("DLL", "Download OK");
                 } else {
-                    setStatus("error", err);
-                    logEvent("DLL", "Download failed: " + err);
+                    safeThis->setStatus("error", err);
+                    safeThis->logEvent("DLL", "Download failed: " + err);
                 }
             });
         });
@@ -1192,9 +1226,11 @@ private:
         m_balanceLabel->setStyleSheet(
             "font-size: 11px; padding: 4px 2px; background: transparent; color: #7ec8e3; font-weight: 500;");
         m_balanceLabel->setVisible(true);
-        QtConcurrent::run([this, key]() {
+        QPointer<MainWindow> safeThis(this);
+        QtConcurrent::run([safeThis, key]() {
             HttpResponse resp = HttpGetBearer(L"api.deepseek.com", L"/user/balance", key);
-            QMetaObject::invokeMethod(this, [this, resp]() {
+            QMetaObject::invokeMethod(safeThis, [safeThis, resp]() {
+                if (!safeThis) return;
                 if (resp.statusCode == 200 && !resp.body.isEmpty()) {
                     QJsonObject obj = QJsonDocument::fromJson(resp.body).object();
                     bool avail = obj["is_available"].toBool(true);
@@ -1210,28 +1246,28 @@ private:
                             QString text = QString::fromUtf8(_S("余额: %1%2"))
                                 .arg(symbol).arg(total);
                             if (!avail) text += QString::fromUtf8(_S(" (不可用)"));
-                            m_balanceLabel->setText(text);
-                            m_balanceLabel->setStyleSheet(QString(
+                            safeThis->m_balanceLabel->setText(text);
+                            safeThis->m_balanceLabel->setStyleSheet(QString(
                                 "font-size: 11px; padding: 4px 2px; background: transparent; "
                                 "color: %1; font-weight: 500;")
                                 .arg(avail ? "#7ec8e3" : "#f56565"));
-                            m_balanceLabel->setVisible(true);
+                            safeThis->m_balanceLabel->setVisible(true);
                         } else {
-                            m_balanceLabel->setVisible(false);
+                            safeThis->m_balanceLabel->setVisible(false);
                         }
                     } else {
-                        m_balanceLabel->setVisible(false);
+                        safeThis->m_balanceLabel->setVisible(false);
                     }
                 } else if (resp.statusCode == 401) {
-                    m_balanceLabel->setText(QString::fromUtf8(_S("API Key 无效")));
-                    m_balanceLabel->setStyleSheet(
+                    safeThis->m_balanceLabel->setText(QString::fromUtf8(_S("API Key 无效")));
+                    safeThis->m_balanceLabel->setStyleSheet(
                         "font-size: 11px; padding: 4px 2px; background: transparent; color: #f56565; font-weight: 500;");
-                    m_balanceLabel->setVisible(true);
+                    safeThis->m_balanceLabel->setVisible(true);
                 } else {
-                    m_balanceLabel->setText(QString::fromUtf8(_S("余额查询失败")));
-                    m_balanceLabel->setStyleSheet(
+                    safeThis->m_balanceLabel->setText(QString::fromUtf8(_S("余额查询失败")));
+                    safeThis->m_balanceLabel->setStyleSheet(
                         "font-size: 11px; padding: 4px 2px; background: transparent; color: #f56565; font-weight: 500;");
-                    m_balanceLabel->setVisible(true);
+                    safeThis->m_balanceLabel->setVisible(true);
                 }
             });
         });
@@ -1305,24 +1341,26 @@ private:
         QObject* worker = new QObject();
         worker->moveToThread(thread);
         auto host = SERVER_HOST; auto port = SERVER_PORT; auto path = g_pathAnn;
-        connect(thread, &QThread::started, this, [this, thread, worker, host, port, path]() {
+        QPointer<MainWindow> safeThis(this);
+        connect(thread, &QThread::started, worker, [safeThis, thread, worker, host, port, path]() {
             HttpResponse resp = WinHttpGet(host, port, path);
-            QMetaObject::invokeMethod(this, [this, resp]() {
+            QMetaObject::invokeMethod(safeThis, [safeThis, resp]() {
+                if (!safeThis) return;
                 if (resp.statusCode == 200 && !resp.body.isEmpty()) {
                     QJsonObject obj = QJsonDocument::fromJson(resp.body).object();
                     QJsonValue av = obj["announcement"];
                     if (!av.isNull() && av.isObject()) {
                         QJsonObject anno = av.toObject();
                         QString ct = anno["content"].toString();
-                        m_announceLabel->setText(ct);
-                        m_announcement->setVisible(!ct.isEmpty());
+                        safeThis->m_announceLabel->setText(ct);
+                        safeThis->m_announcement->setVisible(!ct.isEmpty());
 
                         // Hard block: min_version check
                         QString minVer = anno["min_version"].toString();
                         if (minVer.startsWith('v') || minVer.startsWith('V'))
                             minVer = minVer.mid(1);
                         if (!minVer.isEmpty() && CompareVersion(GetClientVersion(), minVer) < 0) {
-                            applyForceUpdateBlock(minVer, anno["download_url"].toString());
+                            safeThis->applyForceUpdateBlock(minVer, anno["download_url"].toString());
                             return;
                         }
 
@@ -1331,10 +1369,10 @@ private:
                         if (latest.startsWith('v') || latest.startsWith('V'))
                             latest = latest.mid(1);
                         if (!latest.isEmpty()) {
-                            handleUpdateCheck(latest, anno["download_url"].toString(),
+                            safeThis->handleUpdateCheck(latest, anno["download_url"].toString(),
                                               anno["force_update"].toBool(false));
                         }
-                    } else m_announcement->setVisible(false);
+                    } else safeThis->m_announcement->setVisible(false);
                 }
             }, Qt::QueuedConnection);
             thread->quit();

@@ -13,6 +13,25 @@
 
 struct HttpResponse { int statusCode; QByteArray body; QString error; };
 
+// RAII wrapper for WinHTTP handles
+class WinHttpHandle {
+    HINTERNET h_ = nullptr;
+public:
+    WinHttpHandle() = default;
+    explicit WinHttpHandle(HINTERNET h) : h_(h) {}
+    ~WinHttpHandle() { if (h_) WinHttpCloseHandle(h_); }
+    WinHttpHandle(const WinHttpHandle&) = delete;
+    WinHttpHandle& operator=(const WinHttpHandle&) = delete;
+    WinHttpHandle(WinHttpHandle&& o) noexcept : h_(o.h_) { o.h_ = nullptr; }
+    WinHttpHandle& operator=(WinHttpHandle&& o) noexcept {
+        if (this != &o) { if (h_) WinHttpCloseHandle(h_); h_ = o.h_; o.h_ = nullptr; }
+        return *this;
+    }
+    HINTERNET get() const { return h_; }
+    explicit operator bool() const { return h_ != nullptr; }
+    HINTERNET release() { auto t = h_; h_ = nullptr; return t; }
+};
+
 static HttpResponse HttpPostJson(const wchar_t* host, int port,
                                   const wchar_t* path, const QByteArray& body)
 {
@@ -232,44 +251,38 @@ static HttpResponse WinHttpGetSigned(const wchar_t* host, int port, const wchar_
 static HttpResponse HttpGetBearer(const wchar_t* host, const wchar_t* path, const QString& bearerToken)
 {
     HttpResponse result = {0, QByteArray()};
-    HINTERNET hSession = WinHttpOpen(_WS(L"CefBridge/2.0"),
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
+    WinHttpHandle hSession(WinHttpOpen(_WS(L"CefBridge/2.0"),
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0));
     if (!hSession) { result.error = QString::fromUtf8(_S("无法初始化网络")); return result; }
-    HINTERNET hConnect = WinHttpConnect(hSession, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); result.error = QString::fromUtf8(_S("连接服务器失败")); return result; }
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path, NULL, NULL, NULL, WINHTTP_FLAG_SECURE);
-    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); result.error = QString::fromUtf8(_S("创建请求失败")); return result; }
+    WinHttpHandle hConnect(WinHttpConnect(hSession.get(), host, INTERNET_DEFAULT_HTTPS_PORT, 0));
+    if (!hConnect) { result.error = QString::fromUtf8(_S("连接服务器失败")); return result; }
+    WinHttpHandle hRequest(WinHttpOpenRequest(hConnect.get(), L"GET", path, NULL, NULL, NULL, WINHTTP_FLAG_SECURE));
+    if (!hRequest) { result.error = QString::fromUtf8(_S("创建请求失败")); return result; }
     wchar_t authHeader[512];
     swprintf_s(authHeader, sizeof(authHeader)/sizeof(wchar_t),
         L"Authorization: Bearer %s\r\nAccept: application/json", (const wchar_t*)bearerToken.utf16());
-    WinHttpAddRequestHeaders(hRequest, authHeader, (DWORD)wcslen(authHeader), WINHTTP_ADDREQ_FLAG_ADD);
-    DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA
-                   | SECURITY_FLAG_IGNORE_CERT_CN_INVALID
-                   | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
-    WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
-    WinHttpSetTimeouts(hRequest, 5000, 5000, 5000, 10000);
-    if (!WinHttpSendRequest(hRequest, NULL, 0, NULL, 0, 0, 0)) {
+    WinHttpAddRequestHeaders(hRequest.get(), authHeader, (DWORD)wcslen(authHeader), WINHTTP_ADDREQ_FLAG_ADD);
+    // External API: use system CA store for certificate validation (no IGNORE flags)
+    WinHttpSetTimeouts(hRequest.get(), 5000, 5000, 5000, 10000);
+    if (!WinHttpSendRequest(hRequest.get(), NULL, 0, NULL, 0, 0, 0)) {
         DWORD e = GetLastError();
-        WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
         result.error = (e == ERROR_WINHTTP_TIMEOUT) ? QString::fromUtf8(_S("请求超时"))
             : QString::fromUtf8(_S("请求失败 (错误: %1)")).arg(e); return result;
     }
-    if (!WinHttpReceiveResponse(hRequest, NULL)) {
+    if (!WinHttpReceiveResponse(hRequest.get(), NULL)) {
         DWORD e = GetLastError();
-        WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
         result.error = (e == ERROR_WINHTTP_TIMEOUT) ? QString::fromUtf8(_S("响应超时"))
             : QString::fromUtf8(_S("接收响应失败")); return result;
     }
     DWORD statusCode = 0, statusCodeSize = sizeof(statusCode);
-    WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+    WinHttpQueryHeaders(hRequest.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
         NULL, &statusCode, &statusCodeSize, NULL);
     result.statusCode = (int)statusCode;
     char buf[4096]; DWORD bytesRead = 0;
-    while (WinHttpReadData(hRequest, buf, sizeof(buf) - 1, &bytesRead) && bytesRead > 0) {
+    while (WinHttpReadData(hRequest.get(), buf, sizeof(buf) - 1, &bytesRead) && bytesRead > 0) {
         buf[bytesRead] = 0;
         result.body.append(buf, (int)bytesRead);
     }
-    WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
     return result;
 }
 
@@ -349,15 +362,23 @@ static QString HttpDownloadFile(const wchar_t* host, int port, const wchar_t* pa
     char buf[65536]; // 64KB buffer for faster download
     qint64 totalRead = 0;
     DWORD bytesRead = 0;
+    bool writeError = false;
     while (WinHttpReadData(hRequest, buf, sizeof(buf), &bytesRead) && bytesRead > 0) {
         DWORD written = 0;
-        WriteFile(hFile, buf, bytesRead, &written, NULL);
+        if (!WriteFile(hFile, buf, bytesRead, &written, NULL) || written != bytesRead) {
+            writeError = true;
+            break;
+        }
         totalRead += bytesRead;
         if (progressCb) progressCb(totalRead, totalBytes);
     }
     CloseHandle(hFile);
     WinHttpCloseHandle(hRequest); WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession);
 
+    if (writeError) {
+        DeleteFileW(localPath);
+        return QString::fromUtf8(_S("写入文件失败"));
+    }
     if (totalRead == 0) {
         DeleteFileW(localPath);
         return QString::fromUtf8(_S("下载失败：文件为空"));

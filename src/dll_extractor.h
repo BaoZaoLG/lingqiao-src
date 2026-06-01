@@ -24,10 +24,20 @@ static bool DeriveDllKey(BYTE* dllKey, DWORD dllKeyLen) {
                      dllKey, dllKeyLen);
 }
 
-// XOR crypt in-place using a repeating 32-byte key
-static void XorCrypt(BYTE* data, DWORD dataLen, const BYTE* key, DWORD keyLen) {
-    for (DWORD i = 0; i < dataLen; i++)
-        data[i] ^= key[i % keyLen];
+// AES-256-GCM decrypt with embedded 12-byte IV + 16-byte tag.
+// Server format: [12-byte IV][ciphertext][16-byte GCM tag]
+static bool AesGcmDecryptDll(BYTE* data, DWORD dataLen, const BYTE* key, DWORD keyLen) {
+    if (keyLen < 32 || dataLen < 12 + 16) return false;
+    const BYTE* iv = data;
+    const BYTE* cipher = data + 12;
+    DWORD cipherLen = dataLen - 12;
+    BYTE* plain = data; // in-place: plaintext shorter than ciphertext+tag
+    DWORD plainLen = 0;
+    if (!AesGcmDecrypt(key, 32, iv, 12, cipher, cipherLen, plain, &plainLen))
+        return false;
+    // Zero-pad remaining bytes to avoid leaking ciphertext
+    memset(data + plainLen, 0, dataLen - plainLen);
+    return true;
 }
 
 static TCHAR g_dllPath[MAX_PATH] = {0};
@@ -40,9 +50,12 @@ static void CleanupDll();
 static void MakeRandomPath() {
     TCHAR tempPath[MAX_PATH];
     GetTempPath(MAX_PATH, tempPath);
-    DWORD unique = GetTickCount() ^ GetCurrentProcessId() ^ (DWORD)__rdtsc();
-    swprintf_s(g_dllDir,  MAX_PATH, L"%s\\%08X",     tempPath, unique);
-    swprintf_s(g_dllPath, MAX_PATH, L"%s\\%08X.dll", g_dllDir, unique);
+    BYTE randBuf[16];
+    BCryptGenRandom(nullptr, randBuf, sizeof(randBuf), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    WCHAR hexName[33];
+    for (int i = 0; i < 16; i++) swprintf_s(hexName + i * 2, 3, L"%02X", randBuf[i]);
+    swprintf_s(g_dllDir,  MAX_PATH, L"%s\\%s",     tempPath, hexName);
+    swprintf_s(g_dllPath, MAX_PATH, L"%s\\%s.dll", g_dllDir, hexName);
 }
 
 // Validate PE headers: check MZ signature and PE signature
@@ -93,9 +106,11 @@ static QString DownloadDll(const wchar_t* host, int port, const wchar_t* session
         return QString::fromUtf8(_S("密钥派生失败"));
     }
 
-    // XOR decrypt in-place
+    // AES-256-GCM decrypt in-place (expects [12-byte IV][ciphertext][16-byte tag])
     QByteArray data = resp.body;
-    XorCrypt((BYTE*)data.data(), (DWORD)data.size(), dllKey, sizeof(dllKey));
+    if (!AesGcmDecryptDll((BYTE*)data.data(), (DWORD)data.size(), dllKey, sizeof(dllKey))) {
+        return QString::fromUtf8(_S("DLL 解密失败 — 密钥不匹配或数据已损坏"));
+    }
 
     // Validate PE headers after decryption
     if (!ValidatePeHeaders((const BYTE*)data.constData(), (DWORD)data.size())) {

@@ -233,3 +233,34 @@ static bool VerifyServerCert(HINTERNET hRequest) {
     CertFreeCertificateContext(pCert);
     return ok;
 }
+
+// ============================================================================
+// DPAPI — Data Protection API for local secret storage
+// ============================================================================
+#include <wincrypt.h>
+#pragma comment(lib, "crypt32.lib")
+
+// Encrypt plaintext with DPAPI (user-scoped). Returns Base64 string.
+static QString DpapiProtect(const QByteArray& plaintext) {
+    DATA_BLOB in, out;
+    in.pbData = (BYTE*)plaintext.constData();
+    in.cbData = (DWORD)plaintext.size();
+    if (!CryptProtectData(&in, L"LingQiao", nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out))
+        return {};
+    QByteArray cipher((const char*)out.pbData, (int)out.cbData);
+    LocalFree(out.pbData);
+    return cipher.toBase64();
+}
+
+// Decrypt Base64 DPAPI ciphertext. Returns plaintext bytes.
+static QByteArray DpapiUnprotect(const QString& base64Cipher) {
+    QByteArray cipher = QByteArray::fromBase64(base64Cipher.toUtf8());
+    DATA_BLOB in, out;
+    in.pbData = (BYTE*)cipher.constData();
+    in.cbData = (DWORD)cipher.size();
+    if (!CryptUnprotectData(&in, nullptr, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out))
+        return {};
+    QByteArray plain((const char*)out.pbData, (int)out.cbData);
+    LocalFree(out.pbData);
+    return plain;
+}
