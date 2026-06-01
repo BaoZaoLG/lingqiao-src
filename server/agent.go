@@ -2,8 +2,6 @@ package main
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -13,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // AgentHandler handles the agent panel API, completely isolated from admin.
@@ -236,8 +236,12 @@ func (h *AgentHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	pwHash := sha256.Sum256([]byte(req.Password))
-	agent, err := h.cm.CreateAgent(req.Username, hex.EncodeToString(pwHash[:]), "")
+	bcryptHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "密码加密失败")
+		return
+	}
+	agent, err := h.cm.CreateAgent(req.Username, string(bcryptHash), "")
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") {
 			writeError(w, http.StatusConflict, "用户名已存在")
@@ -291,10 +295,16 @@ func (h *AgentHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pwHash := sha256.Sum256([]byte(req.Password))
-	if subtle.ConstantTimeCompare([]byte(agent.Password), []byte(hex.EncodeToString(pwHash[:]))) != 1 {
+	match, newHash := verifyPassword(req.Password, agent.Password)
+	if !match {
 		writeError(w, http.StatusUnauthorized, "用户名或密码错误")
 		return
+	}
+	// Auto-migrate legacy SHA-256 hash to bcrypt
+	if newHash != "" {
+		agent.Password = newHash
+		h.cm.save()
+		log.Printf("[AGENT] Agent %s password hash migrated to bcrypt", agent.Username)
 	}
 
 	h.loginLimiter.clear("login_" + ip)
@@ -473,15 +483,19 @@ func (h *AgentHandler) HandlePasswordChange(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	oldHash := sha256.Sum256([]byte(req.OldPassword))
-	if subtle.ConstantTimeCompare([]byte(agent.Password), []byte(hex.EncodeToString(oldHash[:]))) != 1 {
+	match, _ := verifyPassword(req.OldPassword, agent.Password)
+	if !match {
 		writeError(w, http.StatusUnauthorized, "旧密码错误")
 		return
 	}
 
-	newHash := sha256.Sum256([]byte(req.NewPassword))
+	bcryptHash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "密码加密失败")
+		return
+	}
 	h.cm.mu.Lock()
-	agent.Password = hex.EncodeToString(newHash[:])
+	agent.Password = string(bcryptHash)
 	h.cm.auditLog = append(h.cm.auditLog, AuditEntry{
 		Time: time.Now(), Action: "agent_password_changed", AgentID: agentID,
 	})
@@ -539,9 +553,13 @@ func (h *AdminHandler) HandleAdminUpdateAgent(w http.ResponseWriter, r *http.Req
 			writeError(w, http.StatusNotFound, "agent not found")
 			return
 		}
-		newHash := sha256.Sum256([]byte(req.Password))
+		bcryptHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "密码加密失败")
+			return
+		}
 		h.cm.mu.Lock()
-		agent.Password = hex.EncodeToString(newHash[:])
+		agent.Password = string(bcryptHash)
 		h.cm.auditLog = append(h.cm.auditLog, AuditEntry{
 			Time: time.Now(), Action: "admin_reset_agent_password",
 			Detail: fmt.Sprintf("agent_id=%s", req.AgentID),

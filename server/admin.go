@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // AdminHandler handles the web admin panel.
@@ -27,8 +29,38 @@ type AdminHandler struct {
 }
 
 func hashPassword(pw string) string {
+	hash, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+	if err != nil {
+		log.Printf("[WARN] bcrypt failed, falling back to sha256: %v", err)
+		h := sha256.Sum256([]byte(pw))
+		return hex.EncodeToString(h[:])
+	}
+	return string(hash)
+}
+
+// isBcryptHash returns true if the hash is a bcrypt hash (starts with "$2")
+func isBcryptHash(h string) bool {
+	return len(h) >= 4 && h[0] == '$' && h[1] == '2'
+}
+
+// verifyPassword checks password against a hash that may be bcrypt or legacy SHA-256.
+// Returns true if password matches, and the new bcrypt hash if migration happened.
+func verifyPassword(pw, storedHash string) (match bool, newHash string) {
+	if isBcryptHash(storedHash) {
+		return bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(pw)) == nil, ""
+	}
+	// Legacy SHA-256: compare, and if match, return bcrypt hash for migration
 	h := sha256.Sum256([]byte(pw))
-	return hex.EncodeToString(h[:])
+	legacyHash := hex.EncodeToString(h[:])
+	if subtle.ConstantTimeCompare([]byte(legacyHash), []byte(storedHash)) != 1 {
+		return false, ""
+	}
+	// Match — migrate to bcrypt
+	bcryptHash, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+	if err != nil {
+		return true, ""
+	}
+	return true, string(bcryptHash)
 }
 
 func NewAdminHandler(cm *CardManager) *AdminHandler {
@@ -154,9 +186,17 @@ func (h *AdminHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if subtle.ConstantTimeCompare([]byte(hashPassword(req.Password)), []byte(h.adminPassHash)) != 1 {
+	match, newHash := verifyPassword(req.Password, h.adminPassHash)
+	if !match {
 		writeError(w, http.StatusUnauthorized, "wrong password")
 		return
+	}
+	// Auto-migrate legacy SHA-256 hash to bcrypt on successful login
+	if newHash != "" {
+		h.adminPassHash = newHash
+		os.MkdirAll("data", 0755)
+		os.WriteFile("data/admin_password.hash", []byte(h.adminPassHash), 0600)
+		log.Printf("[ADMIN] Password hash migrated from SHA-256 to bcrypt")
 	}
 
 	h.loginLimiter.clear(ip)
@@ -203,7 +243,8 @@ func (h *AdminHandler) HandlePasswordChange(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "密码长度不能超过128位")
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(hashPassword(req.OldPassword)), []byte(h.adminPassHash)) != 1 {
+	match, _ := verifyPassword(req.OldPassword, h.adminPassHash)
+	if !match {
 		writeError(w, http.StatusUnauthorized, "旧密码错误")
 		return
 	}
