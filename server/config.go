@@ -61,17 +61,22 @@ func generateSelfSignedCert(certPath, keyPath string) error {
 		return err
 	}
 
+	certHost := os.Getenv("CERT_HOST")
+	if certHost == "" {
+		certHost = "127.0.0.1"
+	}
+
 	template := x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			CommonName:   "47.110.248.240",
+			CommonName:   certHost,
 			Organization: []string{"LingQiao"},
 		},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(3650 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IPAddresses:           []net.IP{net.ParseIP("47.110.248.240"), net.ParseIP("127.0.0.1")},
+		IPAddresses:           []net.IP{net.ParseIP(certHost), net.ParseIP("127.0.0.1")},
 		DNSNames:              []string{"localhost"},
 		BasicConstraintsValid: true,
 	}

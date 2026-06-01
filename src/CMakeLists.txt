@@ -70,7 +70,9 @@ add_custom_command(
 )
 
 # -- Injector EXE (Qt) -------------------------------------------------
-set(CMAKE_PREFIX_PATH "C:/Qt/5.15.2/msvc2019")
+if(NOT CMAKE_PREFIX_PATH)
+    set(CMAKE_PREFIX_PATH "C:/Qt/5.15.2/msvc2019")
+endif()
 find_package(Qt5 REQUIRED COMPONENTS Widgets Network WinExtras Concurrent)
 
 set(CMAKE_AUTOMOC ON)
