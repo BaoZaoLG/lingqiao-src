@@ -46,6 +46,7 @@ add_library(CefHook SHARED
     v8_hooks.h
     process_identity.h
     script_loader.h
+    hook_safety.h
     framework.h
     ${MINHOOK_SOURCES}
 )
@@ -102,6 +103,12 @@ add_executable(ProcessIdentityTest
 )
 target_include_directories(ProcessIdentityTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(ProcessIdentityTest PRIVATE /utf-8)
+
+add_executable(SecurityRegressionTest
+    security_regression_test.cpp
+)
+target_include_directories(SecurityRegressionTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(SecurityRegressionTest PRIVATE /utf-8)
 
 add_executable(ManualDllInjectorGui WIN32
     manual_dll_injector_gui.cpp

@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QJsonObject>
 #include <QJsonDocument>
+#include <QJsonParseError>
 #include "http_client.h"
 #include "config.h"
 #include "strcrypt.h"
@@ -27,7 +28,12 @@ public slots:
         QByteArray body = QJsonDocument(req).toJson(QJsonDocument::Compact);
         HttpResponse resp = HttpPostJson(SERVER_HOST, SERVER_PORT, g_pathAct, body);
         if (resp.statusCode == 200) {
-            QJsonDocument doc = QJsonDocument::fromJson(resp.body);
+            QJsonParseError parseError{};
+            QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
+            if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+                emit activationFailed(QString::fromUtf8(_S("服务器响应格式错误")));
+                return;
+            }
             QJsonObject obj = doc.object();
             if (obj["status"].toString() == "ok") {
                 QJsonValue uv = obj["update"];
@@ -46,10 +52,13 @@ public slots:
         } else if (resp.statusCode == 401)
             emit activationFailed(QString::fromUtf8(_S("签名验证失败")));
         else if (resp.statusCode == 403) {
-            QJsonDocument doc = QJsonDocument::fromJson(resp.body);
-            QString errMsg = doc.object()["message"].toString(QString::fromUtf8(_S("卡密无效或已过期")));
+            QJsonParseError parseError{};
+            QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
+            QJsonObject obj = (parseError.error == QJsonParseError::NoError && doc.isObject())
+                ? doc.object() : QJsonObject();
+            QString errMsg = obj["message"].toString(QString::fromUtf8(_S("卡密无效或已过期")));
             if (errMsg.contains(QString::fromUtf8(_S("版本过低"))))
-                emit versionRejected(errMsg, doc.object()["download_url"].toString(), doc.object()["sha256"].toString());
+                emit versionRejected(errMsg, obj["download_url"].toString(), obj["sha256"].toString());
             else
                 emit activationFailed(errMsg);
         } else if (resp.statusCode == 0)
@@ -85,7 +94,12 @@ public slots:
         QByteArray body = QJsonDocument(req).toJson(QJsonDocument::Compact);
         HttpResponse resp = HttpPostJson(SERVER_HOST, SERVER_PORT, g_pathHb, body);
         if (resp.statusCode == 200) {
-            QJsonDocument doc = QJsonDocument::fromJson(resp.body);
+            QJsonParseError parseError{};
+            QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
+            if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+                emit heartbeatFail();
+                return;
+            }
             QJsonObject obj = doc.object();
             if (obj["status"].toString() == "ok") {
                 qint64 exp = (qint64)obj["card_expires_at"].toDouble();
@@ -104,10 +118,13 @@ public slots:
             // Session expired or invalid — trigger re-auth
             emit heartbeatFail();
         } else if (resp.statusCode == 403) {
-            QJsonDocument doc = QJsonDocument::fromJson(resp.body);
-            QString errMsg = doc.object()["message"].toString();
+            QJsonParseError parseError{};
+            QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
+            QJsonObject obj = (parseError.error == QJsonParseError::NoError && doc.isObject())
+                ? doc.object() : QJsonObject();
+            QString errMsg = obj["message"].toString();
             if (errMsg.contains(QString::fromUtf8(_S("版本过低"))))
-                emit versionRejected(errMsg, doc.object()["download_url"].toString(), doc.object()["sha256"].toString());
+                emit versionRejected(errMsg, obj["download_url"].toString(), obj["sha256"].toString());
             else
                 emit heartbeatFail();
         } else emit heartbeatFail();

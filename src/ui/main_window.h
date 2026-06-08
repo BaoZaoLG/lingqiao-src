@@ -28,6 +28,7 @@
 #include <QtConcurrent>
 #include <QJsonObject>
 #include <QJsonDocument>
+#include <QJsonParseError>
 #include <QFile>
 #include <QFileInfo>
 #include <QDateTime>
@@ -369,7 +370,13 @@ private:
             QMetaObject::invokeMethod(safeThis, [safeThis, resp]() {
                 if (!safeThis) return;
                 if (resp.statusCode == 200 && !resp.body.isEmpty()) {
-                    QJsonObject obj = QJsonDocument::fromJson(resp.body).object();
+                    QJsonParseError parseError{};
+                    QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
+                    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+                        safeThis->m_balanceLabel->setVisible(false);
+                        return;
+                    }
+                    QJsonObject obj = doc.object();
                     bool avail = obj["is_available"].toBool(true);
                     QJsonArray infos = obj["balance_infos"].toArray();
                     if (!infos.isEmpty()) {
@@ -485,7 +492,13 @@ private:
             QMetaObject::invokeMethod(safeThis, [safeThis, resp]() {
                 if (!safeThis) return;
                 if (resp.statusCode == 200 && !resp.body.isEmpty()) {
-                    QJsonObject obj = QJsonDocument::fromJson(resp.body).object();
+                    QJsonParseError parseError{};
+                    QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
+                    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+                        safeThis->logEvent("ANNOUNCE", "Rejected malformed announcement response");
+                        return;
+                    }
+                    QJsonObject obj = doc.object();
                     QJsonValue av = obj["announcement"];
                     if (!av.isNull() && av.isObject()) {
                         QJsonObject anno = av.toObject();

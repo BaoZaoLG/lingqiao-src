@@ -5,6 +5,7 @@
 // Uses __TIME__ seed so recompilation changes all keys.
 // ============================================================================
 #include <windows.h>
+#include <mutex>
 
 namespace strcrypt {
 
@@ -76,13 +77,13 @@ struct SecureWStr {
 // ============================================================================
 // Macros — auto-generate unique key from __LINE__ + __COUNTER__
 // Usage:
-//   auto s = _S("hello");        // const char* (RAII, auto-cleared)
-//   auto w = _WS(L"hello");      // const wchar_t* (RAII, auto-cleared)
+//   auto s = _S("hello");        // persistent static buffer
+//   auto w = _WS(L"hello");      // persistent static buffer
 //   const char* p = LQ_SP("hello"); // persistent static buffer
 //   const wchar_t* wp = _WSP(L"hello"); // persistent static buffer
 // ============================================================================
 
-// char string — RAII, auto-cleared on scope exit
+// char string — persistent static buffer, cleared on process teardown
 #define _S(str) ([&]() -> const char* { \
     constexpr auto _enc = strcrypt::EncryptedString<char, sizeof(str), \
         strcrypt::g_seed ^ __LINE__ ^ (__COUNTER__ * 0x1337CAFE)>(str); \
@@ -91,7 +92,7 @@ struct SecureWStr {
     return _dec.c_str(); \
 }())
 
-// wchar_t string — RAII, auto-cleared on scope exit
+// wchar_t string — persistent static buffer, cleared on process teardown
 #define _WS(str) ([&]() -> const wchar_t* { \
     constexpr auto _enc = strcrypt::EncryptedString<wchar_t, sizeof(str)/sizeof(wchar_t), \
         strcrypt::g_seed ^ __LINE__ ^ (__COUNTER__ * 0x1337CAFE)>(str); \
@@ -105,8 +106,8 @@ struct SecureWStr {
     constexpr auto _enc = strcrypt::EncryptedString<char, sizeof(str), \
         strcrypt::g_seed ^ __LINE__ ^ (__COUNTER__ * 0x1337CAFE)>(str); \
     static char _buf[sizeof(str)]; \
-    static bool _init = false; \
-    if (!_init) { _enc.decrypt(_buf); _init = true; } \
+    static std::once_flag _once; \
+    std::call_once(_once, [&]() { _enc.decrypt(_buf); }); \
     return _buf; \
 }())
 
@@ -115,8 +116,8 @@ struct SecureWStr {
     constexpr auto _enc = strcrypt::EncryptedString<wchar_t, sizeof(str)/sizeof(wchar_t), \
         strcrypt::g_seed ^ __LINE__ ^ (__COUNTER__ * 0x1337CAFE)>(str); \
     static wchar_t _buf[sizeof(str)/sizeof(wchar_t)]; \
-    static bool _init = false; \
-    if (!_init) { _enc.decrypt(_buf); _init = true; } \
+    static std::once_flag _once; \
+    std::call_once(_once, [&]() { _enc.decrypt(_buf); }); \
     return _buf; \
 }())
 

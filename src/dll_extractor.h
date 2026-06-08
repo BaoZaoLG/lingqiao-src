@@ -15,6 +15,7 @@
 #include "crypto.h"
 #include "http_client.h"
 #include "config.h"
+#include "hook_safety.h"
 #include "strcrypt.h"
 
 // Derive a key for DLL encryption/decryption (separate from HMAC signing key)
@@ -26,8 +27,9 @@ static bool DeriveDllKey(BYTE* dllKey, DWORD dllKeyLen) {
 
 // AES-256-GCM decrypt with embedded 12-byte IV + 16-byte tag.
 // Server format: [12-byte IV][ciphertext][16-byte GCM tag]
-static bool AesGcmDecryptDll(BYTE* data, DWORD dataLen, const BYTE* key, DWORD keyLen) {
-    if (keyLen < 32 || dataLen < 12 + 16) return false;
+static bool AesGcmDecryptDll(BYTE* data, DWORD dataLen, const BYTE* key, DWORD keyLen, DWORD* plainLenOut) {
+    DWORD expectedPlainLen = 0;
+    if (keyLen < 32 || !DllPlaintextLengthFromEncryptedSize(dataLen, &expectedPlainLen)) return false;
     const BYTE* iv = data;
     const BYTE* cipher = data + 12;
     DWORD cipherLen = dataLen - 12;
@@ -35,8 +37,10 @@ static bool AesGcmDecryptDll(BYTE* data, DWORD dataLen, const BYTE* key, DWORD k
     DWORD plainLen = 0;
     if (!AesGcmDecrypt(key, 32, iv, 12, cipher, cipherLen, plain, &plainLen))
         return false;
+    if (plainLen != expectedPlainLen) return false;
     // Zero-pad remaining bytes to avoid leaking ciphertext
     memset(data + plainLen, 0, dataLen - plainLen);
+    if (plainLenOut) *plainLenOut = plainLen;
     return true;
 }
 
@@ -108,9 +112,13 @@ static QString DownloadDll(const wchar_t* host, int port, const wchar_t* session
 
     // AES-256-GCM decrypt in-place (expects [12-byte IV][ciphertext][16-byte tag])
     QByteArray data = resp.body;
-    if (!AesGcmDecryptDll((BYTE*)data.data(), (DWORD)data.size(), dllKey, sizeof(dllKey))) {
+    DWORD plainLen = 0;
+    if (!AesGcmDecryptDll((BYTE*)data.data(), (DWORD)data.size(), dllKey, sizeof(dllKey), &plainLen)) {
+        SecureZeroMemory(dllKey, sizeof(dllKey));
         return QString::fromUtf8(_S("DLL 解密失败 — 密钥不匹配或数据已损坏"));
     }
+    SecureZeroMemory(dllKey, sizeof(dllKey));
+    data.resize((int)plainLen);
 
     // Validate PE headers after decryption
     if (!ValidatePeHeaders((const BYTE*)data.constData(), (DWORD)data.size())) {

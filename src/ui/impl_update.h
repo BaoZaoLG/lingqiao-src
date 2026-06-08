@@ -218,7 +218,13 @@
                         safeThis->logEvent("UPDATE", "Manifest check failed: " + resp.error);
                     return;
                 }
-                QJsonObject obj = QJsonDocument::fromJson(resp.body).object();
+                QJsonParseError parseError{};
+                QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
+                if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+                    safeThis->logEvent("UPDATE", "Rejected malformed update check response");
+                    return;
+                }
+                QJsonObject obj = doc.object();
                 if (!obj["update_available"].toBool(false)) return;
                 QString payloadB64 = obj["manifest_payload"].toString();
                 QString manifestHmac = obj["manifest_hmac"].toString();
@@ -248,7 +254,13 @@
                     safeThis->logEvent("UPDATE", "Rejected manifest with invalid HMAC");
                     return;
                 }
-                QJsonObject manifest = QJsonDocument::fromJson(payload).object();
+                QJsonParseError manifestParseError{};
+                QJsonDocument manifestDoc = QJsonDocument::fromJson(payload, &manifestParseError);
+                if (manifestParseError.error != QJsonParseError::NoError || !manifestDoc.isObject()) {
+                    safeThis->logEvent("UPDATE", "Rejected malformed manifest payload");
+                    return;
+                }
+                QJsonObject manifest = manifestDoc.object();
                 QString latest = manifest["version"].toString();
                 QString url = manifest["package_url"].toString();
                 QString sha = manifest["package_sha256"].toString();

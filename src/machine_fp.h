@@ -56,7 +56,11 @@ static bool GetBaseboardSerial(char* buf, DWORD bufSize) {
             L"HARDWARE\\DESCRIPTION\\System\\BIOS", 0, KEY_READ, &hKey) != ERROR_SUCCESS)
         return false;
     DWORD type = 0, size = bufSize;
-    LONG ok = RegQueryValueExA(hKey, _S("BaseBoardProduct"), NULL, &type, (LPBYTE)buf, &size);
+    LONG ok = RegQueryValueExA(hKey, _S("BaseBoardSerialNumber"), NULL, &type, (LPBYTE)buf, &size);
+    if (ok != ERROR_SUCCESS) {
+        size = bufSize;
+        ok = RegQueryValueExA(hKey, _S("BaseBoardSerial"), NULL, &type, (LPBYTE)buf, &size);
+    }
     RegCloseKey(hKey);
     return ok == ERROR_SUCCESS && type == REG_SZ && size > 1;
 }

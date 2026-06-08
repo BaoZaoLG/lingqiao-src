@@ -252,7 +252,7 @@ static bool FetchVersionedScript(std::string* scriptOut, std::string* versionOut
         clientId.c_str(), sigHex, tsBuf, nonceHex, sessionToken);
     WinHttpAddRequestHeaders(hRequest, headers, (DWORD)wcslen(headers), WINHTTP_ADDREQ_FLAG_ADD);
 
-    DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_CN_INVALID | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
+    DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA;
     WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
     WinHttpSetTimeouts(hRequest, 5000, 5000, 5000, 10000);
 

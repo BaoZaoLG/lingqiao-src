@@ -4,6 +4,7 @@
 
 #include "obfuscate.h"
 #include "hook_engine.h"
+#include "hook_safety.h"
 #include "process_identity.h"
 #include "script_loader.h"
 #if __has_include("encrypted_data.h")
@@ -96,7 +97,7 @@ static PVOID SafeReadVtableSlot(PVOID* vtable, int idx) {
     __try {
         PVOID val = vtable[idx];
         /* Basic sanity: pointer should be in a reasonable range */
-        if (val == NULL || val == (PVOID)0 || val == (PVOID)0xFFFFFFFFFFFFFFFF)
+        if (IsInvalidCodePointer(val))
             return NULL;
         return val;
     }
@@ -251,7 +252,7 @@ static const int LIFE_SPAN_HANDLER_SLOTS[] = { 10, 11, 12, 9, 13, 8 };
 static void TryHookLoadHandler(struct _cef_client_t* client) {
     if (g_cef_on_load_end && g_cef_on_loading_state_change) return;
 
-    PVOID* vtable = (PVOID*)((BYTE*)client + 20);
+    PVOID* vtable = (PVOID*)((BYTE*)client + CefClientHandlerTableOffset());
 
     for (int i = 0; i < (int)LOAD_HANDLER_SLOT_COUNT; i++) {
         int slot = LOAD_HANDLER_SLOTS[i];
@@ -285,7 +286,7 @@ static void TryHookLoadHandler(struct _cef_client_t* client) {
 static void TryHookLifeSpanHandler(struct _cef_client_t* client) {
     if (g_cef_on_after_created && g_cef_on_before_close) return;
 
-    PVOID* vtable = (PVOID*)((BYTE*)client + 20);
+    PVOID* vtable = (PVOID*)((BYTE*)client + CefClientHandlerTableOffset());
 
     for (int i = 0; i < (int)LIFE_SPAN_HANDLER_SLOT_COUNT; i++) {
         int slot = LIFE_SPAN_HANDLER_SLOTS[i];

@@ -50,13 +50,14 @@ static void ByteToHex(const BYTE* input, DWORD inputLen, char* output) {
 // Generate a random nonce (16 bytes → 32 hex chars)
 static void GenerateNonce(char* output) {
     BYTE buf[16];
-    HCRYPTPROV hProv = 0;
-    if (CryptAcquireContextW(&hProv, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT)) {
-        CryptGenRandom(hProv, sizeof(buf), buf);
-        CryptReleaseContext(hProv, 0);
-    } else {
-        // fallback: use BCrypt
-        BCryptGenRandom(NULL, buf, sizeof(buf), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    if (BCryptGenRandom(NULL, buf, sizeof(buf), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+        HCRYPTPROV hProv = 0;
+        if (CryptAcquireContextW(&hProv, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT)) {
+            CryptGenRandom(hProv, sizeof(buf), buf);
+            CryptReleaseContext(hProv, 0);
+        } else {
+            memset(buf, 0, sizeof(buf));
+        }
     }
     ByteToHex(buf, 16, output);
 }

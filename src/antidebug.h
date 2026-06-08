@@ -333,6 +333,7 @@ static bool CheckDebuggerWindows() {
 // it causes an exception that can be caught. Debuggers may handle it differently.
 // ============================================================================
 static bool CheckInt2D() {
+#ifdef _M_IX86
     __try {
         __asm {
             int 0x2D
@@ -344,6 +345,9 @@ static bool CheckInt2D() {
     }
     // If we get here without exception, a kernel debugger may be present
     return true;
+#else
+    return false;
+#endif
 }
 
 // ============================================================================

@@ -15,6 +15,7 @@
  * Internal state
  * ========================================================================= */
 static LONG g_mhInitialized = 0;
+static SRWLOCK g_mhInitLock = SRWLOCK_INIT;
 
 /* Trampoline -> Target mapping for detach support.
  * MinHook needs the target address to remove a hook, but our API
@@ -46,13 +47,22 @@ static PVOID FindTargetByTrampoline(PVOID trampoline) {
  * MinHook initialization (thread-safe, once)
  * ========================================================================= */
 static LONG EnsureMinHookInit(void) {
-    if (InterlockedCompareExchange(&g_mhInitialized, 1, 0) == 0) {
+    AcquireSRWLockExclusive(&g_mhInitLock);
+    if (g_mhInitialized) {
+        ReleaseSRWLockExclusive(&g_mhInitLock);
+        return MH_OK;
+    }
+
+    {
         MH_STATUS st = MH_Initialize();
         if (st != MH_OK && st != MH_ERROR_ALREADY_INITIALIZED) {
-            InterlockedExchange(&g_mhInitialized, 0);
+            ReleaseSRWLockExclusive(&g_mhInitLock);
             return st;
         }
+        g_mhInitialized = 1;
     }
+
+    ReleaseSRWLockExclusive(&g_mhInitLock);
     return MH_OK;
 }
 

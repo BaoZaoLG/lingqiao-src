@@ -119,7 +119,11 @@
             QMetaObject::invokeMethod(safeThis, [safeThis, resp, hbToken, hbMid]() {
                 if (!safeThis) return;
                 if (resp.statusCode == 200) {
-                    QJsonDocument doc = QJsonDocument::fromJson(resp.body);
+                    QJsonParseError parseError{};
+                    QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
+                    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+                        safeThis->logEvent("SESSION", "Rejected malformed heartbeat response during restore");
+                    } else {
                     QJsonObject obj = doc.object();
                     if (obj["status"].toString() == "ok") {
                         safeThis->m_activated = true;
@@ -137,6 +141,7 @@
                         safeThis->updateTrayIcon();
                         safeThis->logEvent("SESSION", "Session restored via heartbeat");
                         return;
+                    }
                     }
                 }
                 // Heartbeat failed — clear saved session, user needs to re-activate
