@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>灵桥 管理后台</title>
+    <script type="module" src="/admin/src/main.ts"></script>
+  </head>
+  <body>
+    <div class="mobile-header">
+      <button class="hamburger" id="sidebarToggle">☰</button>
+      <span class="title">灵桥 管理后台</span>
+    </div>
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <section class="login-screen" id="loginScreen">
+      <div class="login-brand">LINGQIAO</div>
+      <div class="login-box">
+        <h2>管理员登录</h2>
+        <p>进入完整运营控制台</p>
+        <input type="password" id="loginPassword" placeholder="管理员密码" autofocus />
+        <button class="btn btn-primary btn-block" id="loginButton">登录</button>
+        <div class="login-error" id="loginError"></div>
+      </div>
+    </section>
+
+    <main class="app" id="app">
+      <aside class="sidebar">
+        <div class="sidebar-brand"><h2>灵桥</h2><div class="ver">管理后台 v4</div></div>
+        <nav class="sidebar-nav">
+          <button class="nav-item active" data-page-target="dashboard"><span>▦</span><span>仪表盘</span></button>
+          <button class="nav-item" data-page-target="cards"><span>▤</span><span>卡密管理</span></button>
+          <button class="nav-item" data-page-target="sessions"><span>●</span><span>在线会话</span></button>
+          <button class="nav-item" data-page-target="machines"><span>▣</span><span>机器管理</span></button>
+          <button class="nav-item" data-page-target="blacklist"><span>⊘</span><span>黑名单</span></button>
+          <button class="nav-item" data-page-target="announcement"><span>))</span><span>公告管理</span></button>
+          <button class="nav-item" data-page-target="updates"><span>⇧</span><span>版本推送</span></button>
+          <button class="nav-item" data-page-target="scripts"><span>{}</span><span>脚本模块</span></button>
+          <button class="nav-item" data-page-target="payloads"><span>◫</span><span>载荷模块</span></button>
+          <button class="nav-item" data-page-target="password"><span>⌁</span><span>密码管理</span></button>
+          <button class="nav-item" data-page-target="audit"><span>≡</span><span>审计日志</span></button>
+          <button class="nav-item" data-page-target="agents"><span>◎</span><span>代理管理</span></button>
+          <button class="nav-item" data-page-target="invites"><span>#</span><span>邀请码</span></button>
+          <button class="nav-item" data-page-target="settings"><span>⚙</span><span>系统状态</span></button>
+        </nav>
+        <div class="sidebar-footer">
+          <span class="status-dot" id="serverDot"></span>
+          <span class="status-text" id="serverStatusText">服务器运行中</span>
+          <button class="logout" id="logoutButton">退出登录</button>
+        </div>
+      </aside>
+
+      <section class="main">
+        <div class="page active" id="page-dashboard">
+          <div class="page-header"><h2>仪表盘</h2><p>授权、在线会话和服务运行状态</p></div>
+          <div class="stats-grid" id="dashboardStats"></div>
+          <div class="ops-grid">
+            <section class="panel"><h3>今日运营</h3><div class="stats-grid compact" id="opsTodayStats"></div></section>
+            <section class="panel"><h3>即将过期</h3><div id="expiringCardsList" class="list"></div></section>
+            <section class="panel"><h3>风险机器</h3><div id="riskyMachinesList" class="list"></div></section>
+            <section class="panel"><h3>代理排行</h3><div id="agentLeaderboardList" class="list"></div></section>
+            <section class="panel wide-panel"><h3>最近异常/操作</h3><div id="recentAuditList" class="audit-list"></div></section>
+          </div>
+          <div class="action-bar">
+            <button class="btn btn-primary" data-page-shortcut="cards">生成卡密</button>
+            <button class="btn btn-ghost" data-page-shortcut="announcement">编辑公告</button>
+            <button class="btn btn-ghost" data-page-shortcut="sessions">在线会话</button>
+            <button class="btn btn-ghost" data-page-shortcut="machines">机器管理</button>
+          </div>
+        </div>
+
+        <div class="page" id="page-cards">
+          <div class="page-header"><h2>卡密管理</h2><p>生成、筛选、批量操作、导入导出和编辑卡密</p></div>
+          <div class="action-bar">
+            <button class="btn btn-primary" id="generateCardButton">+ 单张生成</button>
+            <button class="btn btn-primary" id="batchGenerateButton">++ 批量生成</button>
+            <button class="btn btn-success" id="exportCsvButton">导出 CSV</button>
+            <button class="btn btn-ghost" id="exportJsonButton">导出 JSON</button>
+            <button class="btn btn-ghost" id="importCardsButton">导入卡密</button>
+            <button class="btn btn-ghost" id="refreshCardsButton">刷新</button>
+            <div class="spacer"></div>
+            <select id="cardStatusFilter"><option value="">全部状态</option><option value="active">有效</option><option value="disabled">已禁用</option><option value="expired">已过期</option></select>
+            <input type="text" id="cardSearch" placeholder="搜索卡密/备注" />
+          </div>
+          <div class="filter-panel">
+            <input type="text" id="cardAgentFilter" placeholder="代理 ID" />
+            <select id="cardBoundFilter"><option value="">绑定状态</option><option value="true">已绑定机器</option><option value="false">未绑定机器</option></select>
+            <input type="date" id="cardExpiresAfter" title="到期起始" />
+            <input type="date" id="cardExpiresBefore" title="到期截止" />
+            <input type="number" id="cardMaxSessionsFilter" placeholder="最大会话数" />
+            <button class="btn btn-ghost" id="clearCardFiltersButton">清空筛选</button>
+          </div>
+          <div class="bulk-bar" id="bulkBar">
+            <span id="bulkCount">已选 0 项</span>
+            <button class="btn btn-sm btn-ghost" data-bulk-action="disable">禁用</button>
+            <button class="btn btn-sm btn-ghost" data-bulk-action="enable">启用</button>
+            <button class="btn btn-sm btn-ghost" data-bulk-action="expire">过期</button>
+            <button class="btn btn-sm btn-ghost" data-bulk-action="extend">延期</button>
+            <button class="btn btn-sm btn-ghost" data-bulk-action="unbind">解绑</button>
+          </div>
+          <div class="table-wrap"><table><thead><tr><th><input type="checkbox" id="selectAllCards" /></th><th>卡密</th><th>状态</th><th>会话</th><th>创建</th><th>激活</th><th>到期</th><th>机器</th><th>备注</th><th>操作</th></tr></thead><tbody id="cardsTable"></tbody></table></div>
+        </div>
+
+        <div class="page" id="page-sessions">
+          <div class="page-header"><h2>在线会话</h2><p id="sessionsSummary">当前活跃客户端连接</p></div>
+          <div class="action-bar"><button class="btn btn-ghost" id="refreshSessionsButton">刷新</button></div>
+          <div class="table-wrap"><table><thead><tr><th>Token</th><th>卡密</th><th>机器</th><th>版本</th><th>IP</th><th>最后活跃</th><th>到期</th><th>操作</th></tr></thead><tbody id="sessionsTable"></tbody></table></div>
+        </div>
+
+        <div class="page" id="page-machines">
+          <div class="page-header"><h2>机器管理</h2><p>查看绑定机器和对应卡密</p></div>
+          <div class="action-bar"><button class="btn btn-ghost" id="refreshMachinesButton">刷新</button></div>
+          <div id="machinesList" class="list"></div>
+        </div>
+
+        <div class="page" id="page-blacklist">
+          <div class="page-header"><h2>黑名单</h2><p>封禁或解除机器、卡密和 IP</p></div>
+          <div class="action-bar"><button class="btn btn-danger" id="showBlacklistButton">+ 添加封禁</button><button class="btn btn-ghost" id="refreshBlacklistButton">刷新</button></div>
+          <div class="table-wrap"><table><thead><tr><th>类型</th><th>值</th><th>原因</th><th>添加时间</th><th>操作</th></tr></thead><tbody id="blacklistTable"></tbody></table></div>
+        </div>
+
+        <div class="page" id="page-announcement">
+          <div class="page-header"><h2>公告管理</h2><p>客户端会继续从该接口读取公告</p></div>
+          <section class="panel">
+            <h3>编辑公告</h3>
+            <textarea id="announceContent" rows="5" placeholder="输入公告内容，留空清除公告"></textarea>
+            <div class="modal-btns"><button class="btn btn-primary" id="publishAnnouncementButton">发布公告</button><button class="btn btn-ghost" id="saveAnnouncementButton">保存草稿</button><button class="btn btn-ghost" id="clearAnnouncementButton">清除公告</button></div>
+            <h3>预览</h3><div class="preview" id="announcePreview"><span class="empty-state">当前无公告</span></div>
+            <h3>公告历史</h3><div id="announcementList" class="list"></div>
+          </section>
+        </div>
+
+        <div class="page" id="page-updates">
+          <div class="page-header"><h2>版本推送</h2><p>发布、灰度、暂停、回滚和观察客户端安装结果</p></div>
+          <section class="panel">
+            <div class="action-bar"><button class="btn btn-ghost" id="refreshReleasesButton">刷新</button></div>
+            <div id="releasePublicKey" class="empty-state">加载中...</div>
+            <div id="releasesList" class="list"></div>
+            <div id="releaseEventsPanel"></div>
+          </section>
+          <section class="panel">
+            <h3>创建发布草稿</h3>
+            <div class="form-grid">
+              <label>版本号<input id="releaseVersion" placeholder="如 3.0.0" /></label>
+              <label>发布渠道<select id="releaseChannel"><option value="stable">Stable</option><option value="beta">Beta</option><option value="canary">Canary</option></select></label>
+              <label>灰度比例<input id="releaseRollout" type="number" min="0" max="100" value="100" /></label>
+              <label>最低允许版本<input id="releaseMinVersion" placeholder="留空则不阻断" /></label>
+            </div>
+            <label class="check-line"><input type="checkbox" id="releaseForceUpdate" /> 强制更新</label>
+            <label>更新说明<textarea id="releaseNotes" rows="4" placeholder="用户可见的版本说明"></textarea></label>
+            <div class="form-grid">
+              <label>允许卡密<textarea id="releaseAllowCards" rows="3" placeholder="逗号、空格或换行分隔"></textarea></label>
+              <label>拒绝卡密<textarea id="releaseDenyCards" rows="3"></textarea></label>
+              <label>允许机器<textarea id="releaseAllowMachines" rows="3"></textarea></label>
+              <label>拒绝机器<textarea id="releaseDenyMachines" rows="3"></textarea></label>
+              <label>允许代理<textarea id="releaseAllowAgents" rows="3"></textarea></label>
+              <label>拒绝代理<textarea id="releaseDenyAgents" rows="3"></textarea></label>
+            </div>
+            <div class="modal-btns"><button class="btn btn-primary" id="createReleaseButton">创建草稿</button></div>
+          </section>
+          <section class="panel">
+            <h3>上传安装包</h3>
+            <div class="form-grid">
+              <label>目标发布<select id="releasePackageTarget"></select></label>
+              <label>包类型<select id="releasePackageKind"><option value="bundle">Burn Bundle (.exe)</option><option value="msi">MSI</option></select></label>
+              <label>选择安装包<input type="file" id="releasePackageFile" accept=".exe,.msi" /></label>
+            </div>
+            <div id="releaseUploadProgress" class="empty-state" style="display:none"></div>
+            <div class="modal-btns"><button class="btn btn-primary" id="uploadReleasePackageButton">上传安装包</button></div>
+          </section>
+        </div>
+
+        <div class="page" id="page-scripts">
+          <div class="page-header"><h2>脚本模块</h2><p>DLL 只负责 HOOK CEF 生命周期，业务 JS 从这里版本化下发</p></div>
+          <section class="panel">
+            <div id="scriptCurrentInfo" class="empty-state">加载中...</div>
+            <div id="scriptList" class="list"></div>
+            <div class="form-grid">
+              <label>脚本版本号<input id="scriptVersion" placeholder="如 2026.06.07.1" /></label>
+              <label>SHA256<input id="scriptSha" readonly placeholder="保存后自动生成" /></label>
+            </div>
+            <label>备注<input id="scriptNote" placeholder="例如：稳定版 / 新题型适配 / 临时回滚" /></label>
+            <label>业务 JS<textarea id="scriptContent" rows="16" spellcheck="false" placeholder="粘贴或编辑业务 JS。保存后新注入的客户端会自动拉取该版本。"></textarea></label>
+            <div class="modal-btns">
+              <button class="btn btn-primary" id="saveScriptButton">保存为新脚本</button>
+              <button class="btn btn-success" id="publishScriptButton">保存并启用</button>
+              <button class="btn btn-ghost" id="reloadScriptButton">重新加载</button>
+            </div>
+          </section>
+        </div>
+
+        <div class="page" id="page-payloads">
+          <div class="page-header"><h2>载荷模块</h2><p>加密载荷的上传、启用、回滚和下线</p></div>
+          <section class="panel">
+            <div class="action-bar"><button class="btn btn-ghost" id="refreshPayloadsButton">刷新</button></div>
+            <div id="payloadCurrentInfo" class="empty-state">加载中...</div>
+            <div class="table-wrap"><table><thead><tr><th>载荷 ID</th><th>状态</th><th>大小</th><th>分片</th><th>SHA256</th><th>上传时间</th><th>操作</th></tr></thead><tbody id="payloadsTable"></tbody></table></div>
+          </section>
+        </div>
+
+        <div class="page" id="page-password">
+          <div class="page-header"><h2>密码管理</h2><p>修改管理员登录密码</p></div>
+          <section class="panel narrow-panel">
+            <label>当前密码<input type="password" id="oldPassword" /></label>
+            <label>新密码<input type="password" id="newPassword" /></label>
+            <label>确认新密码<input type="password" id="confirmPassword" /></label>
+            <div class="modal-btns"><button class="btn btn-primary" id="changePasswordButton">修改密码</button></div>
+          </section>
+        </div>
+
+        <div class="page" id="page-audit">
+          <div class="page-header"><h2>审计日志</h2><p id="auditSummary">操作记录</p></div>
+          <div class="action-bar"><select id="auditActionFilter"><option value="">全部操作</option><option value="card_generated">生成卡密</option><option value="card_activated">激活卡密</option><option value="card_status_changed">状态变更</option><option value="card_extended">延期</option><option value="card_unbound">解绑</option><option value="cards_import_completed">导入卡密</option><option value="session_deactivated">注销会话</option><option value="blacklist_added">添加黑名单</option><option value="blacklist_removed">移除黑名单</option><option value="agent_created">代理注册</option><option value="agent_password_updated">代理改密</option><option value="invite_created">生成邀请码</option><option value="invite_deleted">删除邀请码</option><option value="announcement_saved">保存公告</option><option value="announcement_published">发布公告</option><option value="announcement_deleted">删除公告</option><option value="release_created">创建发布</option><option value="release_published">发布客户端</option><option value="release_paused">暂停发布</option><option value="release_rolled_back">回滚发布</option><option value="release_package_uploaded">上传安装包</option><option value="script_published">发布脚本</option><option value="script_activated">启用脚本</option><option value="script_deleted">删除脚本</option><option value="payload_uploaded">上传载荷</option><option value="payload_activated">启用载荷</option><option value="payload_deleted">删除载荷</option></select><input type="text" id="auditQuery" placeholder="搜索卡密/机器/代理/IP/详情" /><input type="date" id="auditFrom" /><input type="date" id="auditTo" /><button class="btn btn-ghost" id="exportAuditCsvButton">导出 CSV</button><button class="btn btn-ghost" id="clearAuditFiltersButton">清空</button></div>
+          <div class="audit-list" id="auditLog"></div><div class="pagination" id="auditPagination"></div>
+        </div>
+
+        <div class="page" id="page-agents">
+          <div class="page-header"><h2>代理管理</h2><p>代理账号、状态、出卡指标和归属卡密</p></div>
+          <div class="action-bar"><button class="btn btn-ghost" id="refreshAgentsButton">刷新</button><button class="btn btn-success" id="exportAgentsCsvButton">导出 CSV</button><div class="spacer"></div><input type="text" id="agentSearch" placeholder="搜索代理" /></div>
+          <div class="table-wrap"><table><thead><tr><th>代理 ID</th><th>用户名</th><th>卡密</th><th>有效</th><th>过期</th><th>绑定机器</th><th>最近出卡</th><th>注册时间</th><th>状态</th><th>操作</th></tr></thead><tbody id="agentsTable"></tbody></table></div>
+        </div>
+
+        <div class="page" id="page-invites">
+          <div class="page-header"><h2>邀请码</h2><p>生成和管理代理注册邀请码</p></div>
+          <div class="action-bar"><button class="btn btn-primary" id="createInviteButton">生成邀请码</button><select id="inviteCount"><option value="1">1个</option><option value="5" selected>5个</option><option value="10">10个</option><option value="20">20个</option></select><select id="inviteMaxUses"><option value="1" selected>单次使用</option><option value="5">5次使用</option><option value="0">不限次数</option></select><button class="btn btn-ghost" id="refreshInvitesButton">刷新</button></div>
+          <div class="table-wrap"><table><thead><tr><th>邀请码</th><th>状态</th><th>已用/上限</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="invitesTable"></tbody></table></div>
+        </div>
+
+        <div class="page" id="page-settings">
+          <div class="page-header"><h2>系统状态</h2><p>服务健康、请求量和运行时间</p></div>
+          <section class="panel"><h3>资源状态</h3><div id="resourceInfo">加载中...</div></section>
+          <section class="panel"><div id="healthInfo">加载中...</div></section>
+        </div>
+      </section>
+    </main>
+
+    <div class="modal-overlay" id="generateModal"><div class="modal"><h3 id="generateTitle">生成卡密</h3><label id="genCountLabel" hidden>数量</label><input id="genCount" type="number" value="1" hidden /><label>有效时长（小时）</label><input id="genDuration" type="number" value="720" /><label>最大同时在线</label><input id="genMaxSessions" type="number" value="1" /><label>备注</label><input id="genNote" type="text" /><div class="modal-btns"><button class="btn btn-primary" id="confirmGenerate">生成</button><button class="btn btn-ghost" data-close-modal="generateModal">取消</button></div></div></div>
+    <div class="modal-overlay" id="editCardModal"><div class="modal"><h3>编辑卡密 <span id="editCardCode" class="mono"></span></h3><label>备注</label><input id="editCardNote" /><label>最大同时在线</label><input type="number" id="editCardMaxSessions" value="1" /><div class="modal-btns"><button class="btn btn-primary" id="saveCardDetailsButton">保存</button><button class="btn btn-ghost" data-close-modal="editCardModal">取消</button></div></div></div>
+    <div class="modal-overlay" id="extendModal"><div class="modal"><h3>延期卡密</h3><p id="extendCardInfo"></p><label>延期时长（小时）</label><input type="number" id="extendHours" value="720" /><div class="modal-btns"><button class="btn btn-primary" id="confirmExtendButton">确认延期</button><button class="btn btn-ghost" data-close-modal="extendModal">取消</button></div></div></div>
+    <div class="modal-overlay" id="importModal"><div class="modal wide-modal"><h3>导入卡密</h3><label>卡密列表或 CSV</label><textarea id="importCSV" rows="6"></textarea><label>有效时长（小时）</label><input type="number" id="importDuration" value="720" /><label>最大同时在线</label><input type="number" id="importMaxSessions" value="1" /><div id="importReport" class="report-panel"></div><div class="modal-btns"><button class="btn btn-ghost" id="previewImportButton">预览</button><button class="btn btn-primary" id="confirmImportButton">确认导入</button><button class="btn btn-ghost" data-close-modal="importModal">取消</button></div></div></div>
+    <div class="modal-overlay" id="blacklistModal"><div class="modal"><h3>添加黑名单</h3><label>封禁类型</label><select id="blType"><option value="machine">机器</option><option value="card">卡密</option><option value="ip">IP</option></select><label>值</label><input id="blValue" /><label>原因</label><input id="blReason" /><div class="modal-btns"><button class="btn btn-danger" id="addBlacklistButton">确认封禁</button><button class="btn btn-ghost" data-close-modal="blacklistModal">取消</button></div></div></div>
+    <div class="modal-overlay" id="machineModal"><div class="modal wide-modal"><h3 id="machineModalTitle">机器详情</h3><div id="machineDetailContent"></div><div class="modal-btns"><button class="btn btn-ghost" data-close-modal="machineModal">关闭</button></div></div></div>
+    <div class="modal-overlay" id="agentCardsModal"><div class="modal wide-modal"><h3 id="agentCardsTitle">代理卡密</h3><div id="agentCardsContent"></div><div class="modal-btns"><button class="btn btn-ghost" data-close-modal="agentCardsModal">关闭</button></div></div></div>
+    <div class="modal-overlay" id="resetAgentPwModal"><div class="modal"><h3>重置代理密码</h3><p id="resetAgentInfo"></p><label>新密码</label><input type="password" id="resetAgentPassword" /><div class="modal-btns"><button class="btn btn-primary" id="confirmResetAgentPwButton">确认重置</button><button class="btn btn-ghost" data-close-modal="resetAgentPwModal">取消</button></div></div></div>
+    <div class="toast" id="toast"></div>
+  </body>
+</html>

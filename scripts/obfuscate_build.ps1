@@ -25,13 +25,17 @@ $UPX_PATH = "upx.exe"  # Put UPX on PATH or specify full path
 
 # Sensitive strings to find and warn about (for verification)
 $SENSITIVE_PATTERNS = @(
-    '47\.110\.248\.240',
-    'c1a3f8e9d2b47a6e8f0c3d5b9a1e4f7a8b2c6d0e3f5a7b9c1d4e6f8a0b2c4d6',
     'injector_v1',
     'api\.deepseek\.com',
     'deepseek-v4-pro',
     'sk-[a-zA-Z0-9]{20,}'
 )
+if ($env:LINGQIAO_SERVER_HOST) {
+    $SENSITIVE_PATTERNS += [regex]::Escape($env:LINGQIAO_SERVER_HOST)
+}
+if ($env:HMAC_SECRET) {
+    $SENSITIVE_PATTERNS += [regex]::Escape($env:HMAC_SECRET)
+}
 
 # ============================================================
 # Step 1: Audit exposed strings

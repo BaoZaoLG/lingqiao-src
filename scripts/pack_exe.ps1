@@ -1,6 +1,10 @@
 param(
     [Parameter(Mandatory=$true)] [string]$InputExe,
-    [string]$OutputExe
+    [string]$OutputExe,
+    [string]$ServerHost = $env:LINGQIAO_SERVER_HOST,
+    [int]$ServerPort = 48901,
+    [string]$ClientId = $(if ($env:LINGQIAO_CLIENT_ID) { $env:LINGQIAO_CLIENT_ID } else { 'injector_v1' }),
+    [string]$ClientSecret = $env:HMAC_SECRET
 )
 
 <#
@@ -12,11 +16,27 @@ param(
     - Output is a single standalone .exe (~original size)
 
 .EXAMPLE
+    $env:LINGQIAO_SERVER_HOST = '127.0.0.1'
+    $env:HMAC_SECRET = '<server HMAC_SECRET>'
     .\pack_exe.ps1 -InputExe .\src\Release\Injector.exe
 #>
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Security
+if ([string]::IsNullOrWhiteSpace($ServerHost)) {
+    throw "Server host is required. Pass -ServerHost or set LINGQIAO_SERVER_HOST."
+}
+if ([string]::IsNullOrWhiteSpace($ClientId)) {
+    throw "Client ID is required. Pass -ClientId or set LINGQIAO_CLIENT_ID."
+}
+if ([string]::IsNullOrWhiteSpace($ClientSecret)) {
+    throw "Client secret is required. Pass -ClientSecret or set HMAC_SECRET."
+}
+
+function ConvertTo-CSharpStringLiteral {
+    param([Parameter(Mandatory=$true)] [string]$Value)
+    return $Value.Replace('\', '\\').Replace('"', '\"')
+}
 
 if (-not $OutputExe) {
     $baseName = [System.IO.Path]::GetFileNameWithoutExtension($InputExe)
@@ -103,6 +123,9 @@ Write-Host "  CSC: $cscExe" -ForegroundColor Gray
 # Generate launcher source
 $launcherCs = Join-Path ([System.IO.Path]::GetTempPath()) "stage1_launcher.cs"
 $launcherExe = $OutputExe
+$csServerHost = ConvertTo-CSharpStringLiteral $ServerHost
+$csClientId = ConvertTo-CSharpStringLiteral $ClientId
+$csClientSecret = ConvertTo-CSharpStringLiteral $ClientSecret
 
 $launcherSource = @"
 using System;
@@ -119,10 +142,10 @@ using System.Text;
 using System.Windows.Forms;
 
 class Stage1 {
-    const string SERVER_HOST = "47.110.248.240";
-    const int    SERVER_PORT = 48901;
-    const string CLIENT_ID  = "injector_v1";
-    const string CLIENT_SECRET = "c1a3f8e9d2b47a6e8f0c3d5b9a1e4f7a8b2c6d0e3f5a7b9c1d4e6f8a0b2c4d6";
+    const string SERVER_HOST = "$csServerHost";
+    const int    SERVER_PORT = $ServerPort;
+    const string CLIENT_ID  = "$csClientId";
+    const string CLIENT_SECRET = "$csClientSecret";
 
     // Embedded encrypted payload (auto-filled by pack script)
     static readonly string PAYLOAD_B64  = "$payloadB64";

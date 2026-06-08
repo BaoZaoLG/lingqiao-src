@@ -1,4 +1,7 @@
 cmake_minimum_required (VERSION 3.15)
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
 project(CefHook)
 set(CMAKE_CXX_STANDARD 17)
 
@@ -8,12 +11,12 @@ set(CMAKE_CXX_STANDARD 17)
 if(NOT APP_VERSION)
     set(APP_VERSION "2.1.13")
 endif()
+set(UPDATE_MANIFEST_PUBLIC_KEY_HEX "" CACHE STRING "Pinned release manifest public key hex")
 string(REPLACE "." "," APP_VERSION_COMMA "${APP_VERSION}")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Static link CRT to avoid VC++ redist dependency on target machine
 if(MSVC)
-    cmake_policy(SET CMP0091 NEW)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 

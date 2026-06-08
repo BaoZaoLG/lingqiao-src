@@ -36,7 +36,8 @@ public slots:
                     emit updateAvailable(
                         uo["latest_version"].toString(),
                         uo["download_url"].toString(),
-                        uo["force_update"].toBool(false));
+                        uo["force_update"].toBool(false),
+                        uo["sha256"].toString());
                 }
                 emit activationSuccess(obj["session_token"].toString(), (qint64)obj["card_expires_at"].toDouble());
             }
@@ -48,7 +49,7 @@ public slots:
             QJsonDocument doc = QJsonDocument::fromJson(resp.body);
             QString errMsg = doc.object()["message"].toString(QString::fromUtf8(_S("卡密无效或已过期")));
             if (errMsg.contains(QString::fromUtf8(_S("版本过低"))))
-                emit versionRejected(errMsg, doc.object()["download_url"].toString());
+                emit versionRejected(errMsg, doc.object()["download_url"].toString(), doc.object()["sha256"].toString());
             else
                 emit activationFailed(errMsg);
         } else if (resp.statusCode == 0)
@@ -63,8 +64,8 @@ public slots:
 signals:
     void activationSuccess(const QString& sessionToken, qint64 cardExpiresAt);
     void activationFailed(const QString& error);
-    void versionRejected(const QString& message, const QString& downloadURL);
-    void updateAvailable(const QString& latestVersion, const QString& downloadURL, bool forceUpdate);
+    void versionRejected(const QString& message, const QString& downloadURL, const QString& sha256);
+    void updateAvailable(const QString& latestVersion, const QString& downloadURL, bool forceUpdate, const QString& sha256);
 };
 
 // ============================================================================
@@ -94,7 +95,8 @@ public slots:
                     emit updateAvailable(
                         uo["latest_version"].toString(),
                         uo["download_url"].toString(),
-                        uo["force_update"].toBool(false));
+                        uo["force_update"].toBool(false),
+                        uo["sha256"].toString());
                 }
                 emit heartbeatOk(exp);
             } else emit heartbeatFail();
@@ -105,7 +107,7 @@ public slots:
             QJsonDocument doc = QJsonDocument::fromJson(resp.body);
             QString errMsg = doc.object()["message"].toString();
             if (errMsg.contains(QString::fromUtf8(_S("版本过低"))))
-                emit versionRejected(errMsg, doc.object()["download_url"].toString());
+                emit versionRejected(errMsg, doc.object()["download_url"].toString(), doc.object()["sha256"].toString());
             else
                 emit heartbeatFail();
         } else emit heartbeatFail();
@@ -113,6 +115,6 @@ public slots:
 signals:
     void heartbeatOk(qint64 cardExpiresAt);
     void heartbeatFail();
-    void versionRejected(const QString& message, const QString& downloadURL);
-    void updateAvailable(const QString& latestVersion, const QString& downloadURL, bool forceUpdate);
+    void versionRejected(const QString& message, const QString& downloadURL, const QString& sha256);
+    void updateAvailable(const QString& latestVersion, const QString& downloadURL, bool forceUpdate, const QString& sha256);
 };

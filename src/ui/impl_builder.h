@@ -13,8 +13,8 @@
             auto pSWCA = (pfnSetWindowCompositionAttribute)
                 GetProcAddress(hUser, "SetWindowCompositionAttribute");
             if (pSWCA) {
-                // AccentState=4 (ACRYLIC), GradientColor=0xA0FFFFFF (white tint, ABGR format)
-                ACCENT_POLICY policy = {4, 0, 0xA0FFFFFF, 0};
+                // AccentState=4 (ACRYLIC), GradientColor=0x00000000 (transparent, ABGR format)
+                ACCENT_POLICY policy = {4, 0, 0x00000000, 0};
                 WINCOMPATTR_DATA data = {19, &policy, sizeof(policy)};
                 pSWCA(hwnd, &data);
             }
@@ -48,13 +48,38 @@
     void handleUpdateCheck(const QString& latest, const QString& url, bool force, const QString& sha256 = QString()) {
         if (latest.isEmpty()) return;
         if (CompareVersion(GetClientVersion(), latest) >= 0) return;  // already up-to-date
+        m_pendingUpdateInstaller = false;
+        m_pendingUpdatePackageKind.clear();
+        m_pendingUpdateReleaseID.clear();
         if (force) {
-            applyForceUpdateBlock(latest, url);
+            applyForceUpdateBlock(latest, url, sha256);
         } else if (!m_updateDismissed) {
             m_pendingUpdateVersion = latest;
             m_pendingUpdateUrl = url;
             m_pendingUpdateSha256 = sha256;
             m_updateLabel->setText(QString::fromUtf8(_S("<b>新版本可用:</b> v%1 已发布")).arg(latest));
+            m_updateNowBtn->setVisible(!url.isEmpty());
+            m_remindLaterBtn->setVisible(true);
+            m_updateBanner->setVisible(true);
+        }
+    }
+
+    void handleInstallerUpdateCheck(const QString& latest, const QString& url, bool force,
+                                    const QString& sha256, const QString& packageKind,
+                                    const QString& releaseID, const QString& notes = QString()) {
+        if (latest.isEmpty()) return;
+        if (CompareVersion(GetClientVersion(), latest) >= 0) return;
+        m_pendingUpdateInstaller = true;
+        m_pendingUpdatePackageKind = packageKind;
+        m_pendingUpdateReleaseID = releaseID;
+        if (force) {
+            applyForceInstallerUpdateBlock(latest, url, sha256, packageKind, releaseID);
+        } else if (!m_updateDismissed) {
+            m_pendingUpdateVersion = latest;
+            m_pendingUpdateUrl = url;
+            m_pendingUpdateSha256 = sha256;
+            m_updateLabel->setText(QString::fromUtf8(_S("<b>新版本可用:</b> v%1 已发布%2"))
+                .arg(latest, notes.isEmpty() ? QString() : QString::fromUtf8(_S("<br>%1")).arg(notes.toHtmlEscaped())));
             m_updateNowBtn->setVisible(!url.isEmpty());
             m_remindLaterBtn->setVisible(true);
             m_updateBanner->setVisible(true);
@@ -266,7 +291,12 @@
             "border-color: rgba(74,158,255,0.40); }");
         m_updateNowBtn->setVisible(false);
         connect(m_updateNowBtn, &QPushButton::clicked, this, [this]() {
-            if (!m_pendingUpdateUrl.isEmpty())
+            if (m_pendingUpdateUrl.isEmpty()) return;
+            if (m_pendingUpdateInstaller)
+                ApplyInstallerUpdate(m_pendingUpdateVersion, m_pendingUpdateUrl,
+                                     m_pendingUpdateSha256, m_pendingUpdatePackageKind,
+                                     m_pendingUpdateReleaseID);
+            else
                 ApplyUpdate(m_pendingUpdateVersion, m_pendingUpdateUrl, m_pendingUpdateSha256);
         });
         lay->addWidget(m_updateNowBtn);
@@ -283,7 +313,7 @@
         lay->addWidget(m_remindLaterBtn);
     }
 
-    void applyForceUpdateBlock(const QString& latest, const QString& url) {
+    void applyForceUpdateBlock(const QString& latest, const QString& url, const QString& sha256 = QString()) {
         m_forceUpdateBlocked = true;
         m_injectBtn->setEnabled(false);
         m_remindLaterBtn->setVisible(false);
@@ -298,7 +328,7 @@
             dlg->setAttribute(Qt::WA_DeleteOnClose);
             dlg->show();
             QApplication::processEvents();
-            ApplyUpdate(latest, url, QString(), dlg);
+            ApplyUpdate(latest, url, sha256, dlg);
         } else {
             QMessageBox dlg(this);
             dlg.setWindowTitle(QString::fromUtf8(_S("需要更新")));
@@ -310,3 +340,23 @@
         }
     }
 
+    void applyForceInstallerUpdateBlock(const QString& latest, const QString& url,
+                                        const QString& sha256, const QString& packageKind,
+                                        const QString& releaseID) {
+        m_forceUpdateBlocked = true;
+        m_injectBtn->setEnabled(false);
+        m_remindLaterBtn->setVisible(false);
+        if (url.isEmpty()) {
+            setStatus("error", QString::fromUtf8(_S("当前版本过低，但服务器未提供安装包")));
+            return;
+        }
+        QMessageBox* dlg = new QMessageBox(this);
+        dlg->setWindowTitle(QString::fromUtf8(_S("需要更新")));
+        dlg->setIcon(QMessageBox::Information);
+        dlg->setText(QString::fromUtf8(_S("发现新版本 v%1，正在下载安装包...\n下载完成后请确认安装。")).arg(latest));
+        dlg->setStandardButtons(QMessageBox::NoButton);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->show();
+        QApplication::processEvents();
+        ApplyInstallerUpdate(latest, url, sha256, packageKind, releaseID, dlg);
+    }

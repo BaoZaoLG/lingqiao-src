@@ -1,5 +1,7 @@
 # Build output
 build/
+build-codex/
+build-hook-log/
 src/Release/
 *.obj
 *.pdb
@@ -24,11 +26,23 @@ src/encrypted_data.h
 src/padding_data.h
 src/version.rc
 
-# Server data
+# Server data & secrets — NEVER commit
 server/data/
 server/bin/
 server/server.exe
+injector-server/data/
+injector-server/certs/
+injector-server/server.log
+injector-server/injector-server
+injector-server/lingqiao-server.exe
+injector-server/lingqiao-server-*
+injector-server/.gocache/
 certs/
+*.log
+
+# Package managers
+node_modules/
+injector-server/web/node_modules/
 
 # Qt deployment
 src/*.dll

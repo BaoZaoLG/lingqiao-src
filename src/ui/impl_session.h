@@ -35,6 +35,7 @@
     static QString xorEncrypt(const QString& data, const QString& key) {
         QByteArray dataBytes = data.toUtf8();
         QByteArray keyBytes = key.toUtf8();
+        if (keyBytes.isEmpty()) return QString();
         QByteArray result;
         for (int i = 0; i < dataBytes.size(); i++) {
             result.append(dataBytes[i] ^ keyBytes[i % keyBytes.size()] ^ (char)((i * 0x9D) & 0xFF));
@@ -45,6 +46,7 @@
     static QString xorDecrypt(const QString& encBase64, const QString& key) {
         QByteArray dataBytes = QByteArray::fromBase64(encBase64.toUtf8());
         QByteArray keyBytes = key.toUtf8();
+        if (keyBytes.isEmpty()) return QString();
         QByteArray result;
         for (int i = 0; i < dataBytes.size(); i++) {
             result.append(dataBytes[i] ^ keyBytes[i % keyBytes.size()] ^ (char)((i * 0x9D) & 0xFF));
@@ -53,9 +55,12 @@
     }
 
     void saveSession() {
-        QSettings s(_S("LingQiao"), _S("Injector"));
-        // Encrypt session token with machine fingerprint for storage
         QString fp = GetMachineFingerprint();
+        if (fp.isEmpty()) {
+            logEvent("SESSION", "Cannot save session: machine fingerprint unavailable");
+            return;
+        }
+        QSettings s(_S("LingQiao"), _S("Injector"));
         s.setValue("session_token", xorEncrypt(m_sessionToken, fp));
         s.setValue("machine_id", m_machineID);
         s.setValue("card_expires_at", m_cardExpiresAt);
@@ -77,8 +82,12 @@
         qint64 exp = s.value("card_expires_at").toLongLong();
         QString card = s.value("card_code").toString();
 
-        // Decrypt session token
+        // Decrypt session token — guard against empty fingerprint
         QString fp = GetMachineFingerprint();
+        if (fp.isEmpty() && !encToken.isEmpty()) {
+            logEvent("SESSION", "Cannot restore: machine fingerprint unavailable");
+            return false;
+        }
         QString token = encToken.isEmpty() ? QString() : xorDecrypt(encToken, fp);
 
         if (token.isEmpty() || mid.isEmpty()) return false;
@@ -94,46 +103,51 @@
         m_cardExpiresAt = exp;
         if (!card.isEmpty() && m_cardInput) m_cardInput->setText(card);
 
-        // Try a heartbeat to validate the session
-        QJsonObject req;
-        req["client_id"] = QString::fromWCharArray(CLIENT_ID);
-        req["session_token"] = token;
-        req["machine_id"] = mid;
-        req["client_version"] = GetClientVersion();
-        QByteArray body = QJsonDocument(req).toJson(QJsonDocument::Compact);
-        HttpResponse resp = HttpPostJson(SERVER_HOST, SERVER_PORT, g_pathHb, body);
+        // Async heartbeat to validate the session — don't block UI thread
+        QPointer<MainWindow> safeThis(this);
+        auto hbToken = token;
+        auto hbMid = mid;
+        QtConcurrent::run([safeThis, hbToken, hbMid]() {
+            QJsonObject req;
+            req["client_id"] = QString::fromWCharArray(CLIENT_ID);
+            req["session_token"] = hbToken;
+            req["machine_id"] = hbMid;
+            req["client_version"] = GetClientVersion();
+            QByteArray body = QJsonDocument(req).toJson(QJsonDocument::Compact);
+            HttpResponse resp = HttpPostJson(SERVER_HOST, SERVER_PORT, g_pathHb, body);
 
-        if (resp.statusCode == 200) {
-            QJsonDocument doc = QJsonDocument::fromJson(resp.body);
-            QJsonObject obj = doc.object();
-            if (obj["status"].toString() == "ok") {
-                m_activated = true;
-                m_cardExpiresAt = (qint64)obj["card_expires_at"].toDouble();
-                setUiLocked(false);
-                setConnDot("ok");
-                downloadDllAsync();
-                fetchBalance();
-                if (m_cardExpiresAt > 0) {
-                    m_cardExpiry->setText(QString::fromUtf8(_S("到期: %1"))
-                        .arg(QDateTime::fromSecsSinceEpoch(m_cardExpiresAt).toString("yyyy-MM-dd hh:mm")));
-                    m_cardExpiry->setVisible(true);
+            QMetaObject::invokeMethod(safeThis, [safeThis, resp, hbToken, hbMid]() {
+                if (!safeThis) return;
+                if (resp.statusCode == 200) {
+                    QJsonDocument doc = QJsonDocument::fromJson(resp.body);
+                    QJsonObject obj = doc.object();
+                    if (obj["status"].toString() == "ok") {
+                        safeThis->m_activated = true;
+                        safeThis->m_cardExpiresAt = (qint64)obj["card_expires_at"].toDouble();
+                        safeThis->setUiLocked(false);
+                        safeThis->setConnDot("ok");
+                        safeThis->downloadDllAsync();
+                        safeThis->fetchBalance();
+                        safeThis->CheckEnterpriseUpdateAsync();
+                        if (safeThis->m_cardExpiresAt > 0) {
+                            safeThis->m_cardExpiry->setText(QString::fromUtf8(_S("到期: %1"))
+                                .arg(QDateTime::fromSecsSinceEpoch(safeThis->m_cardExpiresAt).toString("yyyy-MM-dd hh:mm")));
+                            safeThis->m_cardExpiry->setVisible(true);
+                        }
+                        safeThis->updateTrayIcon();
+                        safeThis->logEvent("SESSION", "Session restored via heartbeat");
+                        return;
+                    }
                 }
-                updateTrayIcon();
-                logEvent("SESSION", "Session restored via heartbeat");
-                return true;
-            }
-        }
-
-        // Heartbeat failed, try full re-activation with saved card
-        if (!card.isEmpty()) {
-            logEvent("SESSION", "Heartbeat failed, attempting re-activation");
-            m_cardInput->setText(card);
-            clearSavedSession();
-            return false; // user needs to re-activate
-        }
-
-        clearSavedSession();
-        return false;
+                // Heartbeat failed — clear saved session, user needs to re-activate
+                safeThis->logEvent("SESSION", "Heartbeat failed during async restore");
+                safeThis->clearSavedSession();
+                safeThis->m_sessionToken.clear();
+                safeThis->m_machineID.clear();
+                safeThis->m_activated = false;
+            }, Qt::QueuedConnection);
+        });
+        return true; // token was valid enough to attempt restore
     }
 
     // ── Expiry Check ───────────────────────────────────────────────
@@ -260,10 +274,12 @@
         QStringList parts;
         for (int i = 0; i < m_injectHistory.size() && i < 5; i++) {
             QFileInfo fi(m_injectHistory[i]);
+            QString escapedPath = m_injectHistory[i].toHtmlEscaped();
+            QString escapedName = fi.fileName().toHtmlEscaped();
             parts.append(QString("<a href='%1' style='color:#7ec8e3;text-decoration:none'>%2</a>")
-                .arg(m_injectHistory[i], fi.fileName()));
+                .arg(escapedPath, escapedName));
         }
-        m_historyLabel->setText(QString::fromUtf8(_S("最近注入: ")) + parts.join(" &middot; "));
+        m_historyLabel->setText(QString::fromUtf8(_S("最近注入: ")) + parts.join(QString::fromUtf8(_S(" · "))));
         m_historyLabel->setVisible(true);
     }
 

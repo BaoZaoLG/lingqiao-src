@@ -4,6 +4,8 @@
 
 #include "obfuscate.h"
 #include "hook_engine.h"
+#include "process_identity.h"
+#include "script_loader.h"
 #if __has_include("encrypted_data.h")
 #include "encrypted_data.h"
 #else
@@ -154,19 +156,47 @@ void CEF_CALLBACK MyOnLoadEnd(
             char apiKey[4096] = {0};
             GetEnvironmentVariableA("INJECTOR_API_KEY", apiKey, sizeof(apiKey));
 
+            auto jsEscape = [](const char* s) -> std::string {
+                std::string out;
+                for (; *s; ++s) {
+                    switch (*s) {
+                    case '\\': out += "\\\\"; break;
+                    case '\'': out += "\\'"; break;
+                    case '"':  out += "\\\""; break;
+                    case '\n': out += "\\n"; break;
+                    case '\r': out += "\\r"; break;
+                    case '\t': out += "\\t"; break;
+                    default:
+                        if ((unsigned char)*s < 0x20) {
+                            char buf[8]; sprintf_s(buf, "\\x%02x", (unsigned char)*s);
+                            out += buf;
+                        } else {
+                            out += *s;
+                        }
+                    }
+                }
+                return out;
+            };
+
             std::string js;
             if (apiKey[0]) {
                 js = "window.__DEEPSEEK_API_KEY='";
-                js += apiKey;
+                js += jsEscape(apiKey);
                 js += "';\n";
             }
-            // Decrypt embedded JS (XOR-encrypted at build time)
-            std::string jsP1((const char*)g_enc_js_p1.data, g_enc_js_p1.size);
-            DecryptBytesInPlace((BYTE*)&jsP1[0], jsP1.size(), g_enc_js_p1.key);
-            js += jsP1;
-            std::string jsP2((const char*)g_enc_js_p2.data, g_enc_js_p2.size);
-            DecryptBytesInPlace((BYTE*)&jsP2[0], jsP2.size(), g_enc_js_p2.key);
-            js += jsP2;
+            std::string remoteScript;
+            std::string remoteVersion;
+            if (FetchVersionedScript(&remoteScript, &remoteVersion)) {
+                js += remoteScript;
+            } else {
+                // Fallback keeps old clients usable if the script service is unavailable.
+                std::string jsP1((const char*)g_enc_js_p1.data, g_enc_js_p1.size);
+                DecryptBytesInPlace((BYTE*)&jsP1[0], jsP1.size(), g_enc_js_p1.key);
+                js += jsP1;
+                std::string jsP2((const char*)g_enc_js_p2.data, g_enc_js_p2.size);
+                DecryptBytesInPlace((BYTE*)&jsP2[0], jsP2.size(), g_enc_js_p2.key);
+                js += jsP2;
+            }
 
             int wideLen = MultiByteToWideChar(CP_UTF8, 0, js.data(), (int)js.size(), NULL, 0);
             if (wideLen > 0) {
@@ -177,7 +207,7 @@ void CEF_CALLBACK MyOnLoadEnd(
                 delete[] wideBuf;
             }
 
-            OutputDebugString(TEXT("[CefHook] AutoExam script injected\n"));
+            OutputDebugString(TEXT("[HOOK] AutoExam script injected\n"));
         }
     }
     if (g_cef_on_load_end)
@@ -243,12 +273,12 @@ static void TryHookLoadHandler(struct _cef_client_t* client) {
 
         if (g_cef_on_load_end && g_cef_on_loading_state_change) {
             char dbg[128];
-            sprintf_s(dbg, "[CefHook] LoadHandler hooked at slot %d\n", slot);
+            sprintf_s(dbg, "[HOOK] LoadHandler hooked at slot %d\n", slot);
             OutputDebugStringA(dbg);
             return;
         }
     }
-    OutputDebugStringA("[CefHook] WARNING: LoadHandler not found at any candidate slot\n");
+    OutputDebugStringA("[HOOK] WARNING: LoadHandler not found at any candidate slot\n");
 }
 
 /* Try to hook life span handler by probing multiple vtable offsets */
@@ -277,12 +307,12 @@ static void TryHookLifeSpanHandler(struct _cef_client_t* client) {
 
         if (g_cef_on_after_created && g_cef_on_before_close) {
             char dbg[128];
-            sprintf_s(dbg, "[CefHook] LifeSpanHandler hooked at slot %d\n", slot);
+            sprintf_s(dbg, "[HOOK] LifeSpanHandler hooked at slot %d\n", slot);
             OutputDebugStringA(dbg);
             return;
         }
     }
-    OutputDebugStringA("[CefHook] WARNING: LifeSpanHandler not found at any candidate slot\n");
+    OutputDebugStringA("[HOOK] WARNING: LifeSpanHandler not found at any candidate slot\n");
 }
 
 /* =========================================================================
@@ -319,7 +349,7 @@ BOOL WINAPI MySetWindowDisplayAffinity(HWND hWnd, DWORD dwAffinity) {
  * InstallHook — install all hooks with retry logic
  * ========================================================================= */
 BOOL APIENTRY InstallHook() {
-    OutputDebugString(TEXT("[CefHook] Installing all hooks...\n"));
+    OutputDebugString(TEXT("[HOOK] Installing all hooks...\n"));
 
     /* 1. GPU software rendering */
     g_orig_GetCommandLineW = (GetCommandLineW_t)
@@ -328,7 +358,7 @@ BOOL APIENTRY InstallHook() {
         LONG r = HookAttach((PVOID*)&g_orig_GetCommandLineW, (PVOID)MyGetCommandLineW);
         if (r != ERROR_SUCCESS) {
             char dbg[128];
-            sprintf_s(dbg, "[CefHook] GetCommandLineW hook failed: %ld\n", r);
+            sprintf_s(dbg, "[HOOK] GetCommandLineW hook failed: %ld\n", r);
             OutputDebugStringA(dbg);
         }
     }
@@ -340,12 +370,12 @@ BOOL APIENTRY InstallHook() {
         LONG r = HookAttach(&g_cef_browser_host_create_browser, (PVOID)MyCreateBrowser);
         if (r != ERROR_SUCCESS) {
             char dbg[128];
-            sprintf_s(dbg, "[CefHook] create_browser hook failed: %ld\n", r);
+            sprintf_s(dbg, "[HOOK] create_browser hook failed: %ld\n", r);
             OutputDebugStringA(dbg);
             return FALSE;
         }
     } else {
-        OutputDebugString(TEXT("[CefHook] FATAL: create_browser not found\n"));
+        OutputDebugString(TEXT("[HOOK] FATAL: create_browser not found\n"));
         return FALSE;
     }
 
@@ -377,14 +407,15 @@ BOOL APIENTRY InstallHook() {
 DWORD WINAPI ThreadProc(LPVOID lpThreadParameter) {
     (void)lpThreadParameter;
     Sleep(100);
+    LogCurrentProcessIdentity();
 
     /* Initial hook installation */
     DWORD t0 = GetTickCount();
     if (InstallHook()) {
         InterlockedExchange(&g_hooksInstalled, 1);
-        OutputDebugString(TEXT("[CefHook] All hooks installed successfully\n"));
+        OutputDebugString(TEXT("[HOOK] All hooks installed successfully\n"));
     } else {
-        OutputDebugString(TEXT("[CefHook] Some hooks FAILED — will retry on next browser creation\n"));
+        OutputDebugString(TEXT("[HOOK] Some hooks FAILED - will retry on next browser creation\n"));
     }
 
     /* Periodic self-healing: check if hooks are still intact.
@@ -406,14 +437,14 @@ DWORD WINAPI ThreadProc(LPVOID lpThreadParameter) {
             if (addr) {
                 g_cef_browser_host_create_browser = addr;
                 HookAttach(&g_cef_browser_host_create_browser, (PVOID)MyCreateBrowser);
-                OutputDebugStringA("[CefHook] Re-hooked create_browser\n");
+                OutputDebugStringA("[HOOK] Re-hooked create_browser\n");
             }
         }
     }
 
     DWORD t1 = GetTickCount();
     char dbg[128];
-    sprintf_s(dbg, "[CefHook] Hook thread completed after %lu ms\n", t1 - t0);
+    sprintf_s(dbg, "[HOOK] Hook thread completed after %lu ms\n", t1 - t0);
     OutputDebugStringA(dbg);
 
     return 0;

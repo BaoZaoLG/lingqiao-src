@@ -198,10 +198,11 @@ static HttpResponse WinHttpGetSigned(const wchar_t* host, int port, const wchar_
     char tsBuf[32]; _i64toa(GetUnixTimestamp(), tsBuf, 10);
     char nonceHex[33]; GenerateNonce(nonceHex);
     BYTE sig[32]; DWORD sigLen = 0;
-    char pathUtf8[256];
-    WideCharToMultiByte(CP_UTF8, 0, path, -1, pathUtf8, sizeof(pathUtf8), NULL, NULL);
+    int pathUtf8Len = WideCharToMultiByte(CP_UTF8, 0, path, -1, NULL, 0, NULL, NULL);
+    QByteArray pathUtf8Buf(pathUtf8Len, 0);
+    WideCharToMultiByte(CP_UTF8, 0, path, -1, pathUtf8Buf.data(), pathUtf8Len, NULL, NULL);
     HmacSha256Signed((const char*)HMAC_KEY, 32,
-                     tsBuf, nonceHex, pathUtf8, (DWORD)strlen(pathUtf8), sig, &sigLen);
+                     tsBuf, nonceHex, pathUtf8Buf.constData(), (DWORD)(pathUtf8Len - 1), sig, &sigLen);
     char sigHex[65]; ByteToHex(sig, sigLen, sigHex);
     wchar_t authHeaders[640];
     int off = swprintf_s(authHeaders, sizeof(authHeaders)/sizeof(wchar_t),
@@ -304,10 +305,11 @@ static QString HttpDownloadFile(const wchar_t* host, int port, const wchar_t* pa
     char tsBuf[32]; _i64toa(GetUnixTimestamp(), tsBuf, 10);
     char nonceHex[33]; GenerateNonce(nonceHex);
     BYTE sig[32]; DWORD sigLen = 0;
-    char pathUtf8[256];
-    WideCharToMultiByte(CP_UTF8, 0, path, -1, pathUtf8, sizeof(pathUtf8), NULL, NULL);
+    int pathUtf8Len2 = WideCharToMultiByte(CP_UTF8, 0, path, -1, NULL, 0, NULL, NULL);
+    QByteArray pathUtf8Buf2(pathUtf8Len2, 0);
+    WideCharToMultiByte(CP_UTF8, 0, path, -1, pathUtf8Buf2.data(), pathUtf8Len2, NULL, NULL);
     HmacSha256Signed((const char*)HMAC_KEY, 32,
-                     tsBuf, nonceHex, pathUtf8, (DWORD)strlen(pathUtf8), sig, &sigLen);
+                     tsBuf, nonceHex, pathUtf8Buf2.constData(), (DWORD)(pathUtf8Len2 - 1), sig, &sigLen);
     char sigHex[65]; ByteToHex(sig, sigLen, sigHex);
     wchar_t authHeaders[512];
     swprintf_s(authHeaders, sizeof(authHeaders)/sizeof(wchar_t),

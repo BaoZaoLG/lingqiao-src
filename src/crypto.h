@@ -115,7 +115,7 @@ static bool DeriveKey(const char* masterSecret, DWORD secretLen,
 // SHA-256 fingerprint of the server's self-signed TLS certificate.
 // Regenerate when certs/server.crt is renewed:
 //   openssl x509 -in certs/server.crt -outform DER | sha256sum
-static const char* CERT_PIN_SHA256 = _SP("9f3435586bdb2528c1b1b460748782a96e2670ff4690b388796c85241b306458");
+static const char* CERT_PIN_SHA256 = LQ_SP("9f3435586bdb2528c1b1b460748782a96e2670ff4690b388796c85241b306458");
 
 // ============================================================================
 // AES-256-GCM encryption/decryption (via BCrypt)

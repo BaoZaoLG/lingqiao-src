@@ -78,7 +78,7 @@ struct SecureWStr {
 // Usage:
 //   auto s = _S("hello");        // const char* (RAII, auto-cleared)
 //   auto w = _WS(L"hello");      // const wchar_t* (RAII, auto-cleared)
-//   const char* p = _SP("hello"); // persistent static buffer
+//   const char* p = LQ_SP("hello"); // persistent static buffer
 //   const wchar_t* wp = _WSP(L"hello"); // persistent static buffer
 // ============================================================================
 
@@ -101,7 +101,7 @@ struct SecureWStr {
 }())
 
 // Persistent char* (for static/const assignments — no auto-cleanup)
-#define _SP(str) ([&]() -> const char* { \
+#define LQ_SP(str) ([&]() -> const char* { \
     constexpr auto _enc = strcrypt::EncryptedString<char, sizeof(str), \
         strcrypt::g_seed ^ __LINE__ ^ (__COUNTER__ * 0x1337CAFE)>(str); \
     static char _buf[sizeof(str)]; \

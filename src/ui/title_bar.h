@@ -182,6 +182,12 @@ signals:
     void closeClicked();
     void minClicked();
 
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.fillRect(rect(), QColor(255, 255, 255, 1));
+    }
+
 private:
     QLabel*        m_dot;
     MinButton*     m_minBtn;

@@ -9,7 +9,7 @@ param(
 
 .EXAMPLE
     # Encrypt the HMAC secret as ANSI
-    .\encrypt_strings.ps1 -String "c1a3f8e9d2b47a6e8f0c3d5b9a1e4f7a8b2c6d0e3f5a7b9c1d4e6f8a0b2c4d6"
+    .\encrypt_strings.ps1 -String $env:HMAC_SECRET
 
     # Encrypt a path as wide string
     .\encrypt_strings.ps1 -String "/api/v1/activate" -Wide

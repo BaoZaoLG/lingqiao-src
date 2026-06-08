@@ -79,7 +79,7 @@ LONG HookAttach(PVOID* ppPointer, PVOID pDetour) {
 
     char dbg[256];
     sprintf_s(dbg, sizeof(dbg),
-        "[HookEngine] Attach: target=0x%p detour=0x%p\n",
+        "[HOOK] Attach: target=0x%p detour=0x%p\n",
         pTarget, pDetour);
     OutputDebugStringA(dbg);
 
@@ -87,7 +87,7 @@ LONG HookAttach(PVOID* ppPointer, PVOID pDetour) {
     MH_STATUS st = MH_CreateHook(pTarget, pDetour, &pOriginal);
     if (st != MH_OK && st != MH_ERROR_ALREADY_CREATED) {
         sprintf_s(dbg, sizeof(dbg),
-            "[HookEngine] MH_CreateHook failed: %s (%d)\n",
+            "[HOOK] MH_CreateHook failed: %s (%d)\n",
             MH_StatusToString(st), st);
         OutputDebugStringA(dbg);
         return ERROR_INVALID_DATA;
@@ -97,7 +97,7 @@ LONG HookAttach(PVOID* ppPointer, PVOID pDetour) {
     st = MH_EnableHook(pTarget);
     if (st != MH_OK) {
         sprintf_s(dbg, sizeof(dbg),
-            "[HookEngine] MH_EnableHook failed: %s (%d)\n",
+            "[HOOK] MH_EnableHook failed: %s (%d)\n",
             MH_StatusToString(st), st);
         OutputDebugStringA(dbg);
         return ERROR_WRITE_FAULT;
@@ -110,7 +110,7 @@ LONG HookAttach(PVOID* ppPointer, PVOID pDetour) {
     *ppPointer = pOriginal;
 
     sprintf_s(dbg, sizeof(dbg),
-        "[HookEngine] Hook installed: original=0x%p trampoline=0x%p\n",
+        "[HOOK] Hook installed: original=0x%p trampoline=0x%p\n",
         pTarget, pOriginal);
     OutputDebugStringA(dbg);
 
@@ -130,7 +130,7 @@ LONG HookDetach(PVOID* ppPointer) {
 
     char dbg[256];
     sprintf_s(dbg, sizeof(dbg),
-        "[HookEngine] Detach: trampoline=0x%p target=0x%p\n",
+        "[HOOK] Detach: trampoline=0x%p target=0x%p\n",
         *ppPointer, pTarget);
     OutputDebugStringA(dbg);
 
@@ -138,7 +138,7 @@ LONG HookDetach(PVOID* ppPointer) {
     MH_STATUS st = MH_DisableHook(pTarget);
     if (st != MH_OK) {
         sprintf_s(dbg, sizeof(dbg),
-            "[HookEngine] MH_DisableHook failed: %s (%d)\n",
+            "[HOOK] MH_DisableHook failed: %s (%d)\n",
             MH_StatusToString(st), st);
         OutputDebugStringA(dbg);
     }
@@ -146,7 +146,7 @@ LONG HookDetach(PVOID* ppPointer) {
     st = MH_RemoveHook(pTarget);
     if (st != MH_OK) {
         sprintf_s(dbg, sizeof(dbg),
-            "[HookEngine] MH_RemoveHook failed: %s (%d)\n",
+            "[HOOK] MH_RemoveHook failed: %s (%d)\n",
             MH_StatusToString(st), st);
         OutputDebugStringA(dbg);
         return ERROR_NOT_FOUND;
@@ -155,6 +155,6 @@ LONG HookDetach(PVOID* ppPointer) {
     /* Restore the caller's pointer to the original target */
     *ppPointer = pTarget;
 
-    OutputDebugStringA("[HookEngine] Hook detached successfully\n");
+    OutputDebugStringA("[HOOK] Hook detached successfully\n");
     return ERROR_SUCCESS;
 }

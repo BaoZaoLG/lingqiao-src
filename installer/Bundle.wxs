@@ -1,0 +1,15 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle
+    Name="Lingqiao Setup"
+    Manufacturer="Lingqiao"
+    Version="$(var.ProductVersion)"
+    UpgradeCode="B84D09C7-D7B6-4AC7-A764-B72A3D59D879">
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense" />
+    </BootstrapperApplication>
+    <Chain>
+      <MsiPackage SourceFile="$(var.MsiPath)" DisplayInternalUI="yes" />
+    </Chain>
+  </Bundle>
+</Wix>

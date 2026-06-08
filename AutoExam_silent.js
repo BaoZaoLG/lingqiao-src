@@ -75,6 +75,39 @@
      * type: 0=single 1=multi 2=blank 3=bool 4=essay
      * ================================================================ */
 
+    /* ================================================================
+     * DOM-based type detection fallback.
+     * Inspects actual page elements when keyword matching fails.
+     * ================================================================ */
+    function detectTypeFromDOM(qDiv) {
+        if (!qDiv) return 4;
+
+        var stemAnswer = qDiv.querySelector('.stem_answer');
+        if (stemAnswer) {
+            var optionSpans = stemAnswer.querySelectorAll('.answerBg > span[data]');
+            if (optionSpans.length > 0) {
+                // 对/错 按钮 → 判断题
+                for (var i = 0; i < optionSpans.length; i++) {
+                    var d = optionSpans[i].getAttribute('data');
+                    if (d === 'true' || d === 'false') return 3;
+                }
+                // 有字母选项 → 选择题（默认单选，多选通常有 checkbox/multi 类名标记）
+                if (stemAnswer.querySelector('.answerBg.multi, .answerBg[class*="multi"], input[type="checkbox"]'))
+                    return 1;
+                return 0;
+            }
+        }
+
+        // 多个独立文本框 → 填空题
+        var blankTextareas = qDiv.querySelectorAll('textarea[name^="answerEditor"]');
+        if (blankTextareas.length > 1) return 2;
+
+        // 有文本框 → 简答/论述
+        if (qDiv.querySelector('textarea[name^="answer"]')) return 4;
+
+        return 4;
+    }
+
     function parseCurrentQuestion() {
         var qDiv = document.querySelector('.questionLi');
         if (!qDiv) return null;
@@ -101,8 +134,31 @@
         var typeNum  = typeNumInput  ? parseInt(typeNumInput.value) : -1;
 
         if (typeNum === -1 && typeName) {
-            var TYPE_MAP = { '单选题':0, '多选题':1, '填空题':2, '判断题':3, '简答题':4, '论述题':4, '完形填空':2, '阅读理解':4, '名词解释':4 };
-            typeNum = TYPE_MAP[typeName] !== undefined ? TYPE_MAP[typeName] : 4;
+            // 关键词模糊匹配：兼容平台题型名称变体（如"选择题"→"单选题"、"分析题"→"论述题"、"选填题"→"填空题"等）
+            var TYPE_KEYWORDS = [
+                { pattern: /单选|单项选择|单选选择/,                              type: 0 },
+                { pattern: /多选|多项选择|复选|多选选择/,                          type: 1 },
+                { pattern: /填空|选填|完形填空|补全/,                              type: 2 },
+                { pattern: /判断|对错|是非|正误/,                                 type: 3 },
+                { pattern: /简答|论述|分析|问答|名词解释|阅读理解|案例分析|综合|输入|主观/, type: 4 }
+            ];
+            var _matched = false;
+            for (var _k = 0; _k < TYPE_KEYWORDS.length; _k++) {
+                if (TYPE_KEYWORDS[_k].pattern.test(typeName)) {
+                    typeNum = TYPE_KEYWORDS[_k].type;
+                    _matched = true;
+                    break;
+                }
+            }
+            // 无关键词命中 → 从页面 DOM 结构反推题型（有选项按钮=选择题，有对错=判断，有文本框=填空/简答）
+            if (!_matched) {
+                typeNum = detectTypeFromDOM(qDiv);
+            }
+        }
+
+        // 页面既无 typeName 也无 typeNum → 从 DOM 结构推断
+        if (typeNum === -1) {
+            typeNum = detectTypeFromDOM(qDiv);
         }
 
         var questionText = '';
@@ -579,19 +635,22 @@
         var typeName = '输入题';
         var questionText = text;
 
-        var typeMatch = text.match(/^(单选题|多选题|判断题|填空题|简答题|论述题|问答题|输入题)\s*[\]】)]/);
+        // 扩展正则：覆盖更多题型名称变体（选择题、分析题、选填题、对错题等）
+        var typeMatch = text.match(/^(单选题?|单项选择题?|选择题|多选题?|多项选择题?|复选题?|判断题?|对错题?|是非题?|填空题?|选填题?|完形填空|补全题?|简答题?|论述题?|分析题?|问答题?|案例分析题?|名词解释|阅读理解|综合题?|主观题?|输入题?)\s*[\]】)]/);
         if (typeMatch) {
             typeName     = typeMatch[1];
             questionText = text.substring(typeMatch[0].length).replace(/^\s+/, '');
-            switch (typeName) {
-                case '单选题': type = 0; break;
-                case '多选题': type = 1; break;
-                case '判断题': type = 3; break;
-                case '填空题': type = 2; break;
-                case '简答题':
-                case '论述题':
-                case '问答题':
-                case '输入题': type = 4; break;
+            // 关键词模糊匹配
+            if (/单选|单项选择|选择/.test(typeName) && !/多选|多项|复选/.test(typeName)) {
+                type = 0;
+            } else if (/多选|多项选择|复选/.test(typeName)) {
+                type = 1;
+            } else if (/填空|选填|完形|补全/.test(typeName)) {
+                type = 2;
+            } else if (/判断|对错|是非|正误/.test(typeName)) {
+                type = 3;
+            } else {
+                type = 4;
             }
         }
 

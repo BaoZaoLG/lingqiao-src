@@ -6,7 +6,7 @@
 //   crypto.h          — HMAC-SHA256, hex encoding, TLS cert pinning
 //   http_client.h     — WinHTTP wrapper with signing and pinning
 //   machine_fp.h      — hardware-unique machine fingerprint
-//   dll_extractor.h   — embedded DLL extraction and cleanup
+//   dll_extractor.h   — server-downloaded DLL staging and cleanup
 //   workers.h         — background threads (activate, heartbeat)
 //   ui/theme.h        — color palette and stylesheet
 //   ui/title_bar.h    — frameless window title bar
@@ -162,5 +162,3 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     w.show();
     return app.exec();
 }
-
-#include "injector_qt.moc"

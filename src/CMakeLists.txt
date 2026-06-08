@@ -33,10 +33,19 @@ endif()
 add_library(CefHook SHARED
     dllmain.cpp
     thread.cpp
+    pattern_scan.cpp
+    v8_signatures.cpp
+    v8_hooks.cpp
+    process_identity.cpp
     hook_engine.c
     pch.cpp
     pch.h
     hook_engine.h
+    pattern_scan.h
+    v8_signatures.h
+    v8_hooks.h
+    process_identity.h
+    script_loader.h
     framework.h
     ${MINHOOK_SOURCES}
 )
@@ -53,28 +62,64 @@ target_include_directories(CefHook PRIVATE
     ${MINHOOK_DIR}/src       # For HDE headers
 )
 
-target_link_libraries(CefHook PRIVATE shell32 comdlg32 advapi32 bcrypt)
+target_link_libraries(CefHook PRIVATE shell32 comdlg32 advapi32 bcrypt winhttp crypt32)
 target_compile_options(CefHook PRIVATE /utf-8 /GS /guard:cf /O2 /GL)
 target_link_options(CefHook PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf /LTCG /OPT:REF /OPT:ICF /PDBALTPATH:%_PDB%)
 
-# Generate dll_payload.h (C header with DLL as byte array) after CefHook.dll is built
-set(DLL_HEADER "${CMAKE_CURRENT_BINARY_DIR}/dll_payload.h")
-add_custom_command(
-    OUTPUT ${DLL_HEADER}
-    COMMAND powershell -NoProfile -ExecutionPolicy Bypass
-        -File "${CMAKE_SOURCE_DIR}/scripts/embed_dll.ps1"
-        -DllPath "$<TARGET_FILE:CefHook>"
-        -OutHeader "${DLL_HEADER}"
-    DEPENDS CefHook
-    COMMENT "Embedding CefHook.dll as C byte array..."
-)
-
-# -- Injector EXE (Qt) -------------------------------------------------
 if(NOT CMAKE_PREFIX_PATH)
     set(CMAKE_PREFIX_PATH "C:/Qt/5.15.2/msvc2019")
 endif()
 find_package(Qt5 REQUIRED COMPONENTS Widgets Network WinExtras Concurrent)
 
+# -- Small native test utilities --------------------------------------
+add_executable(PatternScanTest
+    pattern_scan_test.cpp
+    pattern_scan.cpp
+)
+target_include_directories(PatternScanTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(PatternScanTest PRIVATE /utf-8)
+
+add_executable(ManualDllInjector
+    manual_dll_injector.cpp
+    manual_injector_core.cpp
+    manual_injector_core.h
+)
+target_compile_options(ManualDllInjector PRIVATE /utf-8)
+target_link_options(ManualDllInjector PRIVATE /DYNAMICBASE /NXCOMPAT)
+
+add_executable(ManualInjectorCoreTest
+    manual_injector_core_test.cpp
+    manual_injector_core.cpp
+    manual_injector_core.h
+)
+target_include_directories(ManualInjectorCoreTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(ManualInjectorCoreTest PRIVATE /utf-8)
+
+add_executable(ProcessIdentityTest
+    process_identity_test.cpp
+    process_identity.cpp
+    process_identity.h
+)
+target_include_directories(ProcessIdentityTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(ProcessIdentityTest PRIVATE /utf-8)
+
+add_executable(ManualDllInjectorGui WIN32
+    manual_dll_injector_gui.cpp
+    manual_injector_core.cpp
+    manual_injector_core.h
+)
+target_include_directories(ManualDllInjectorGui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(ManualDllInjectorGui PRIVATE Qt5::Widgets)
+target_compile_options(ManualDllInjectorGui PRIVATE /utf-8)
+target_link_options(ManualDllInjectorGui PRIVATE /DYNAMICBASE /NXCOMPAT)
+add_custom_command(TARGET ManualDllInjectorGui POST_BUILD
+    COMMAND "${CMAKE_PREFIX_PATH}/bin/windeployqt.exe" --release --force
+        --no-translations
+        "$<TARGET_FILE:ManualDllInjectorGui>"
+    COMMENT "Deploying Qt runtime dependencies for ManualDllInjectorGui..."
+)
+
+# -- Injector EXE (Qt) -------------------------------------------------
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
@@ -104,7 +149,6 @@ set(INJECTOR_HEADERS
 
 add_executable(Injector WIN32
     injector_qt.cpp
-    ${DLL_HEADER}
     ${INJECTOR_HEADERS}
     ${CMAKE_CURRENT_BINARY_DIR}/version.rc
 )
@@ -126,7 +170,12 @@ target_link_libraries(Injector PRIVATE
 )
 target_compile_options(Injector PRIVATE /utf-8 /bigobj /GS /guard:cf /O2 /GL)
 target_link_options(Injector PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf /LTCG /OPT:REF /OPT:ICF /PDBALTPATH:%_PDB%)
-target_compile_definitions(Injector PRIVATE QT_DISABLE_DEPRECATED_BEFORE=0x050F00 _CRT_SECURE_NO_WARNINGS APP_VERSION="${APP_VERSION}")
+target_compile_definitions(Injector PRIVATE
+    QT_DISABLE_DEPRECATED_BEFORE=0x050F00
+    _CRT_SECURE_NO_WARNINGS
+    APP_VERSION="${APP_VERSION}"
+    UPDATE_MANIFEST_PUBLIC_KEY_HEX="${UPDATE_MANIFEST_PUBLIC_KEY_HEX}"
+)
 
 # Auto-deploy Qt DLLs after building Injector.exe
 add_custom_command(TARGET Injector POST_BUILD

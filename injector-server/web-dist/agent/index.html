@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>灵桥 代理后台</title>
+    <script type="module" crossorigin src="/assets/agent-bbi-FedO.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/toast-CzfuwFKn.js">
+    <link rel="stylesheet" crossorigin href="/assets/toast-2ra-ewlg.css">
+  </head>
+  <body>
+    <div class="mobile-header">
+      <button class="hamburger" id="sidebarToggle">☰</button>
+      <span class="title">灵桥 代理后台</span>
+    </div>
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+    <section class="auth-screen" id="authScreen">
+      <div class="auth-brand">LINGQIAO</div>
+      <div class="auth-box">
+        <h2 id="authTitle">代理登录</h2>
+        <p id="authSubtitle">使用代理账号进入自助面板</p>
+        <input type="text" id="username" placeholder="用户名" autofocus />
+        <input type="password" id="password" placeholder="密码" />
+        <input type="password" id="passwordConfirm" placeholder="确认密码" hidden />
+        <input type="text" id="inviteCode" placeholder="邀请码" hidden />
+        <button class="btn btn-primary btn-block" id="authSubmit">登录</button>
+        <button class="btn btn-ghost btn-block" id="authModeToggle">注册代理账号</button>
+        <div class="auth-error" id="authError"></div>
+      </div>
+    </section>
+
+    <main class="app" id="app">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <h2>灵桥</h2>
+          <div class="ver">代理后台 v2</div>
+          <div class="agent-name" id="agentNameDisplay"></div>
+        </div>
+        <nav class="sidebar-nav">
+          <button class="nav-item active" data-page-target="dashboard"><span class="icon">▦</span><span>仪表盘</span></button>
+          <button class="nav-item" data-page-target="cards"><span class="icon">▤</span><span>我的卡密</span></button>
+          <button class="nav-item" data-page-target="password"><span class="icon">⚿</span><span>修改密码</span></button>
+        </nav>
+        <div class="sidebar-footer">
+          <span class="status-dot" id="serverDot"></span>
+          <span class="status-text" id="serverStatusText">服务器运行中</span>
+          <button class="logout" id="logoutButton">退出登录</button>
+        </div>
+      </aside>
+
+      <section class="main">
+        <div class="page active" id="page-dashboard">
+          <div class="page-header"><h2>仪表盘</h2><p>卡密生成和有效状态概览</p></div>
+          <div class="stats-grid" id="dashboardStats"></div>
+        </div>
+        <div class="page" id="page-cards">
+          <div class="page-header"><h2>我的卡密</h2><p>生成、筛选和复制代理名下卡密</p></div>
+          <div class="action-bar">
+            <button class="btn btn-primary" id="generateCardButton">+ 生成卡密</button>
+            <button class="btn btn-primary" id="batchGenerateButton">++ 批量生成</button>
+            <button class="btn btn-ghost" id="refreshCardsButton">刷新</button>
+            <div class="spacer"></div>
+            <select id="cardStatusFilter">
+              <option value="">全部状态</option>
+              <option value="active">有效</option>
+              <option value="disabled">已禁用</option>
+              <option value="expired">已过期</option>
+            </select>
+            <input type="text" id="cardSearch" placeholder="搜索卡密/备注" />
+          </div>
+          <div class="table-wrap">
+            <table><thead><tr><th>卡密</th><th>状态</th><th>会话</th><th>到期</th><th>机器</th><th>备注</th></tr></thead><tbody id="cardsTable"></tbody></table>
+          </div>
+        </div>
+        <div class="page" id="page-password">
+          <div class="page-header"><h2>修改密码</h2><p>修改后需要重新登录</p></div>
+          <section class="panel">
+            <label>当前密码</label><input type="password" id="oldPassword" />
+            <label>新密码</label><input type="password" id="newPassword" />
+            <label>确认新密码</label><input type="password" id="confirmPassword" />
+            <button class="btn btn-primary" id="changePasswordButton">修改密码</button>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <div class="modal-overlay" id="generateModal">
+      <div class="modal">
+        <h3 id="generateTitle">生成卡密</h3>
+        <label>数量</label><input id="genCount" type="number" value="1" />
+        <label>有效时长（小时）</label><input id="genDuration" type="number" value="720" />
+        <label>最大同时在线</label><input id="genMaxSessions" type="number" value="1" />
+        <label>备注</label><input id="genNote" type="text" />
+        <div class="modal-btns"><button class="btn btn-primary" id="confirmGenerate">生成</button><button class="btn btn-ghost" data-close-modal="generateModal">取消</button></div>
+      </div>
+    </div>
+    <div class="toast" id="toast"></div>
+  </body>
+</html>

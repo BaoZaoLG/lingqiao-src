@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "hook_engine.h"
+#include "v8_hooks.h"
 
 extern DWORD WINAPI ThreadProc(LPVOID lpThreadParameter);
 
@@ -29,6 +30,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved) {
         /* Clean detach: restore all hooks before unload.
          * Order matters: detach handler hooks before the create_browser hook
          * to avoid calling into freed trampolines. */
+        DetachV8SignatureHooks();
         if (g_cef_on_load_end) {
             HookDetach(&g_cef_on_load_end);
             g_cef_on_load_end = NULL;

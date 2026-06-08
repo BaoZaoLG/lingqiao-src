@@ -41,6 +41,10 @@ static const BYTE*    HMAC_KEY      = nullptr; // points to g_derivedKey
 #define CLIENT_VERSION "0.0.0"
 #endif
 
+#ifndef UPDATE_MANIFEST_PUBLIC_KEY_HEX
+#define UPDATE_MANIFEST_PUBLIC_KEY_HEX ""
+#endif
+
 // Read version from PE resource (VS_FIXEDFILEINFO) at runtime
 static QString GetExeVersion() {
     WCHAR path[MAX_PATH] = {0};
@@ -80,7 +84,7 @@ static void InitSecrets() {
     CLIENT_SECRET = g_secretBuf;
 
     // Derive HMAC signing key via PBKDF2 so raw secret never used directly
-    const char* salt = _SP("CefBridge-HMAC-Salt-v2");
+    const char* salt = LQ_SP("CefBridge-HMAC-Salt-v2");
     DeriveKey(g_secretBuf, (DWORD)strlen(g_secretBuf),
               salt, (DWORD)strlen(salt),
               g_derivedKey, sizeof(g_derivedKey));

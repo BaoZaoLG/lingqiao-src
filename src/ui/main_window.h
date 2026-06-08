@@ -8,8 +8,10 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QComboBox>
 #include <QLabel>
 #include <QFrame>
 #include <QTimer>
@@ -19,6 +21,7 @@
 #include <QMessageBox>
 #include <QGuiApplication>
 #include <QMimeData>
+#include <windowsx.h>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMouseEvent>
@@ -34,12 +37,16 @@
 #include <QClipboard>
 #include <QRegularExpression>
 #include <QFileIconProvider>
+#include <QPainter>
+#include <QPainterPath>
+#include <QCryptographicHash>
 
 #include <windows.h>
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <tlhelp32.h>
 #include <psapi.h>
+#include <vector>
 
 #include "theme.h"
 #include "title_bar.h"
@@ -221,7 +228,8 @@ private:
     QLabel*        m_updateLabel   = nullptr;
     AnimatedButton* m_remindLaterBtn = nullptr;
     AnimatedButton* m_updateNowBtn   = nullptr;
-    QString  m_pendingUpdateVersion, m_pendingUpdateUrl, m_pendingUpdateSha256;
+    QString  m_pendingUpdateVersion, m_pendingUpdateUrl, m_pendingUpdateSha256, m_pendingUpdatePackageKind, m_pendingUpdateReleaseID;
+    bool     m_pendingUpdateInstaller = false;
 
     QString  m_sessionToken, m_machineID;
     bool     m_activated        = false;
@@ -229,7 +237,6 @@ private:
     bool     m_heartbeatRunning = false;
     bool     m_heartbeatInProgress = false;
     bool     m_updateDismissed  = false;   // session-level: suppress update banner after "稍后提醒"
-    QPoint   m_dragPos;
 
     // ── Session, Logging, Tray, History ──
     #include "impl_session.h"
@@ -424,6 +431,7 @@ private:
             m_heartbeatInProgress = false;
             m_heartbeatFailCount = 0;
             setConnDot("ok");
+            CheckEnterpriseUpdateAsync();
             if (exp > 0) {
                 m_cardExpiresAt = exp;
                 m_cardExpiry->setText(QString::fromUtf8(_S("到期: %1"))
@@ -454,13 +462,13 @@ private:
             }
             thread->quit(); w->deleteLater(); thread->deleteLater();
         });
-        connect(w, &HeartbeatWorker::updateAvailable, this, [this,thread](const QString& latest, const QString& url, bool force) {
+        connect(w, &HeartbeatWorker::updateAvailable, this, [this,thread](const QString& latest, const QString& url, bool force, const QString& sha256) {
             Q_UNUSED(thread);
-            handleUpdateCheck(latest, url, force);
+            handleUpdateCheck(latest, url, force, sha256);
         }, Qt::QueuedConnection);
-        connect(w, &HeartbeatWorker::versionRejected, this, [this,thread,w](const QString& msg, const QString& dlUrl) {
+        connect(w, &HeartbeatWorker::versionRejected, this, [this,thread,w](const QString& msg, const QString& dlUrl, const QString& sha256) {
             m_heartbeatInProgress = false;
-            applyForceUpdateBlock(ExtractVersionFromMsg(msg), dlUrl);
+            applyForceUpdateBlock(ExtractVersionFromMsg(msg), dlUrl, sha256);
             thread->quit(); w->deleteLater(); thread->deleteLater();
         }, Qt::QueuedConnection);
         thread->start();
@@ -490,7 +498,7 @@ private:
                         if (minVer.startsWith('v') || minVer.startsWith('V'))
                             minVer = minVer.mid(1);
                         if (!minVer.isEmpty() && CompareVersion(GetClientVersion(), minVer) < 0) {
-                            safeThis->applyForceUpdateBlock(minVer, anno["download_url"].toString());
+                            safeThis->applyForceUpdateBlock(minVer, anno["download_url"].toString(), anno["sha256"].toString());
                             return;
                         }
 
@@ -528,6 +536,7 @@ private:
             }
             m_sessionToken.clear();
             m_machineID.clear();
+            SetEnvironmentVariableW(L"INJECTOR_SESSION_TOKEN", NULL);
             m_activated = false;
             m_cardExpiresAt = 0;
             m_forceUpdateBlocked = false;
@@ -554,11 +563,11 @@ private:
         w->fingerprint = w->machineID;
         w->moveToThread(thread);
         connect(thread, &QThread::started, w, &ActivateWorker::process);
-        connect(w, &ActivateWorker::updateAvailable, this, [this](const QString& latest, const QString& url, bool force) {
-            handleUpdateCheck(latest, url, force);
+        connect(w, &ActivateWorker::updateAvailable, this, [this](const QString& latest, const QString& url, bool force, const QString& sha256) {
+            handleUpdateCheck(latest, url, force, sha256);
         });
-        connect(w, &ActivateWorker::versionRejected, this, [this,thread,w](const QString& msg, const QString& dlUrl) {
-            applyForceUpdateBlock(ExtractVersionFromMsg(msg), dlUrl);
+        connect(w, &ActivateWorker::versionRejected, this, [this,thread,w](const QString& msg, const QString& dlUrl, const QString& sha256) {
+            applyForceUpdateBlock(ExtractVersionFromMsg(msg), dlUrl, sha256);
             thread->quit(); w->deleteLater(); thread->deleteLater();
         });
         connect(w, &ActivateWorker::activationSuccess, this, [this,thread,w](const QString& token, qint64 exp) {
@@ -575,6 +584,7 @@ private:
             logEvent("ACTIVATE", "Success: card=" + maskCard(w->cardCode));
             downloadDllAsync();
             fetchBalance();
+            CheckEnterpriseUpdateAsync();
             if (exp > 0) {
                 m_cardExpiry->setText(QString::fromUtf8(_S("到期: %1"))
                     .arg(QDateTime::fromSecsSinceEpoch(exp).toString("yyyy-MM-dd hh:mm")));
@@ -648,6 +658,7 @@ private:
             return;
         }
         SetEnvironmentVariableW(L"INJECTOR_API_KEY", (LPCWSTR)apiKey.utf16());
+        SetEnvironmentVariableW(L"INJECTOR_SESSION_TOKEN", (LPCWSTR)m_sessionToken.utf16());
 
         PROCESS_INFORMATION pi = {0};
         STARTUPINFOW si = {0}; si.cb = sizeof(si);
@@ -783,14 +794,63 @@ private:
         }
     }
 
-    void mousePressEvent(QMouseEvent* e) override {
-        if (e->button() == Qt::LeftButton) m_dragPos = e->globalPos() - frameGeometry().topLeft();
-        QMainWindow::mousePressEvent(e);
+    void paintEvent(QPaintEvent* e) override {
+        QMainWindow::paintEvent(e);
+
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        QPainterPath path;
+        path.addRoundedRect(rect().adjusted(0.5, 0.5, -0.5, -0.5), 16, 16);
+        p.fillPath(path, QColor(255, 255, 255, 1));
     }
-    void mouseMoveEvent(QMouseEvent* e) override {
-        if (e->buttons() & Qt::LeftButton) move(e->globalPos() - m_dragPos);
-        QMainWindow::mouseMoveEvent(e);
+
+    bool isNonDraggableWidget(QWidget* w) const {
+        if (!w) return false;
+        // Walk up to find the actual interactive widget
+        while (w && w != this) {
+            if (qobject_cast<QPushButton*>(w)   ||
+                qobject_cast<QLineEdit*>(w)     ||
+                qobject_cast<QScrollBar*>(w)    ||
+                qobject_cast<QComboBox*>(w)     ||
+                qobject_cast<QMenu*>(w))
+                return true;
+            // ScrollArea viewport — allow scrolling, not dragging
+            if (qobject_cast<QAbstractScrollArea*>(w))
+                return true;
+            // QLabel with openExternalLinks or rich text links
+            if (auto* lbl = qobject_cast<QLabel*>(w)) {
+                if (lbl->openExternalLinks() || lbl->textFormat() == Qt::RichText)
+                    return true;
+            }
+            w = w->parentWidget();
+        }
+        return false;
     }
+
+    bool nativeEvent(const QByteArray& eventType, void* message, long* result) override {
+        if (eventType == "windows_generic_MSG" || eventType == "windows_dispatcher_MSG") {
+            MSG* msg = static_cast<MSG*>(message);
+            if (msg->message == WM_NCHITTEST) {
+                QPoint globalPos(GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
+                QPoint localPos = mapFromGlobal(globalPos);
+
+                // Bounds check — outside client rect, let system handle
+                if (!rect().contains(localPos))
+                    return QMainWindow::nativeEvent(eventType, message, result);
+
+                // Only title bar region is draggable
+                if (localPos.y() < TITLE_BAR_H) {
+                    QWidget* hit = childAt(localPos);
+                    if (!isNonDraggableWidget(hit)) {
+                        *result = HTCAPTION;
+                        return true;
+                    }
+                }
+            }
+        }
+        return QMainWindow::nativeEvent(eventType, message, result);
+    }
+
     void dragEnterEvent(QDragEnterEvent* e) override {
         if (e->mimeData()->hasUrls()) e->acceptProposedAction();
     }

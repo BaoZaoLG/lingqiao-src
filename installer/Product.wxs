@@ -1,0 +1,25 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="Lingqiao"
+    Manufacturer="Lingqiao"
+    Version="$(var.ProductVersion)"
+    UpgradeCode="1B87488D-5C66-4F16-A7C9-D44F40B4B021"
+    Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer Lingqiao version is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFilesFolder">
+      <Directory Id="INSTALLFOLDER" Name="Lingqiao" />
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="Lingqiao" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+    </Feature>
+
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Component Id="InjectorExe" Guid="8D86D02E-E543-4537-930C-86EF88980D5C">
+        <File Id="InjectorExeFile" Source="$(var.SourceDir)\Injector.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Package>
+</Wix>

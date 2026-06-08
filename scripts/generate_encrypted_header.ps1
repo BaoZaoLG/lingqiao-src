@@ -1,6 +1,9 @@
 param(
     [Parameter(Mandatory=$true)] [string]$JsFile,
-    [Parameter(Mandatory=$true)] [string]$OutHeader
+    [Parameter(Mandatory=$true)] [string]$OutHeader,
+    [string]$ServerHost = $env:LINGQIAO_SERVER_HOST,
+    [string]$ClientId = $(if ($env:LINGQIAO_CLIENT_ID) { $env:LINGQIAO_CLIENT_ID } else { 'injector_v1' }),
+    [string]$ClientSecret = $env:HMAC_SECRET
 )
 
 <#
@@ -10,10 +13,21 @@ param(
     decrypts at runtime via obfuscate.h.
 
 .EXAMPLE
+    $env:LINGQIAO_SERVER_HOST = '127.0.0.1'
+    $env:HMAC_SECRET = '<server HMAC_SECRET>'
     .\generate_encrypted_header.ps1 -JsFile ..\AutoExam_silent.js -OutHeader ..\src\encrypted_data.h
 #>
 
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($ServerHost)) {
+    throw "Server host is required. Pass -ServerHost or set LINGQIAO_SERVER_HOST."
+}
+if ([string]::IsNullOrWhiteSpace($ClientId)) {
+    throw "Client ID is required. Pass -ClientId or set LINGQIAO_CLIENT_ID."
+}
+if ([string]::IsNullOrWhiteSpace($ClientSecret)) {
+    throw "Client secret is required. Pass -ClientSecret or set HMAC_SECRET."
+}
 
 # ============================================================
 # XOR encrypt function (must match obfuscate.h::DecryptBytesInPlace)
@@ -47,9 +61,9 @@ function New-RandomKey { [UInt64](Get-Random -Minimum 1 -Maximum ([Int64]::MaxVa
 # Sensitive strings (ANSI = UTF8, WIDE = UTF16-LE)
 # ============================================================
 $strings = @{
-    kHost         = @{ text = "47.110.248.240";     wide = $true  }
-    kClientId     = @{ text = "injector_v1";         wide = $true  }
-    kSecret       = @{ text = "c1a3f8e9d2b47a6e8f0c3d5b9a1e4f7a8b2c6d0e3f5a7b9c1d4e6f8a0b2c4d6"; wide = $false }
+    kHost         = @{ text = $ServerHost;           wide = $true  }
+    kClientId     = @{ text = $ClientId;             wide = $true  }
+    kSecret       = @{ text = $ClientSecret;         wide = $false }
     kPathActivate = @{ text = "/api/v1/activate";    wide = $true  }
     kPathHeartbeat= @{ text = "/api/v1/heartbeat";   wide = $true  }
     kPathDeact    = @{ text = "/api/v1/deactivate";  wide = $true  }
