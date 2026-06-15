@@ -9,7 +9,7 @@ set(CMAKE_CXX_STANDARD 17)
 # Version — embedded in PE resource, authoritative at runtime
 # ============================================================
 if(NOT APP_VERSION)
-    set(APP_VERSION "2.3.0")
+    set(APP_VERSION "2.4.0")
 endif()
 set(UPDATE_MANIFEST_PUBLIC_KEY_HEX "" CACHE STRING "Pinned release manifest public key hex")
 string(REPLACE "." "," APP_VERSION_COMMA "${APP_VERSION}")
