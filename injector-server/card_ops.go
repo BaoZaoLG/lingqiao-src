@@ -547,5 +547,4 @@ func (cm *CardManager) IsBlacklisted(value string) bool {
 	return exists
 }
 
-
 // BatchGenerateCards creates multiple cards at once.

@@ -387,4 +387,3 @@ func (h *AdminHandler) auditModuleOverview() moduleOverviewItem {
 	}
 	return item
 }
-

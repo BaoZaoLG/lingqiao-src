@@ -498,4 +498,3 @@ func (h *AgentHandler) HandlePasswordChange(w http.ResponseWriter, r *http.Reque
 }
 
 // ── Admin-facing Agent Management ────────────────────────────────────────────
-

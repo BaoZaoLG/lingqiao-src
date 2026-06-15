@@ -288,4 +288,3 @@ func (h *AdminHandler) recordInviteAudit(action string, invites []InviteCode, ex
 	}
 	h.cm.RecordAudit(AuditEntry{Action: action, Detail: detail})
 }
-

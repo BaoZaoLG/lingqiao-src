@@ -377,4 +377,3 @@ func (h *AdminHandler) importCardsFromRecords(records [][]string, duration time.
 	}
 	return report
 }
-

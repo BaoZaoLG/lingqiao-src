@@ -8,6 +8,7 @@ import (
 	auditsvc "github.com/lingqiao/server/internal/audit"
 	cardops "github.com/lingqiao/server/internal/cards"
 )
+
 const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 var crockfordDecode [256]int8
@@ -253,4 +254,3 @@ func applyLifecycleSession(dst *Session, src cardops.Session) {
 	dst.ExpiresAt = src.ExpiresAt
 	dst.RemoteAddr = src.RemoteAddr
 }
-

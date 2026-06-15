@@ -173,4 +173,3 @@ func legacyReleaseID(version string) string {
 func legacyPackageID(version string) string {
 	return legacyReleaseID(version) + "-bundle"
 }
-

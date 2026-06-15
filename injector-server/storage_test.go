@@ -52,7 +52,9 @@ func TestStorageBackup(t *testing.T) {
 
 	s := NewJSONStorage(dir)
 
-	type V struct{ X int `json:"x"` }
+	type V struct {
+		X int `json:"x"`
+	}
 
 	s.Save("backup_test", &V{X: 1})
 	s.Save("backup_test", &V{X: 2})

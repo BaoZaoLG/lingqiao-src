@@ -81,17 +81,27 @@ func parsePagination(r *http.Request) (page, perPage int) {
 	if pp := r.URL.Query().Get("per_page"); pp != "" {
 		fmt.Sscanf(pp, "%d", &perPage)
 	}
-	if page < 1 { page = 1 }
-	if perPage < 1 { perPage = 50 }
-	if perPage > 200 { perPage = 200 }
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 {
+		perPage = 50
+	}
+	if perPage > 200 {
+		perPage = 200
+	}
 	return
 }
 
 func paginate(length, page, perPage int) (start, end int) {
 	start = (page - 1) * perPage
 	end = start + perPage
-	if start > length { start = length }
-	if end > length { end = length }
+	if start > length {
+		start = length
+	}
+	if end > length {
+		end = length
+	}
 	return
 }
 
@@ -110,7 +120,9 @@ func validateImportCardCode(code string) (string, error) {
 
 func spreadsheetSafeCSVCell(value string) string {
 	value = strings.TrimSpace(value)
-	if value == "" { return value }
+	if value == "" {
+		return value
+	}
 	switch value[0] {
 	case '=', '+', '-', '@':
 		return "'" + value
@@ -149,24 +161,38 @@ type agentLeaderboardItem struct {
 
 func buildAgentLeaderboard(cards []*Card, agents []*Agent, now time.Time) []agentLeaderboardItem {
 	names := make(map[string]string, len(agents))
-	for _, agent := range agents { names[agent.ID] = agent.Username }
+	for _, agent := range agents {
+		names[agent.ID] = agent.Username
+	}
 	byAgent := make(map[string]*agentLeaderboardItem)
 	for _, card := range cards {
-		if card.AgentID == "" { continue }
+		if card.AgentID == "" {
+			continue
+		}
 		item := byAgent[card.AgentID]
 		if item == nil {
 			item = &agentLeaderboardItem{AgentID: card.AgentID, Username: names[card.AgentID]}
-			if item.Username == "" { item.Username = card.AgentID }
+			if item.Username == "" {
+				item.Username = card.AgentID
+			}
 			byAgent[card.AgentID] = item
 		}
 		item.TotalCards++
-		if card.Status == CardActive && card.ExpiresAt.After(now) { item.ActiveCards++ }
-		if card.Status == CardExpired || card.ExpiresAt.Before(now) { item.ExpiredCards++ }
+		if card.Status == CardActive && card.ExpiresAt.After(now) {
+			item.ActiveCards++
+		}
+		if card.Status == CardExpired || card.ExpiresAt.Before(now) {
+			item.ExpiredCards++
+		}
 	}
 	result := make([]agentLeaderboardItem, 0, len(byAgent))
-	for _, item := range byAgent { result = append(result, *item) }
+	for _, item := range byAgent {
+		result = append(result, *item)
+	}
 	sort.Slice(result, func(i, j int) bool { return result[i].TotalCards > result[j].TotalCards })
-	if len(result) > 10 { result = result[:10] }
+	if len(result) > 10 {
+		result = result[:10]
+	}
 	return result
 }
 
@@ -176,12 +202,24 @@ func filterCardsAdvanced(cards []*Card, agentID, bound, expiresBefore, expiresAf
 	maxSess, hasMaxSess := parseIntQuery(maxSessions)
 	result := make([]*Card, 0, len(cards))
 	for _, card := range cards {
-		if agentID != "" && card.AgentID != agentID { continue }
-		if bound == "true" && card.MachineID == "" { continue }
-		if bound == "false" && card.MachineID != "" { continue }
-		if hasBefore && card.ExpiresAt.After(before) { continue }
-		if hasAfter && card.ExpiresAt.Before(after) { continue }
-		if hasMaxSess && card.MaxSessions != maxSess { continue }
+		if agentID != "" && card.AgentID != agentID {
+			continue
+		}
+		if bound == "true" && card.MachineID == "" {
+			continue
+		}
+		if bound == "false" && card.MachineID != "" {
+			continue
+		}
+		if hasBefore && card.ExpiresAt.After(before) {
+			continue
+		}
+		if hasAfter && card.ExpiresAt.Before(after) {
+			continue
+		}
+		if hasMaxSess && card.MaxSessions != maxSess {
+			continue
+		}
 		result = append(result, card)
 	}
 	return result
@@ -193,13 +231,19 @@ func filterAuditEntries(entries []AuditEntry, query, from, to string) []AuditEnt
 	query = strings.ToLower(strings.TrimSpace(query))
 	result := make([]AuditEntry, 0, len(entries))
 	for _, entry := range entries {
-		if hasFrom && entry.Time.Before(fromTime) { continue }
-		if hasTo && entry.Time.After(toTime) { continue }
+		if hasFrom && entry.Time.Before(fromTime) {
+			continue
+		}
+		if hasTo && entry.Time.After(toTime) {
+			continue
+		}
 		if query != "" {
 			haystack := strings.ToLower(strings.Join([]string{
 				entry.Action, entry.Card, entry.Machine, entry.AgentID, entry.Detail, entry.Addr,
 			}, " "))
-			if !strings.Contains(haystack, query) { continue }
+			if !strings.Contains(haystack, query) {
+				continue
+			}
 		}
 		result = append(result, entry)
 	}
@@ -207,15 +251,25 @@ func filterAuditEntries(entries []AuditEntry, query, from, to string) []AuditEnt
 }
 
 func parseTimeQuery(value string) (time.Time, bool) {
-	if value == "" { return time.Time{}, false }
-	if t, err := time.Parse(time.RFC3339, value); err == nil { return t, true }
-	if t, err := time.Parse("2006-01-02", value); err == nil { return t, true }
+	if value == "" {
+		return time.Time{}, false
+	}
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse("2006-01-02", value); err == nil {
+		return t, true
+	}
 	return time.Time{}, false
 }
 
 func parseIntQuery(value string) (int, bool) {
-	if value == "" { return 0, false }
+	if value == "" {
+		return 0, false
+	}
 	var n int
-	if _, err := fmt.Sscanf(value, "%d", &n); err != nil { return 0, false }
+	if _, err := fmt.Sscanf(value, "%d", &n); err != nil {
+		return 0, false
+	}
 	return n, true
 }

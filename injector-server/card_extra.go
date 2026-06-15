@@ -8,6 +8,7 @@ import (
 	agentsvc "github.com/lingqiao/server/internal/agents"
 	cardops "github.com/lingqiao/server/internal/cards"
 )
+
 func (cm *CardManager) BatchGenerateCards(count int, duration time.Duration, note string, maxSessions int, agentID string) ([]*Card, error) {
 	if count < 1 {
 		count = 1
@@ -393,4 +394,3 @@ func (cm *CardManager) AgentStats(agentID string) (total, active, expired int) {
 	}
 	return
 }
-
