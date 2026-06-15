@@ -19,6 +19,7 @@
 #include <dbghelp.h>
 
 #include <QApplication>
+#include <QFont>
 
 // Core modules
 #include "antidebug.h"
@@ -177,6 +178,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     QApplication app(__argc, __argv);
     app.setApplicationName(QString::fromUtf8("\xe7\x81\xb5\xe6\xa1\xa5"));
     app.setApplicationVersion(GetClientVersion());
+    app.setFont(QFont("Microsoft YaHei"));
 
     // Install crash handler AFTER Qt init (handler uses QDateTime)
     SetUnhandledExceptionFilter(CrashHandler);

@@ -1,36 +1,38 @@
     QWidget* buildChatSection() {
         QFrame* c = card();
         QVBoxLayout* o = new QVBoxLayout(c);
-        o->setContentsMargins(18, 16, 18, 16);
-        o->setSpacing(10);
-        m_chatHeading = heading(QString::fromUtf8(_S("公共聊天")));
+        o->setContentsMargins(16, 14, 16, 14);
+        o->setSpacing(8);
+        m_chatHeading = heading(QString::fromUtf8(_S("公共交流")));
+        m_chatHeading->setStyleSheet("font-size: 12px; font-weight: 700; color: #1e293b;");
         o->addWidget(m_chatHeading);
 
         m_chatView = new QTextBrowser();
         m_chatView->setReadOnly(true);
         m_chatView->setAcceptRichText(true);
-        m_chatView->setFixedHeight(240);
+        m_chatView->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         m_chatView->setPlaceholderText(QString::fromUtf8(_S("激活后可查看公共消息")));
         m_chatView->setTextInteractionFlags(Qt::TextBrowserInteraction);
         m_chatView->setOpenExternalLinks(false);
+        m_chatView->setOpenLinks(false);
         m_chatView->setStyleSheet(
-            "QTextEdit { background: rgba(255,255,255,0.26); border: 1px solid rgba(200,200,210,0.32); "
-            "border-radius: 8px; padding: 8px; color: #334155; font-size: 12px; }");
+            "QTextBrowser { background: rgba(255, 255, 255, 0.35); border: 1px solid rgba(200, 200, 210, 0.40); "
+            "border-radius: 8px; padding: 10px; color: #1a1a2e; font-size: 12px; }");
         connect(m_chatView, &QTextBrowser::anchorClicked, this, &MainWindow::onChatAnchorClicked);
-        o->addWidget(m_chatView);
+        o->addWidget(m_chatView, 1);
 
         // Reply Banner
         m_replyBanner = new QFrame();
         m_replyBanner->setObjectName("replyBanner");
-        m_replyBanner->setStyleSheet("QFrame#replyBanner { background: rgba(3, 105, 161, 0.1); border: 1px solid rgba(3, 105, 161, 0.2); border-radius: 6px; padding: 4px 8px; }");
+        m_replyBanner->setStyleSheet("QFrame#replyBanner { background: rgba(74, 158, 255, 0.12); border: 1px solid rgba(74, 158, 255, 0.25); border-radius: 6px; padding: 4px 8px; }");
         QHBoxLayout* rbLayout = new QHBoxLayout(m_replyBanner);
         rbLayout->setContentsMargins(6, 4, 6, 4);
         m_replyLabel = new QLabel();
-        m_replyLabel->setStyleSheet("font-size: 11px; color: #0369a1;");
+        m_replyLabel->setStyleSheet("font-size: 11px; color: #1e40af; font-weight: 500;");
         rbLayout->addWidget(m_replyLabel, 1);
         QPushButton* cancelReplyBtn = new QPushButton("×");
-        cancelReplyBtn->setFixedSize(16, 16);
-        cancelReplyBtn->setStyleSheet("QPushButton { border: none; background: transparent; color: #0369a1; font-weight: bold; font-size: 14px; } QPushButton:hover { color: #e11d48; }");
+        cancelReplyBtn->setFixedSize(24, 24);
+        cancelReplyBtn->setStyleSheet("QPushButton { border: none; background: transparent; color: #1e40af; font-weight: bold; font-size: 16px; margin: 0; padding: 0; } QPushButton:hover { color: #ef4444; }");
         connect(cancelReplyBtn, &QPushButton::clicked, this, &MainWindow::clearReplyTarget);
         rbLayout->addWidget(cancelReplyBtn);
         m_replyBanner->setVisible(false);
@@ -44,13 +46,21 @@
         m_chatInput->setPlaceholderText(QString::fromUtf8(_S("输入消息，最多 300 字")));
         m_chatInput->setMaxLength(300);
         m_chatInput->setFixedHeight(34);
+        m_chatInput->setStyleSheet(
+            "QLineEdit { background: rgba(255, 255, 255, 0.50); border: 1px solid rgba(200, 200, 210, 0.45); "
+            "border-radius: 8px; padding: 6px 10px; font-size: 12px; color: #0f172a; } "
+            "QLineEdit:focus { border-color: #4a9eff; background: #ffffff; }");
         installThemedLineEditMenu(m_chatInput);
         connect(m_chatInput, &QLineEdit::returnPressed, this, &MainWindow::sendChatMessage);
         row->addWidget(m_chatInput, 1);
 
         m_chatSendBtn = new AnimatedButton(QString::fromUtf8(_S("发送")), AnimatedButton::GhostStyle);
-        m_chatSendBtn->setFixedSize(72, 34);
-        m_chatSendBtn->setStyleSheet(buttonStyle(ButtonNeutral, spx(12), spx(8)));
+        m_chatSendBtn->setFixedSize(64, 34);
+        m_chatSendBtn->setStyleSheet(
+            "QPushButton { background: rgba(74, 158, 255, 0.85); border: 1px solid rgba(74, 158, 255, 0.60); "
+            "border-radius: 8px; color: #ffffff; font-weight: 600; font-size: 12px; } "
+            "QPushButton:hover { background: rgba(109, 179, 255, 0.90); } "
+            "QPushButton:disabled { background: rgba(74, 158, 255, 0.40); color: rgba(255,255,255,0.5); }");
         connect(m_chatSendBtn, &QPushButton::clicked, this, &MainWindow::sendChatMessage);
         row->addWidget(m_chatSendBtn);
 
@@ -138,7 +148,25 @@
                 QString reaction = parts[2];
                 sendChatReaction(messageID, reaction);
             }
+        } else if (url.startsWith("react-menu:")) {
+            qint64 messageID = url.mid(11).toLongLong();
+            showReactionMenu(messageID);
         }
+    }
+
+    void showReactionMenu(qint64 messageID) {
+        QMenu menu(this);
+        menu.setStyleSheet(POPUP_CSS);
+        
+        QStringList whitelist = { "👍", "❤️", "😂", "？", "收到" };
+        for (const QString& emo : whitelist) {
+            QAction* action = menu.addAction(emo);
+            connect(action, &QAction::triggered, this, [this, messageID, emo]() {
+                sendChatReaction(messageID, emo);
+            });
+        }
+        
+        menu.exec(QCursor::pos());
     }
 
     void sendChatReaction(qint64 messageID, const QString& reaction) {
@@ -169,10 +197,14 @@
     }
 
     QString renderChatHtml(const QJsonArray& messages) {
-        QString html = QStringLiteral("<html><head><style>"
-            "body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 12px; color: #334155; margin: 0; padding: 0; }"
+        QString html = QString("<html><head><style>"
+            "body { font-family: 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif; font-size: %1px; color: #1a1a2e; margin: 0; padding: %2px; }"
             "a { text-decoration: none; }"
-            "</style></head><body>");
+            ".react-chip { background-color: rgba(0, 0, 0, 0.04); border: 1px solid rgba(0, 0, 0, 0.06); border-radius: %3px; padding: %4px %5px; color: #475569; font-size: %6px; }"
+            ".react-chip-active { background-color: rgba(74, 158, 255, 0.15); border: 1px solid rgba(74, 158, 255, 0.3); border-radius: %3px; padding: %4px %5px; color: #1e40af; font-weight: bold; font-size: %6px; }"
+            ".react-add-btn { color: #64748b; font-size: %7px; padding: %4px %5px; font-weight: bold; }"
+            "</style></head><body>")
+            .arg(spx(12)).arg(spx(4)).arg(spx(4)).arg(spx(1)).arg(spx(4)).arg(spx(10)).arg(spx(11));
 
         for (int i = 0; i < messages.size(); ++i) {
             QJsonObject msg = messages[i].toObject();
@@ -190,85 +222,109 @@
 
             if (type == "system") {
                 html += QString(
-                    "<table align=\"center\" style=\"margin-top: 6px; margin-bottom: 6px;\">"
+                    "<table align=\"center\" style=\"margin-top: %1px; margin-bottom: %1px;\">"
                     "  <tr>"
-                    "    <td bgcolor=\"#f8fafc\" style=\"color: #64748b; padding: 4px 12px; font-size: 11px; border: 1px solid #e2e8f0; border-radius: 4px;\">"
-                    "      [系统] %1"
+                    "    <td style=\"background-color: #f8fafc; color: #64748b; padding: %2px %3px; font-size: %4px; border: 1px solid #e2e8f0; border-radius: %2px;\">"
+                    "      [系统] %5"
                     "    </td>"
                     "  </tr>"
                     "</table>"
-                ).arg(content.toHtmlEscaped());
+                ).arg(spx(6)).arg(spx(4)).arg(spx(12)).arg(spx(11)).arg(content.toHtmlEscaped());
             } else {
                 QString align = isSelf ? "right" : "left";
-                QString bgColor = isSelf ? "#e0f2fe" : "#f1f5f9";
-                QString textColor = isSelf ? "#0369a1" : "#1e293b";
+                QString bgColor = isSelf ? "#4a9eff" : "rgba(0,0,0,0.05)";
+                QString textColor = isSelf ? "#ffffff" : "#1e293b";
                 QString displayName = isSelf ? QString::fromUtf8(_S("我")) : author;
 
                 html += QString(
-                    "<table align=\"%1\" style=\"margin-top: 6px; margin-bottom: 6px; max-width: 85%;\">"
+                    "<table align=\"%1\" style=\"margin-top: %2px; margin-bottom: %3px; max-width: 85%;\" cellpadding=\"0\" cellspacing=\"0\">"
                     "  <tr>"
-                    "    <td align=\"%1\" style=\"color: #64748b; font-size: 11px;\">"
-                    "      <b>%2</b> (%3) &nbsp;<a href=\"reply:%4\" style=\"color: #0284c7;\">[回复]</a>"
+                    "    <td align=\"%1\" style=\"color: #64748b; font-size: %4px; padding-bottom: %5px;\">"
+                ).arg(align).arg(spx(8)).arg(spx(4)).arg(spx(11)).arg(spx(2));
+
+                if (isSelf) {
+                    html += QString(
+                        "      <span style=\"color: #64748b; font-size: %1px;\">%2</span>&nbsp; "
+                        "      <b>%3</b>&nbsp; "
+                        "      <a href=\"react-menu:%4\" style=\"color: #64748b; font-size: %5px; font-weight: bold; text-decoration: none; font-family: 'Segoe UI Symbol'; vertical-align: baseline;\">☺</a>"
+                    ).arg(spx(10)).arg(timeText).arg(displayName.toHtmlEscaped()).arg(QString::number(id)).arg(spx(11));
+                } else {
+                    html += QString(
+                        "      <b>%1</b>&nbsp; "
+                        "      <span style=\"color: #64748b; font-size: %2px;\">%3</span>&nbsp; "
+                        "      <a href=\"reply:%4\" style=\"color: #4a9eff; font-size: %5px; text-decoration: none; vertical-align: baseline;\">回复</a>&nbsp; "
+                        "      <a href=\"react-menu:%4\" style=\"color: #64748b; font-size: %5px; font-weight: bold; text-decoration: none; font-family: 'Segoe UI Symbol'; vertical-align: baseline;\">☺</a>"
+                    ).arg(displayName.toHtmlEscaped()).arg(spx(10)).arg(timeText).arg(QString::number(id)).arg(spx(11));
+                }
+
+                html += QString(
                     "    </td>"
                     "  </tr>"
                     "  <tr>"
-                    "    <td bgcolor=\"%5\" style=\"color: %6; padding: 6px 12px; border-radius: 6px; font-size: 12px;\">"
-                ).arg(align, displayName.toHtmlEscaped(), timeText, QString::number(id), bgColor, textColor);
+                    "    <td style=\"background-color: %1; color: %2; padding: %3px %4px; border-radius: %5px; font-size: %6px; line-height: 1.4;\">"
+                ).arg(bgColor, textColor).arg(spx(8)).arg(spx(12)).arg(spx(8)).arg(spx(12));
 
                 // Quoted reply
                 QJsonObject replyPreview = msg["reply_preview"].toObject();
                 if (!replyPreview.isEmpty()) {
                     QString replyAuthor = replyPreview["author"].toString();
                     QString replyContent = replyPreview["content"].toString();
+                    QString replyBg = isSelf ? "rgba(255, 255, 255, 0.16)" : "rgba(0, 0, 0, 0.03)";
+                    QString replyBorderColor = isSelf ? "#ffffff" : "#cbd5e1";
+                    QString replyTextColor = isSelf ? "#f8fafc" : "#475569";
                     html += QString(
-                        "<div style=\"background-color: rgba(255,255,255,0.45); border-left: 3px solid #94a3b8; padding: 3px 6px; margin-bottom: 5px; font-size: 11px; color: #475569;\">"
-                        "  回复 @%1: %2"
-                        "</div>"
-                    ).arg(replyAuthor.toHtmlEscaped(), replyContent.toHtmlEscaped());
+                        "<div style=\"background-color: %1; border-left: 3px solid %2; padding: %3px %4px; margin-bottom: %5px; border-radius: %3px; font-size: %6px; color: %7;\">"
+                        "  @%8: %9"
+                        "</div><br>"
+                    ).arg(replyBg, replyBorderColor).arg(spx(4)).arg(spx(8)).arg(spx(6)).arg(spx(11)).arg(replyTextColor, replyAuthor.toHtmlEscaped(), replyContent.toHtmlEscaped());
                 }
 
                 html += content.toHtmlEscaped();
+                html += "</td></tr>";
 
                 // Reactions
                 QJsonObject reactions = msg["reactions"].toObject();
                 QJsonArray reacted = msg["reacted"].toArray();
                 
-                QStringList reactionLinks;
+                QStringList reactionChips;
                 QStringList whitelist = { "👍", "❤️", "😂", "？", "收到" };
                 
                 for (const QString& emo : whitelist) {
                     int count = reactions[emo].toInt(0);
-                    bool hasReacted = false;
-                    for (int r = 0; r < reacted.size(); ++r) {
-                        if (reacted[r].toString() == emo) {
-                            hasReacted = true;
-                            break;
-                        }
-                    }
                     if (count > 0) {
-                        QString color = hasReacted ? "#2563eb" : "#64748b";
-                        QString weight = hasReacted ? "bold" : "normal";
-                        reactionLinks.append(QString("<a href=\"react:%1:%2\" style=\"color: %3; font-weight: %4;\">%5 %6</a>")
-                            .arg(QString::number(id), emo, color, weight, emo, QString::number(count)));
-                    } else if (!isSelf) {
-                        reactionLinks.append(QString("<a href=\"react:%1:%2\" style=\"color: #94a3b8;\">%3</a>")
-                            .arg(QString::number(id), emo, emo));
+                        bool hasReacted = false;
+                        for (int r = 0; r < reacted.size(); ++r) {
+                            if (reacted[r].toString() == emo) {
+                                hasReacted = true;
+                                break;
+                            }
+                        }
+                        QString chipClass = hasReacted ? "react-chip-active" : "react-chip";
+                        reactionChips.append(QString("<a href=\"react:%1:%2\" style=\"text-decoration: none;\"><span class=\"%3\">%4 %5</span></a>")
+                            .arg(QString::number(id), emo, chipClass, emo, QString::number(count)));
                     }
                 }
 
-                if (!reactionLinks.isEmpty()) {
-                    html += "<br/><span style=\"font-size: 10px; line-height: 18px;\">" + reactionLinks.join(" &nbsp;|&nbsp; ") + "</span>";
+                if (!reactionChips.isEmpty()) {
+                    reactionChips.append(QString("<a href=\"react-menu:%1\" style=\"text-decoration: none;\"><span class=\"react-add-btn\">+☺</span></a>").arg(QString::number(id)));
+                    html += QString(
+                        "  <tr>"
+                        "    <td align=\"%1\" style=\"padding-top: 4px; padding-bottom: 2px;\">"
+                        "      %2"
+                        "    </td>"
+                        "  </tr>"
+                    ).arg(align, reactionChips.join(" "));
                 }
 
-                html += "</td></tr></table><div style=\"clear: both;\"></div>";
+                html += "</table><div style=\"clear: both;\"></div>";
             }
         }
         html += "</body></html>";
         return html;
     }
 
-    void updateChatView(const QJsonArray& messages) {
-        bool changed = (messages.size() != m_localMessages.size());
+    void updateChatView(const QJsonArray& messages, bool force = false) {
+        bool changed = force || (messages.size() != m_localMessages.size());
         if (!changed) {
             for (int i = 0; i < messages.size(); ++i) {
                 QJsonObject a = messages[i].toObject();
