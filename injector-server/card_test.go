@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -117,6 +118,27 @@ func TestActivateCardDeactivateReactivate(t *testing.T) {
 	}
 	if session2.Token == "" {
 		t.Fatal("new session token is empty")
+	}
+}
+
+func TestActivateCardAllowsMultipleMachinesUpToMaxSessions(t *testing.T) {
+	cm, dir := setupTestCM(t)
+	defer teardownTestCM(dir)
+
+	card, _ := cm.GenerateCard(24*time.Hour, "multi-machine", 6, "")
+	for i := 1; i <= 6; i++ {
+		machineID := fmt.Sprintf("machine-%d", i)
+		session, err := cm.ActivateCard(card.Code, machineID, "fp", "127.0.0.1", "2.0.0")
+		if err != nil {
+			t.Fatalf("activation %d for %s returned error: %v", i, machineID, err)
+		}
+		if session.MachineID != machineID {
+			t.Fatalf("session MachineID = %q, want %q", session.MachineID, machineID)
+		}
+	}
+
+	if _, err := cm.ActivateCard(card.Code, "machine-7", "fp", "127.0.0.1", "2.0.0"); err == nil {
+		t.Fatal("seventh machine should exceed max sessions")
 	}
 }
 

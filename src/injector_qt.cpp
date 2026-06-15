@@ -62,13 +62,15 @@ static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* exInfo) {
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE) {
         char buf[4096];
+        SYSTEMTIME st;
+        GetLocalTime(&st);
         int len = sprintf_s(buf, sizeof(buf),
             "=== LingQiao Crash Report ===\r\n"
-            "Time: %s\r\n"
+            "Time: %04d-%02d-%02d %02d:%02d:%02d\r\n"
             "Exception: 0x%08X\r\n"
             "Address: 0x%p\r\n"
             "Module: ",
-            QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss").toUtf8().constData(),
+            st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
             exInfo->ExceptionRecord->ExceptionCode,
             exInfo->ExceptionRecord->ExceptionAddress);
 
@@ -136,17 +138,37 @@ static LONG WINAPI CrashHandler(EXCEPTION_POINTERS* exInfo) {
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
+static void LogStartupSecurityExit(const char* reason) {
+    WCHAR logPath[MAX_PATH];
+    GetTempPathW(MAX_PATH, logPath);
+    wcscat_s(logPath, L"LingQiao_injector.log");
+
+    HANDLE hFile = CreateFileW(logPath, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
+        OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) return;
+
+    char buf[512];
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    int len = sprintf_s(buf, sizeof(buf),
+        "%04d-%02d-%02d %02d:%02d:%02d [SECURITY] %s\r\n",
+        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, reason);
+    DWORD written = 0;
+    WriteFile(hFile, buf, (DWORD)len, &written, NULL);
+    CloseHandle(hFile);
+}
+
 // ============================================================================
 // Entry point
 // ============================================================================
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
-    // Install crash handler for diagnostics
-    SetUnhandledExceptionFilter(CrashHandler);
+    // Anti-debug diagnostics are logged only. Do not block the UI on false positives.
+    if (IsBeingDebugged()) {
+        LogStartupSecurityExit("Anti-debug check triggered during startup; continuing for stability");
+    }
 
-    // Anti-debug: exit silently if debugger detected
-    if (IsBeingDebugged()) ExitProcess(0);
-
-    QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
+    SetProcessDPIAware();
+    QCoreApplication::setAttribute(Qt::AA_DisableHighDpiScaling);
     QCoreApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
     QCoreApplication::setAttribute(Qt::AA_DisableWindowContextHelpButton);
 
@@ -156,9 +178,26 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     app.setApplicationName(QString::fromUtf8("\xe7\x81\xb5\xe6\xa1\xa5"));
     app.setApplicationVersion(GetClientVersion());
 
+    // Install crash handler AFTER Qt init (handler uses QDateTime)
+    SetUnhandledExceptionFilter(CrashHandler);
+
     InitCommonControls();
-    padding::TouchPadding(); // prevent dead-code elimination of padding data
+    padding::TouchPadding();
+
+    // Parse --reinject --target "path" for UAC elevation retry
+    QString reinjectTarget;
+    QStringList args = app.arguments();
+    int reinjectIdx = args.indexOf("--reinject");
+    if (reinjectIdx >= 0) {
+        int targetIdx = args.indexOf("--target");
+        if (targetIdx >= 0 && targetIdx + 1 < args.size())
+            reinjectTarget = args.at(targetIdx + 1);
+    }
+
     MainWindow w;
+    if (!reinjectTarget.isEmpty()) {
+        w.setTargetAndInject(reinjectTarget);
+    }
     w.show();
     return app.exec();
 }

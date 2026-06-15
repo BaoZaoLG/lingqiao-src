@@ -1,8 +1,6 @@
     void applyShadow() {
         HWND hwnd = (HWND)winId();
-        MARGINS m = {0, 0, 0, 1};
-        DwmExtendFrameIntoClientArea(hwnd, &m);
-        BOOL dark = TRUE;
+        BOOL dark = FALSE;
         DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
     }
 
@@ -13,8 +11,8 @@
             auto pSWCA = (pfnSetWindowCompositionAttribute)
                 GetProcAddress(hUser, "SetWindowCompositionAttribute");
             if (pSWCA) {
-                // AccentState=4 (ACRYLIC), GradientColor=0x00000000 (transparent, ABGR format)
-                ACCENT_POLICY policy = {4, 0, 0x00000000, 0};
+                // ABGR tint: alpha + white. Keeps glassy blur without letting DWM choose the base color.
+                ACCENT_POLICY policy = {4, 0, static_cast<int>(0x33FFFFFFu), 0};
                 WINCOMPATTR_DATA data = {19, &policy, sizeof(policy)};
                 pSWCA(hwnd, &data);
             }
@@ -48,8 +46,9 @@
     void handleUpdateCheck(const QString& latest, const QString& url, bool force, const QString& sha256 = QString()) {
         if (latest.isEmpty()) return;
         if (CompareVersion(GetClientVersion(), latest) >= 0) return;  // already up-to-date
-        m_pendingUpdateInstaller = false;
-        m_pendingUpdatePackageKind.clear();
+        m_lastUpdateStatus = QString::fromUtf8(_S("发现新版本 v%1")).arg(latest);
+        m_pendingUpdateInstaller = true;
+        m_pendingUpdatePackageKind = url.endsWith(".msi", Qt::CaseInsensitive) ? "msi" : "bundle";
         m_pendingUpdateReleaseID.clear();
         if (force) {
             applyForceUpdateBlock(latest, url, sha256);
@@ -69,6 +68,7 @@
                                     const QString& releaseID, const QString& notes = QString()) {
         if (latest.isEmpty()) return;
         if (CompareVersion(GetClientVersion(), latest) >= 0) return;
+        m_lastUpdateStatus = QString::fromUtf8(_S("发现新版本 v%1")).arg(latest);
         m_pendingUpdateInstaller = true;
         m_pendingUpdatePackageKind = packageKind;
         m_pendingUpdateReleaseID = releaseID;
@@ -109,7 +109,31 @@
         root->addWidget(m_titleBar);
         root->addWidget(sep());
 
-        // Body
+        QHBoxLayout* nav = new QHBoxLayout();
+        nav->setContentsMargins(24, 12, 24, 0);
+        nav->setSpacing(8);
+        m_homeNavBtn = new AnimatedButton(QString::fromUtf8(_S("首页")), AnimatedButton::GhostStyle);
+        m_homeNavBtn->setFixedSize(74, 30);
+        m_communityNavBtn = new AnimatedButton(QString::fromUtf8(_S("社区")), AnimatedButton::GhostStyle);
+        m_communityNavBtn->setFixedSize(74, 30);
+        connect(m_homeNavBtn, &QPushButton::clicked, this, [this]() { showHomePage(); });
+        connect(m_communityNavBtn, &QPushButton::clicked, this, [this]() { showCommunityPage(); });
+        nav->addWidget(m_homeNavBtn);
+        nav->addWidget(m_communityNavBtn);
+        nav->addStretch();
+        root->addLayout(nav);
+
+        m_pageStack = new QStackedWidget();
+        m_pageStack->setStyleSheet("QStackedWidget { background: transparent; border: none; }");
+        m_pageStack->addWidget(buildHomePage());
+        m_pageStack->addWidget(buildCommunityPage());
+        root->addWidget(m_pageStack, 1);
+
+        setUiLocked(true);
+        updatePageNav();
+    }
+
+    QWidget* buildHomePage() {
         QScrollArea* scroll = new QScrollArea();
         scroll->setWidgetResizable(true);
         scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -122,12 +146,7 @@
         bl->setSpacing(16);
 
         bl->addWidget(buildCardSection());
-        bl->addWidget(buildExpiryLabel());
-        bl->addSpacing(4);
-
-        m_status = new InlineStatus();
-        bl->addWidget(m_status);
-        bl->addWidget(sep());
+        bl->addWidget(buildSessionStatusSection());
 
         bl->addWidget(buildTargetSection());
         bl->addWidget(buildApiKeySection());
@@ -157,9 +176,95 @@
         bl->addStretch();
 
         scroll->setWidget(body);
-        root->addWidget(scroll, 1);
+        return scroll;
+    }
 
-        setUiLocked(true);
+    QWidget* buildCommunityPage() {
+        QScrollArea* scroll = new QScrollArea();
+        scroll->setWidgetResizable(true);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        scroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
+
+        QWidget* body = new QWidget();
+        body->setStyleSheet("background: transparent;");
+        QVBoxLayout* bl = new QVBoxLayout(body);
+        bl->setContentsMargins(24, 18, 24, 20);
+        bl->setSpacing(16);
+
+        QFrame* c = card();
+        QVBoxLayout* o = new QVBoxLayout(c);
+        o->setContentsMargins(18, 16, 18, 16);
+        o->setSpacing(10);
+        o->addWidget(heading(QString::fromUtf8(_S("社区"))));
+
+        m_communityState = new QLabel(QString::fromUtf8(_S("激活后可进入社区")));
+        m_communityState->setWordWrap(true);
+        m_communityState->setStyleSheet(
+            "font-size: 12px; color: #475569; background: rgba(255,255,255,0.22); "
+            "border: 1px solid rgba(200,200,210,0.30); border-radius: 8px; padding: 12px;");
+        o->addWidget(m_communityState);
+
+        QHBoxLayout* profileRow = new QHBoxLayout();
+        profileRow->setContentsMargins(0, 0, 0, 0);
+        profileRow->setSpacing(8);
+        m_chatNicknameInput = new QLineEdit();
+        m_chatNicknameInput->setPlaceholderText(QString::fromUtf8(_S("社区昵称，1-16 个字符")));
+        m_chatNicknameInput->setMaxLength(16);
+        m_chatNicknameInput->setFixedHeight(34);
+        m_chatNicknameInput->setEnabled(false);
+        installThemedLineEditMenu(m_chatNicknameInput);
+        connect(m_chatNicknameInput, &QLineEdit::returnPressed, this, &MainWindow::saveChatProfile);
+        profileRow->addWidget(m_chatNicknameInput, 1);
+
+        m_chatNicknameSaveBtn = new AnimatedButton(QString::fromUtf8(_S("保存")), AnimatedButton::GhostStyle);
+        m_chatNicknameSaveBtn->setFixedSize(72, 34);
+        m_chatNicknameSaveBtn->setEnabled(false);
+        m_chatNicknameSaveBtn->setStyleSheet(buttonStyle(ButtonNeutral, spx(12), spx(8)));
+        connect(m_chatNicknameSaveBtn, &QPushButton::clicked, this, &MainWindow::saveChatProfile);
+        profileRow->addWidget(m_chatNicknameSaveBtn);
+        o->addLayout(profileRow);
+
+        bl->addWidget(c);
+        bl->addWidget(buildChatSection());
+        bl->addStretch();
+
+        scroll->setWidget(body);
+        return scroll;
+    }
+
+    void showHomePage() {
+        if (m_pageStack) m_pageStack->setCurrentIndex(0);
+        updatePageNav();
+    }
+
+    void showCommunityPage() {
+        if (m_pageStack) m_pageStack->setCurrentIndex(1);
+        m_chatUnreadCount = 0;
+        if (m_chatHeading) m_chatHeading->setText(QString::fromUtf8(_S("公共聊天")));
+        updatePageNav();
+    }
+
+    void updatePageNav() {
+        const bool community = m_pageStack && m_pageStack->currentIndex() == 1;
+        const QString communityText = m_chatUnreadCount > 0
+            ? QString::fromUtf8(_S("社区(%1)")).arg(m_chatUnreadCount)
+            : QString::fromUtf8(_S("社区"));
+        if (m_communityNavBtn) m_communityNavBtn->setText(communityText);
+        if (m_homeNavBtn) m_homeNavBtn->setStyleSheet(buttonStyle(community ? ButtonNeutral : ButtonAccent, spx(11), spx(6)));
+        if (m_communityNavBtn) m_communityNavBtn->setStyleSheet(buttonStyle(community ? ButtonAccent : ButtonNeutral, spx(11), spx(6)));
+    }
+
+    void updateCommunityStateText() {
+        if (!m_communityState) return;
+        if (!m_activated) {
+            m_communityState->setText(QString::fromUtf8(_S("激活后可进入社区")));
+            return;
+        }
+        QString online = m_chatOnlineCount > 0
+            ? QString::fromUtf8(_S("最近活跃 %1 人")).arg(m_chatOnlineCount)
+            : QString::fromUtf8(_S("正在同步在线人数"));
+        m_communityState->setText(QString::fromUtf8(_S("连接：%1 · %2"))
+            .arg(m_lastChatStatus, online));
     }
 
     QWidget* buildCardSection() {
@@ -179,6 +284,7 @@
         m_cardInput->setStyleSheet(
             "QLineEdit { font-size: 13px; font-family: \"Cascadia Code\", \"Consolas\", monospace; "
             "letter-spacing: 0.5px; border-radius: 8px; }");
+        installThemedLineEditMenu(m_cardInput);
         row->addWidget(m_cardInput, 1);
 
         m_activateBtn = new AnimatedButton(QString::fromUtf8(_S("激活")), AnimatedButton::PrimaryStyle);
@@ -190,12 +296,34 @@
         return c;
     }
 
-    QWidget* buildExpiryLabel() {
+    QWidget* buildSessionStatusSection() {
+        QFrame* s = new QFrame();
+        s->setObjectName("sessionStatus");
+        s->setStyleSheet(
+            "#sessionStatus { background: rgba(255, 255, 255, 0.24); "
+            "border: 1px solid rgba(200, 200, 210, 0.28); border-radius: 8px; }");
+        QVBoxLayout* o = new QVBoxLayout(s);
+        o->setContentsMargins(14, 6, 14, 6);
+        o->setSpacing(0);
+
         m_cardExpiry = new QLabel();
         m_cardExpiry->setProperty("role", "warning");
-        m_cardExpiry->setStyleSheet("font-size: 11px; padding-left: 2px; background: transparent; color: #fbbf3a;");
+        m_cardExpiry->setStyleSheet("font-size: 11px; background: transparent; color: #f59e0b; font-weight: 600;");
         m_cardExpiry->setVisible(false);
-        return m_cardExpiry;
+
+        QHBoxLayout* row = new QHBoxLayout();
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(8);
+        m_status = new InlineStatus();
+        row->addWidget(m_status, 1);
+
+        m_diagnosticsBtn = new AnimatedButton(QString::fromUtf8(_S("诊断")), AnimatedButton::GhostStyle);
+        m_diagnosticsBtn->setFixedSize(58, 28);
+        m_diagnosticsBtn->setStyleSheet(buttonStyle(ButtonNeutral, spx(11), spx(6)));
+        connect(m_diagnosticsBtn, &QPushButton::clicked, this, &MainWindow::showDiagnostics);
+        row->addWidget(m_diagnosticsBtn);
+        o->addLayout(row);
+        return s;
     }
 
     QWidget* buildTargetSection() {
@@ -214,6 +342,7 @@
         m_targetInput->setFixedHeight(38);
         m_targetInput->setReadOnly(true);
         m_targetInput->setAcceptDrops(true);
+        installThemedLineEditMenu(m_targetInput);
         row->addWidget(m_targetInput, 1);
 
         m_browseBtn = new AnimatedButton(QString::fromUtf8(_S("浏览")), AnimatedButton::GhostStyle);
@@ -238,6 +367,7 @@
         m_apiKeyInput->setFixedHeight(38);
         m_apiKeyInput->setEchoMode(QLineEdit::Password);
         m_apiKeyInput->setEnabled(false);
+        installThemedLineEditMenu(m_apiKeyInput);
         o->addWidget(m_apiKeyInput);
 
         m_balanceLabel = new QLabel();
@@ -284,28 +414,29 @@
 
         // Auto-update button
         m_updateNowBtn = new AnimatedButton(QString::fromUtf8(_S("立即更新")), AnimatedButton::PrimaryStyle);
-        m_updateNowBtn->setStyleSheet(
-            "QPushButton { font-size: 11px; color: #d8e4f8; background: rgba(40,60,100,0.45); "
-            "border: 1px solid rgba(74,158,255,0.25); border-radius: 4px; padding: 3px 12px; font-weight: 600; }"
-            "QPushButton:hover { background: rgba(50,75,120,0.55); "
-            "border-color: rgba(74,158,255,0.40); }");
+        m_updateNowBtn->setStyleSheet(buttonStyle(ButtonAccent, spx(11), spx(4)));
         m_updateNowBtn->setVisible(false);
         connect(m_updateNowBtn, &QPushButton::clicked, this, [this]() {
             if (m_pendingUpdateUrl.isEmpty()) return;
+            QMessageBox* dlg = createThemedProgressBox(QString::fromUtf8(_S("正在更新")),
+                m_pendingUpdateInstaller
+                    ? QString::fromUtf8(_S("正在下载安装包 v%1...\n请稍候。")).arg(m_pendingUpdateVersion)
+                    : QString::fromUtf8(_S("正在下载安装包 v%1...\n请稍候。")).arg(m_pendingUpdateVersion));
+            dlg->show();
+            QApplication::processEvents();
             if (m_pendingUpdateInstaller)
                 ApplyInstallerUpdate(m_pendingUpdateVersion, m_pendingUpdateUrl,
                                      m_pendingUpdateSha256, m_pendingUpdatePackageKind,
-                                     m_pendingUpdateReleaseID);
+                                     m_pendingUpdateReleaseID, dlg);
             else
-                ApplyUpdate(m_pendingUpdateVersion, m_pendingUpdateUrl, m_pendingUpdateSha256);
+                ApplyInstallerUpdate(m_pendingUpdateVersion, m_pendingUpdateUrl,
+                                     m_pendingUpdateSha256, m_pendingUpdatePackageKind,
+                                     QString(), dlg);
         });
         lay->addWidget(m_updateNowBtn);
 
         m_remindLaterBtn = new AnimatedButton(QString::fromUtf8(_S("稍后提醒")), AnimatedButton::GhostStyle);
-        m_remindLaterBtn->setStyleSheet(
-            "QPushButton { font-size: 11px; color: #a0aec5; background: transparent; "
-            "border: 1px solid rgba(80, 100, 140, 0.30); border-radius: 4px; padding: 2px 8px; }"
-            "QPushButton:hover { color: #f0f4fa; border-color: rgba(100, 120, 160, 0.50); }");
+        m_remindLaterBtn->setStyleSheet(buttonStyle(ButtonNeutral, spx(11), spx(4)));
         connect(m_remindLaterBtn, &QPushButton::clicked, this, [this]() {
             m_updateDismissed = true;
             m_updateBanner->setVisible(false);
@@ -318,23 +449,21 @@
         m_injectBtn->setEnabled(false);
         m_remindLaterBtn->setVisible(false);
 
-        // Auto-download and replace
+        // Auto-download installer. Do not replace the running executable in-place.
         if (!url.isEmpty()) {
-            QMessageBox* dlg = new QMessageBox(this);
-            dlg->setWindowTitle(QString::fromUtf8(_S("需要更新")));
-            dlg->setIcon(QMessageBox::Information);
-            dlg->setText(QString::fromUtf8(_S("发现新版本 v%1，正在自动下载更新...\n下载完成后将自动替换并重启。")).arg(latest));
-            dlg->setStandardButtons(QMessageBox::NoButton);
-            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            QMessageBox* dlg = createThemedProgressBox(QString::fromUtf8(_S("需要更新")),
+                QString::fromUtf8(_S("发现新版本 v%1，正在下载安装包...\n下载完成后请确认安装。")).arg(latest));
             dlg->show();
             QApplication::processEvents();
-            ApplyUpdate(latest, url, sha256, dlg);
+            QString packageKind = url.endsWith(".msi", Qt::CaseInsensitive) ? "msi" : "bundle";
+            ApplyInstallerUpdate(latest, url, sha256, packageKind, QString(), dlg);
         } else {
             QMessageBox dlg(this);
             dlg.setWindowTitle(QString::fromUtf8(_S("需要更新")));
             dlg.setIcon(QMessageBox::Warning);
             dlg.setText(QString::fromUtf8(_S("当前版本过低，必须更新到 v%1 才能继续使用。\n请联系管理员上传新版本。")).arg(latest));
             dlg.setWindowFlags(dlg.windowFlags() & ~Qt::WindowContextHelpButtonHint);
+            dlg.setStyleSheet(POPUP_CSS);
             dlg.exec();
             close();
         }
@@ -350,12 +479,8 @@
             setStatus("error", QString::fromUtf8(_S("当前版本过低，但服务器未提供安装包")));
             return;
         }
-        QMessageBox* dlg = new QMessageBox(this);
-        dlg->setWindowTitle(QString::fromUtf8(_S("需要更新")));
-        dlg->setIcon(QMessageBox::Information);
-        dlg->setText(QString::fromUtf8(_S("发现新版本 v%1，正在下载安装包...\n下载完成后请确认安装。")).arg(latest));
-        dlg->setStandardButtons(QMessageBox::NoButton);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        QMessageBox* dlg = createThemedProgressBox(QString::fromUtf8(_S("需要更新")),
+            QString::fromUtf8(_S("发现新版本 v%1，正在下载安装包...\n下载完成后请确认安装。")).arg(latest));
         dlg->show();
         QApplication::processEvents();
         ApplyInstallerUpdate(latest, url, sha256, packageKind, releaseID, dlg);

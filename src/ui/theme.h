@@ -102,3 +102,52 @@ QToolTip {
     padding: 5px 10px; border-radius: 6px; font-size: 11px;
 }
 )";
+
+static const char* POPUP_CSS = R"(
+QMenu {
+    background: rgba(255, 255, 255, 0.96);
+    border: 1px solid rgba(200, 200, 210, 0.55);
+    border-radius: 0;
+    padding: 4px;
+}
+QMenu::item {
+    background: transparent;
+    color: #1a1a2e;
+    padding: 8px 24px 8px 12px;
+    border-radius: 0;
+    font-size: 12px;
+}
+QMenu::item:selected {
+    background: rgba(240, 240, 245, 0.90);
+    color: #0f172a;
+}
+QMenu::separator {
+    height: 1px;
+    background: rgba(200, 200, 210, 0.45);
+    margin: 5px 6px;
+}
+QMessageBox {
+    background: rgba(255, 255, 255, 0.96);
+}
+QMessageBox QLabel {
+    background: transparent;
+    color: #1a1a2e;
+    font-size: 12px;
+}
+QMessageBox QPushButton {
+    background: rgba(255, 255, 255, 0.76);
+    border: 1px solid rgba(200, 200, 210, 0.55);
+    border-radius: 8px;
+    padding: 8px 18px;
+    color: #1a1a2e;
+    font-weight: 600;
+    min-width: 72px;
+}
+QMessageBox QPushButton:hover {
+    background: rgba(240, 240, 245, 0.90);
+    border-color: rgba(180, 180, 190, 0.65);
+}
+QMessageBox QPushButton:pressed {
+    background: rgba(230, 230, 240, 0.95);
+}
+)";

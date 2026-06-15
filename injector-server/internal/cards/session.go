@@ -2,6 +2,7 @@ package cards
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -51,21 +52,23 @@ func (s *SessionService) Activate(input ActivationInput) (Card, Session, error) 
 	now := s.now()
 	card := input.Card
 
-	if card.MachineID != "" && card.MachineID != input.MachineID {
+	if card.MaxSessions <= 1 && card.MachineID != "" && card.MachineID != input.MachineID {
 		return Card{}, Session{}, fmt.Errorf("card already bound to another machine")
 	}
 
 	activeCount := 0
 	for _, session := range input.ActiveSessions {
-		if session.CardCode == card.Code && session.ExpiresAt.After(now) {
+		if sameCardCode(session.CardCode, card.Code) && session.ExpiresAt.After(now) {
 			activeCount++
 		}
 	}
 	if maxSessions := card.MaxSessions; maxSessions > 0 && activeCount >= maxSessions {
-		return Card{}, Session{}, fmt.Errorf("max active sessions reached (%d/%d)", activeCount, maxSessions)
+		return Card{}, Session{}, fmt.Errorf("%w: %d/%d", ErrMaxSessionsReached, activeCount, maxSessions)
 	}
 
-	card.MachineID = input.MachineID
+	if card.MachineID == "" {
+		card.MachineID = input.MachineID
+	}
 	if card.ActivatedAt == nil {
 		activatedAt := now
 		card.ActivatedAt = &activatedAt
@@ -87,18 +90,28 @@ func (s *SessionService) Activate(input ActivationInput) (Card, Session, error) 
 	return card, session, nil
 }
 
+func sameCardCode(a, b string) bool {
+	normalize := func(code string) string {
+		code = strings.ToUpper(code)
+		code = strings.ReplaceAll(code, "-", "")
+		code = strings.ReplaceAll(code, " ", "")
+		return code
+	}
+	return normalize(a) == normalize(b)
+}
+
 func (s *SessionService) Heartbeat(input HeartbeatInput) (Session, error) {
 	now := s.now()
 	session := input.Session
 
 	if session.MachineID != input.MachineID {
-		return Session{}, fmt.Errorf("machine mismatch")
+		return Session{}, ErrMachineMismatch
 	}
 	if session.ExpiresAt.Before(now) {
-		return Session{}, fmt.Errorf("session expired")
+		return Session{}, ErrSessionExpired
 	}
 	if input.Card.Status == StatusDisabled || now.After(input.Card.ExpiresAt) {
-		return Session{}, fmt.Errorf("card no longer valid")
+		return Session{}, ErrCardNoLongerValid
 	}
 
 	session.LastSeen = now

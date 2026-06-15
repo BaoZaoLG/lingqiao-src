@@ -53,6 +53,7 @@ func main() {
 
 	api := NewAPIHandler(cm)
 	admin := NewAdminHandler(cm)
+	admin.chat = api.chat
 	agent := NewAgentHandler(cm)
 	payloadStore := NewPayloadStore(storage)
 	payload := NewPayloadHandler(payloadStore)
@@ -60,7 +61,9 @@ func main() {
 
 	printStartupInfo(cm)
 
-	go api.SessionCleanupTask()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go api.SessionCleanupTask(ctx)
 
 	adminServer := buildAdminServer(cfg.AdminAddr, api, admin, payload)
 	agentServer := buildAgentServer(cfg.AgentAddr, agent)
@@ -116,6 +119,11 @@ func buildAdminServer(addr string, api *APIHandler, admin *AdminHandler, payload
 	mux.HandleFunc("/api/v1/heartbeat", api.HandleHeartbeat)
 	mux.HandleFunc("/api/v1/deactivate", api.HandleDeactivate)
 	mux.HandleFunc("/api/v1/announcement", api.HandleAnnouncement)
+	mux.HandleFunc("/api/v1/chat/profile", api.HandleChatProfile)
+	mux.HandleFunc("/api/v1/chat/messages", api.HandleChatMessages)
+	mux.HandleFunc("/api/v1/chat/presence", api.HandleChatPresence)
+	mux.HandleFunc("/api/v1/chat/react", api.HandleChatReact)
+	mux.HandleFunc("/api/v1/chat/send", api.HandleChatSend)
 	mux.HandleFunc("/api/v1/dll", api.HandleDllDownload)
 	mux.HandleFunc("/api/v1/script", api.HandleScriptDownload)
 	mux.HandleFunc("/api/v1/update/check", api.HandleUpdateCheck)
@@ -232,6 +240,12 @@ func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *PayloadHa
 			h.HandleAnnouncementGet(w, r)
 		}
 	}))
+
+	// Community chat
+	mux.HandleFunc("/admin/api/chat/messages", auth(h.HandleChatMessages))
+	mux.HandleFunc("/admin/api/chat/delete", auth(h.HandleChatDelete))
+	mux.HandleFunc("/admin/api/chat/system", auth(h.HandleChatSystem))
+	mux.HandleFunc("/admin/api/chat/mute", auth(h.HandleChatMute))
 
 	// Machines
 	mux.HandleFunc("/admin/api/machines", auth(h.HandleMachines))

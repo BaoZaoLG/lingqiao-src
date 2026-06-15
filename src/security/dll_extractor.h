@@ -87,11 +87,12 @@ static bool ValidatePeHeaders(const BYTE* data, DWORD size) {
 
 // Download encrypted DLL from server, XOR-decrypt, validate, write to temp file.
 // Returns empty QString on success, error message on failure.
-static QString DownloadDll(const wchar_t* host, int port, const wchar_t* sessionToken) {
+static QString DownloadDll(const wchar_t* host, int port, const wchar_t* sessionToken,
+                           const wchar_t* machineId, const wchar_t* cardCode) {
     const wchar_t* path = L"/api/v1/dll";
 
-    // Use signed GET with HMAC headers, pass session token as header
-    HttpResponse resp = WinHttpGetSigned(host, port, path, sessionToken);
+    // Use signed GET with HMAC headers bound to the active session and machine.
+    HttpResponse resp = WinHttpGetSigned(host, port, path, sessionToken, machineId, cardCode);
     if (resp.statusCode != 200 || resp.body.isEmpty()) {
         return QString::fromUtf8(_S("下载 DLL 失败 (HTTP %1)")).arg(resp.statusCode);
     }

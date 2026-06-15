@@ -56,12 +56,15 @@ func TestHandleUpdateCheckReturnsSignedManifestAndRecordsOffered(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	body := []byte(`{"client_version":"6.0.0","channel":"stable","machine_id":"machine-api","card":"card-api","agent_id":"agent-api"}`)
+	cm := NewCardManager(NewJSONStorage(filepath.Join(dir, "cards")))
+	addBoundTestSession(cm, "session-api", "card-api", "machine-api")
+
+	body := []byte(`{"client_version":"6.0.0","channel":"stable","machine_id":"machine-api","card":"card-api","session_token":"session-api","agent_id":"agent-api"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/update/check", bytes.NewReader(body))
 	signPayloadRequest(t, req, body)
 	rr := httptest.NewRecorder()
 
-	NewAPIHandler(nil).HandleUpdateCheck(rr, req)
+	NewAPIHandler(cm).HandleUpdateCheck(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
@@ -140,18 +143,94 @@ func TestHandleUpdatePackageDownloadSupportsRange(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	cm := NewCardManager(NewJSONStorage(filepath.Join(dir, "cards")))
+	addBoundTestSession(cm, "session-range", "card-range", "machine-range")
+
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/update/package/pkg-range", nil)
+	req.Header.Set("X-Session-Token", "session-range")
+	req.Header.Set("X-Machine-ID", "machine-range")
+	req.Header.Set("X-Card-Code", "card-range")
 	req.Header.Set("Range", "bytes=1-3")
 	signGetRequest(t, req)
 	rr := httptest.NewRecorder()
 
-	NewAPIHandler(nil).HandleUpdatePackageDownload(rr, req)
+	NewAPIHandler(cm).HandleUpdatePackageDownload(rr, req)
 
 	if rr.Code != http.StatusPartialContent {
 		t.Fatalf("status = %d, want 206; body=%s", rr.Code, rr.Body.String())
 	}
 	if rr.Body.String() != "bcd" {
 		t.Fatalf("body = %q, want range bcd", rr.Body.String())
+	}
+}
+
+func TestUpdateAPIsRequireBoundSession(t *testing.T) {
+	dir := t.TempDir()
+	restore := useReleaseServiceForTest(t, dir, bytes.Repeat([]byte{7}, releasesvc.ManifestSeedSize))
+	defer restore()
+	svc := currentReleaseService()
+	publishedAt := time.Unix(650, 0).UTC()
+	if err := svc.store.SaveRelease(t.Context(), releasesvc.Release{
+		ID:             "rel-auth",
+		Version:        "7.0.2",
+		Channel:        releasesvc.ChannelStable,
+		Status:         releasesvc.StatusPublished,
+		RolloutPercent: 100,
+		CreatedAt:      publishedAt,
+		PublishedAt:    &publishedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	packagePath := filepath.Join("updates", "setup-auth.bin")
+	if err := os.MkdirAll(filepath.Join(dir, "updates"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, packagePath), []byte("abcdef"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.store.SavePackage(t.Context(), releasesvc.ReleasePackage{
+		ID:        "pkg-auth",
+		ReleaseID: "rel-auth",
+		Kind:      releasesvc.PackageKindBundle,
+		Filename:  "setup-auth.bin",
+		Path:      packagePath,
+		FileSize:  6,
+		SHA256:    "sha-auth",
+		CreatedAt: publishedAt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cm := NewCardManager(NewJSONStorage(filepath.Join(dir, "cards")))
+	addBoundTestSession(cm, "session-auth", "card-auth", "machine-auth")
+	handler := NewAPIHandler(cm)
+
+	checkBody := []byte(`{"client_version":"6.0.0","channel":"stable","machine_id":"machine-auth","card":"card-auth"}`)
+	checkReq := httptest.NewRequest(http.MethodPost, "/api/v1/update/check", bytes.NewReader(checkBody))
+	signPayloadRequest(t, checkReq, checkBody)
+	checkRR := httptest.NewRecorder()
+	handler.HandleUpdateCheck(checkRR, checkReq)
+	if checkRR.Code != http.StatusUnauthorized {
+		t.Fatalf("update check without token status = %d, want 401", checkRR.Code)
+	}
+
+	packageReq := httptest.NewRequest(http.MethodGet, "/api/v1/update/package/pkg-auth", nil)
+	packageReq.Header.Set("X-Machine-ID", "machine-auth")
+	packageReq.Header.Set("X-Card-Code", "card-auth")
+	signGetRequest(t, packageReq)
+	packageRR := httptest.NewRecorder()
+	handler.HandleUpdatePackageDownload(packageRR, packageReq)
+	if packageRR.Code != http.StatusBadRequest {
+		t.Fatalf("package download without token status = %d, want 400", packageRR.Code)
+	}
+
+	mismatchBody := []byte(`{"client_version":"6.0.0","channel":"stable","machine_id":"other-machine","card":"card-auth","session_token":"session-auth"}`)
+	mismatchReq := httptest.NewRequest(http.MethodPost, "/api/v1/update/check", bytes.NewReader(mismatchBody))
+	signPayloadRequest(t, mismatchReq, mismatchBody)
+	mismatchRR := httptest.NewRecorder()
+	handler.HandleUpdateCheck(mismatchRR, mismatchReq)
+	if mismatchRR.Code != http.StatusUnauthorized {
+		t.Fatalf("update check machine mismatch status = %d, want 401", mismatchRR.Code)
 	}
 }
 

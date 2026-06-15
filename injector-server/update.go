@@ -427,22 +427,9 @@ func (h *AdminHandler) HandleUpdateManage(w http.ResponseWriter, r *http.Request
 
 func (h *AdminHandler) HandleUpdateDownload(w http.ResponseWriter, r *http.Request) {
 	clientID := r.Header.Get("X-Client-ID")
-	signature := r.Header.Get("X-HMAC-Signature")
-	timestamp := r.Header.Get("X-Timestamp")
-	nonce := r.Header.Get("X-Nonce")
-	if clientID == "" || signature == "" || timestamp == "" || nonce == "" {
-		log.Printf("[UPDATE] Download rejected: missing auth from %s", getClientIP(r))
-		writeError(w, http.StatusUnauthorized, "missing authentication")
-		return
+	if clientID == "" {
+		clientID = "anonymous"
 	}
-	if err := VerifyHMAC(clientID, r.URL.Path, signature, timestamp, nonce); err != nil {
-		log.Printf("[UPDATE] Download rejected: HMAC failed from %s: %v", getClientIP(r), err)
-		if !h.checkSession(r) {
-			writeError(w, http.StatusUnauthorized, "authentication failed")
-			return
-		}
-	}
-
 	info := getCurrentUpdate()
 
 	if info == nil {

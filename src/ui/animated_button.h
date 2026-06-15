@@ -2,21 +2,15 @@
 // ============================================================================
 // AnimatedButton — QPushButton with natural click feedback
 //
-//   1. Press shrink  — button geometry gently contracts on press
-//   2. Release bounce — overshoots then settles back via spring curve
-//   3. Ripple wave   — soft expanding circle from click point
-//   4. Hover tint    — subtle background brightness shift
+//   1. Ripple wave   — soft expanding circle from click point
+//   2. Hover/pressed tint from stylesheet
 // ============================================================================
 
 #include <QPushButton>
-#include <QPropertyAnimation>
-#include <QSequentialAnimationGroup>
 #include <QPainter>
 #include <QMouseEvent>
-#include <QEasingCurve>
 #include <QVector>
 #include <QColor>
-#include <QRect>
 
 class AnimatedButton : public QPushButton {
     Q_OBJECT
@@ -35,15 +29,11 @@ protected:
     void mousePressEvent(QMouseEvent* e) override {
         if (e->button() == Qt::LeftButton && isEnabled()) {
             addRipple(e->pos());
-            startShrink();
         }
         QPushButton::mousePressEvent(e);
     }
 
     void mouseReleaseEvent(QMouseEvent* e) override {
-        if (e->button() == Qt::LeftButton && isEnabled()) {
-            startBounce();
-        }
         QPushButton::mouseReleaseEvent(e);
     }
 
@@ -95,30 +85,29 @@ private:
     Style m_style;
     QVector<Ripple> m_ripples;
     int m_rippleTimer = 0;
-    bool m_animating = false;
 
     void initStyle() {
         switch (m_style) {
         case PrimaryStyle:
             setStyleSheet(
-                "QPushButton { background: rgba(40,60,100,0.45); "
-                "border: 1px solid rgba(74,158,255,0.25); color: #d8e4f8; "
+                "QPushButton { background: rgba(74,158,255,0.85); "
+                "border: 1px solid rgba(74,158,255,0.60); color: #ffffff; "
                 "font-weight: 600; letter-spacing: 0.5px; border-radius: 8px; padding: 9px 18px; }"
-                "QPushButton:hover { background: rgba(50,75,120,0.55); "
-                "border-color: rgba(74,158,255,0.40); }"
-                "QPushButton:pressed { background: rgba(30,45,80,0.55); "
-                "border-color: rgba(74,158,255,0.20); }"
-                "QPushButton:disabled { background: rgba(30,40,65,0.30); "
-                "border-color: rgba(60,80,110,0.15); color: rgba(216,228,248,0.35); }");
+                "QPushButton:hover { background: rgba(109,179,255,0.90); "
+                "border-color: rgba(74,158,255,0.80); }"
+                "QPushButton:pressed { background: rgba(59,130,246,0.90); "
+                "border-color: rgba(74,158,255,0.70); }"
+                "QPushButton:disabled { background: rgba(74,158,255,0.40); "
+                "border-color: rgba(74,158,255,0.30); color: rgba(255,255,255,0.55); }");
             break;
         case GhostStyle:
             setStyleSheet(
                 "QPushButton { background: transparent; "
-                "border: 1px solid rgba(80,100,140,0.30); border-radius: 8px; padding: 9px 18px; }"
-                "QPushButton:hover { background: rgba(30,40,60,0.45); "
-                "border-color: rgba(100,120,160,0.45); }"
-                "QPushButton:pressed { background: rgba(18,24,36,0.55); }"
-                "QPushButton:disabled { color: #6b7a95; border-color: rgba(60,80,110,0.20); }");
+                "border: 1px solid rgba(200,200,210,0.50); border-radius: 8px; padding: 9px 18px; color: #1a1a2e; }"
+                "QPushButton:hover { background: rgba(240,240,245,0.60); "
+                "border-color: rgba(180,180,190,0.60); }"
+                "QPushButton:pressed { background: rgba(230,230,240,0.90); }"
+                "QPushButton:disabled { color: #94a3b8; border-color: rgba(220,220,230,0.30); }");
             break;
         default:
             break;
@@ -131,68 +120,4 @@ private:
             m_rippleTimer = startTimer(16);
     }
 
-    // --- geometry-based press/bounce (no pixmap, no effects) ---
-
-    QRect baseRect() const {
-        // The "intended" rect when not animating
-        QWidget* p = parentWidget();
-        if (!p) return geometry();
-        // We store base rect in a property on first shrink
-        return property("_ab_base").toRect();
-    }
-
-    void storeBase() {
-        if (property("_ab_base").isNull())
-            setProperty("_ab_base", geometry());
-    }
-
-    void startShrink() {
-        if (m_animating) return;
-        m_animating = true;
-        storeBase();
-
-        QRect r = property("_ab_base").toRect();
-        int dx = (int)(r.width()  * 0.03);
-        int dy = (int)(r.height() * 0.03);
-        QRect shrunk(r.x() + dx, r.y() + dy, r.width() - dx * 2, r.height() - dy * 2);
-
-        auto* anim = new QPropertyAnimation(this, "geometry", this);
-        anim->setDuration(80);
-        anim->setStartValue(r);
-        anim->setEndValue(shrunk);
-        anim->setEasingCurve(QEasingCurve::InQuad);
-        anim->start(QAbstractAnimation::DeleteWhenStopped);
-    }
-
-    void startBounce() {
-        QRect base = property("_ab_base").toRect();
-        QRect cur  = geometry();
-        m_animating = false;
-
-        int dx = (int)(base.width()  * 0.015);
-        int dy = (int)(base.height() * 0.015);
-        QRect expanded(base.x() - dx, base.y() - dy,
-                       base.width() + dx * 2, base.height() + dy * 2);
-
-        auto* seq = new QSequentialAnimationGroup(this);
-
-        auto* grow = new QPropertyAnimation(this, "geometry", seq);
-        grow->setDuration(120);
-        grow->setStartValue(cur);
-        grow->setEndValue(expanded);
-        grow->setEasingCurve(QEasingCurve::OutBack);
-
-        auto* settle = new QPropertyAnimation(this, "geometry", seq);
-        settle->setDuration(100);
-        settle->setStartValue(expanded);
-        settle->setEndValue(base);
-        settle->setEasingCurve(QEasingCurve::OutQuad);
-
-        seq->addAnimation(grow);
-        seq->addAnimation(settle);
-        connect(seq, &QSequentialAnimationGroup::finished, this, [this]() {
-            m_animating = false;
-        });
-        seq->start(QAbstractAnimation::DeleteWhenStopped);
-    }
 };

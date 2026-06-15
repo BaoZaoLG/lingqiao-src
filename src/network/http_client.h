@@ -39,6 +39,15 @@ static void ConfigurePinnedInternalRequest(HINTERNET hRequest, DWORD resolveMs, 
     WinHttpSetTimeouts(hRequest, resolveMs, connectMs, sendMs, receiveMs);
 }
 
+static void ConfigureInternalRequest(HINTERNET hRequest, bool secure, DWORD resolveMs, DWORD connectMs,
+                                     DWORD sendMs, DWORD receiveMs) {
+    if (secure) {
+        ConfigurePinnedInternalRequest(hRequest, resolveMs, connectMs, sendMs, receiveMs);
+    } else {
+        WinHttpSetTimeouts(hRequest, resolveMs, connectMs, sendMs, receiveMs);
+    }
+}
+
 static void ReadResponseBody(HINTERNET hRequest, QByteArray* body) {
     char buf[4096];
     DWORD bytesRead = 0;
@@ -136,7 +145,9 @@ static HttpResponse WinHttpGet(const wchar_t* host, int port, const wchar_t* pat
 
 // Signed HTTPS GET with HMAC headers (for authenticated downloads like DLL)
 static HttpResponse WinHttpGetSigned(const wchar_t* host, int port, const wchar_t* path,
-                                     const wchar_t* sessionToken = nullptr)
+                                     const wchar_t* sessionToken = nullptr,
+                                     const wchar_t* machineId = nullptr,
+                                     const wchar_t* cardCode = nullptr)
 {
     HttpResponse result = {0, QByteArray()};
     WinHttpHandle hSession(WinHttpOpen(_WS(L"CefBridge/2.0"),
@@ -157,13 +168,21 @@ static HttpResponse WinHttpGetSigned(const wchar_t* host, int port, const wchar_
     HmacSha256Signed((const char*)HMAC_KEY, 32,
                      tsBuf, nonceHex, pathUtf8Buf.constData(), (DWORD)(pathUtf8Len - 1), sig, &sigLen);
     char sigHex[65]; ByteToHex(sig, sigLen, sigHex);
-    wchar_t authHeaders[640];
+    wchar_t authHeaders[1280];
     int off = swprintf_s(authHeaders, sizeof(authHeaders)/sizeof(wchar_t),
         L"X-Client-ID: %s\r\nX-HMAC-Signature: %S\r\nX-Timestamp: %S\r\nX-Nonce: %S\r\n",
         CLIENT_ID, sigHex, tsBuf, nonceHex);
     if (sessionToken && sessionToken[0]) {
-        swprintf_s(authHeaders + off, (sizeof(authHeaders)/sizeof(wchar_t)) - off,
+        off += swprintf_s(authHeaders + off, (sizeof(authHeaders)/sizeof(wchar_t)) - off,
             L"X-Session-Token: %s\r\n", sessionToken);
+    }
+    if (machineId && machineId[0]) {
+        off += swprintf_s(authHeaders + off, (sizeof(authHeaders)/sizeof(wchar_t)) - off,
+            L"X-Machine-ID: %s\r\n", machineId);
+    }
+    if (cardCode && cardCode[0]) {
+        swprintf_s(authHeaders + off, (sizeof(authHeaders)/sizeof(wchar_t)) - off,
+            L"X-Card-Code: %s\r\n", cardCode);
     }
     WinHttpAddRequestHeaders(hRequest.get(), authHeaders, (DWORD)wcslen(authHeaders), WINHTTP_ADDREQ_FLAG_ADD);
 
@@ -230,7 +249,11 @@ static HttpResponse HttpGetBearer(const wchar_t* host, const wchar_t* path, cons
 
 // Download a file from the server, save to localPath. Returns empty string on success, error message on failure.
 static QString HttpDownloadFile(const wchar_t* host, int port, const wchar_t* path,
-                                const wchar_t* localPath, std::function<void(qint64 bytesRead, qint64 total)> progressCb)
+                                const wchar_t* localPath, std::function<void(qint64 bytesRead, qint64 total)> progressCb,
+                                bool secure = true,
+                                const wchar_t* sessionToken = nullptr,
+                                const wchar_t* machineId = nullptr,
+                                const wchar_t* cardCode = nullptr)
 {
     WinHttpHandle hSession(WinHttpOpen(_WS(L"CefBridge/2.0"),
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0));
@@ -239,7 +262,8 @@ static QString HttpDownloadFile(const wchar_t* host, int port, const wchar_t* pa
     WinHttpHandle hConnect(WinHttpConnect(hSession.get(), host, (INTERNET_PORT)port, 0));
     if (!hConnect) return QString::fromUtf8(_S("连接服务器失败"));
 
-    WinHttpHandle hRequest(WinHttpOpenRequest(hConnect.get(), L"GET", path, NULL, NULL, NULL, WINHTTP_FLAG_SECURE));
+    WinHttpHandle hRequest(WinHttpOpenRequest(hConnect.get(), L"GET", path, NULL, NULL, NULL,
+        secure ? WINHTTP_FLAG_SECURE : 0));
     if (!hRequest) return QString::fromUtf8(_S("创建请求失败"));
 
     // Add HMAC headers for authentication (sign timestamp+nonce+path for GET requests)
@@ -252,13 +276,25 @@ static QString HttpDownloadFile(const wchar_t* host, int port, const wchar_t* pa
     HmacSha256Signed((const char*)HMAC_KEY, 32,
                      tsBuf, nonceHex, pathUtf8Buf2.constData(), (DWORD)(pathUtf8Len2 - 1), sig, &sigLen);
     char sigHex[65]; ByteToHex(sig, sigLen, sigHex);
-    wchar_t authHeaders[512];
-    swprintf_s(authHeaders, sizeof(authHeaders)/sizeof(wchar_t),
+    wchar_t authHeaders[1280];
+    int off = swprintf_s(authHeaders, sizeof(authHeaders)/sizeof(wchar_t),
         L"X-Client-ID: %s\r\nX-HMAC-Signature: %S\r\nX-Timestamp: %S\r\nX-Nonce: %S\r\n",
         CLIENT_ID, sigHex, tsBuf, nonceHex);
+    if (sessionToken && sessionToken[0]) {
+        off += swprintf_s(authHeaders + off, (sizeof(authHeaders)/sizeof(wchar_t)) - off,
+            L"X-Session-Token: %s\r\n", sessionToken);
+    }
+    if (machineId && machineId[0]) {
+        off += swprintf_s(authHeaders + off, (sizeof(authHeaders)/sizeof(wchar_t)) - off,
+            L"X-Machine-ID: %s\r\n", machineId);
+    }
+    if (cardCode && cardCode[0]) {
+        swprintf_s(authHeaders + off, (sizeof(authHeaders)/sizeof(wchar_t)) - off,
+            L"X-Card-Code: %s\r\n", cardCode);
+    }
     WinHttpAddRequestHeaders(hRequest.get(), authHeaders, (DWORD)wcslen(authHeaders), WINHTTP_ADDREQ_FLAG_ADD);
 
-    ConfigurePinnedInternalRequest(hRequest.get(), 30000, 30000, 60000, 300000);
+    ConfigureInternalRequest(hRequest.get(), secure, 30000, 30000, 60000, 300000);
 
     if (!WinHttpSendRequest(hRequest.get(), NULL, 0, NULL, 0, 0, 0)) {
         DWORD e = GetLastError();
@@ -270,7 +306,7 @@ static QString HttpDownloadFile(const wchar_t* host, int port, const wchar_t* pa
         return (e == ERROR_WINHTTP_TIMEOUT) ? QString::fromUtf8(_S("接收响应超时"))
             : QString::fromUtf8(_S("接收响应失败 (错误: %1)")).arg(e);
     }
-    if (!VerifyServerCert(hRequest.get())) {
+    if (secure && !VerifyServerCert(hRequest.get())) {
         return QString::fromUtf8(_S("证书验证失败"));
     }
 

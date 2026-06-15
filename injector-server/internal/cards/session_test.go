@@ -11,7 +11,7 @@ func fixedSessionService(now time.Time) *SessionService {
 
 func TestSessionServiceActivateRejectsMachineMismatch(t *testing.T) {
 	service := fixedSessionService(time.Now())
-	card := Card{Code: "ABC", MachineID: "machine-1", Status: StatusActive, ExpiresAt: time.Now().Add(time.Hour)}
+	card := Card{Code: "ABC", MachineID: "machine-1", Status: StatusActive, MaxSessions: 1, ExpiresAt: time.Now().Add(time.Hour)}
 
 	_, _, err := service.Activate(ActivationInput{
 		Card:      card,
@@ -19,6 +19,27 @@ func TestSessionServiceActivateRejectsMachineMismatch(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Activate should reject card bound to another machine")
+	}
+}
+
+func TestSessionServiceActivateAllowsMultipleMachinesUpToMaxSessions(t *testing.T) {
+	now := time.Date(2026, 6, 11, 22, 30, 0, 0, time.UTC)
+	service := fixedSessionService(now)
+	card := Card{Code: "ABC", MachineID: "machine-1", Status: StatusActive, MaxSessions: 6, ExpiresAt: now.Add(time.Hour)}
+
+	_, session, err := service.Activate(ActivationInput{
+		Card:      card,
+		Token:     "token-2",
+		MachineID: "machine-2",
+		ActiveSessions: []Session{
+			{CardCode: "ABC", MachineID: "machine-1", ExpiresAt: now.Add(time.Hour)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Activate should allow another machine below max sessions: %v", err)
+	}
+	if session.MachineID != "machine-2" {
+		t.Fatalf("MachineID = %q, want machine-2", session.MachineID)
 	}
 }
 

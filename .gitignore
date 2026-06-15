@@ -1,7 +1,7 @@
+# ============================================================
 # Build output
-build/
-build-codex/
-build-hook-log/
+# ============================================================
+build*/
 src/Release/
 *.obj
 *.pdb
@@ -9,7 +9,7 @@ src/Release/
 *.exp
 *.lib
 
-# CMake generated
+# CMake
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
@@ -20,31 +20,31 @@ cmake_install.cmake
 *_autogen/
 Win32/
 
-# Generated headers (regenerated during build)
-src/dll_payload.h
-src/encrypted_data.h
-src/padding_data.h
-src/version.rc
+# Auto-generated headers (regenerated during build)
+src/generated/dll_payload.h
+src/generated/encrypted_data.h
+src/generated/padding_data.h
+src/generated/version.rc
 
-# Server data & secrets — NEVER commit
-server/data/
-server/bin/
-server/server.exe
+# ============================================================
+# Go server — runtime data & secrets (NEVER commit)
+# ============================================================
 injector-server/data/
 injector-server/certs/
 injector-server/server.log
-injector-server/injector-server
-injector-server/lingqiao-server.exe
-injector-server/lingqiao-server-*
 injector-server/.gocache/
-certs/
+injector-server/injector-server
+injector-server/lingqiao-server*
 *.log
 
-# Package managers
-node_modules/
+# ============================================================
+# Frontend build
+# ============================================================
 injector-server/web/node_modules/
 
-# Qt deployment
+# ============================================================
+# Qt deployment artifacts
+# ============================================================
 src/*.dll
 src/*.exe
 src/platforms/
@@ -53,7 +53,9 @@ src/styles/
 src/translations/
 src/qt.conf
 
-# IDE
+# ============================================================
+# IDE & OS
+# ============================================================
 .vs/
 .vscode/
 .claude/
@@ -62,17 +64,17 @@ src/qt.conf
 *.ncb
 *.sdf
 *.opensdf
-
-# OS
 Thumbs.db
 Desktop.ini
 .DS_Store
 
-# Backup files
+# ============================================================
+# Temp
+# ============================================================
 *.bak
 *.orig
-
-# Archives
+*.tmp
 *.zip
 *.7z
 *.rar
+certs/

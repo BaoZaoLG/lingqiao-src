@@ -12,7 +12,7 @@
 #include <QPaintEvent>
 #include <QTimer>
 #include "theme.h"
-#include "../config.h"
+#include "config.h"
 #include <QVariant>
 
 // ============================================================================
@@ -185,7 +185,7 @@ signals:
 protected:
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
-        p.fillRect(rect(), QColor(255, 255, 255, 1));
+        p.fillRect(rect(), QColor(255, 255, 255, 20));
     }
 
 private:

@@ -75,7 +75,104 @@
         s.remove("card_code");
     }
 
+    static void queuePendingDeactivation(const QString& token, const QString& mid) {
+        QString fp = GetMachineFingerprint();
+        if (token.isEmpty() || mid.isEmpty() || fp.isEmpty()) return;
+        QSettings s(_S("LingQiao"), _S("Injector"));
+        QStringList tokens = s.value("pending_deactivate_tokens").toStringList();
+        QStringList machines = s.value("pending_deactivate_machines").toStringList();
+        if (!tokens.contains(xorEncrypt(token, fp))) {
+            tokens.append(xorEncrypt(token, fp));
+            machines.append(mid);
+            s.setValue("pending_deactivate_tokens", tokens);
+            s.setValue("pending_deactivate_machines", machines);
+        }
+    }
+
+    void flushPendingDeactivations() {
+        QString fp = GetMachineFingerprint();
+        if (fp.isEmpty()) return;
+        QSettings s(_S("LingQiao"), _S("Injector"));
+        QStringList tokens = s.value("pending_deactivate_tokens").toStringList();
+        QStringList machines = s.value("pending_deactivate_machines").toStringList();
+        if (tokens.isEmpty() || tokens.size() != machines.size()) {
+            s.remove("pending_deactivate_tokens");
+            s.remove("pending_deactivate_machines");
+            return;
+        }
+        QtConcurrent::run([tokens, machines, fp]() {
+            QStringList keepTokens;
+            QStringList keepMachines;
+            for (int i = 0; i < tokens.size(); ++i) {
+                QString token = xorDecrypt(tokens[i], fp);
+                QString mid = machines[i];
+                if (token.isEmpty() || mid.isEmpty()) continue;
+                QJsonObject req;
+                req["client_id"] = QString::fromWCharArray(CLIENT_ID);
+                req["session_token"] = token;
+                req["machine_id"] = mid;
+                QByteArray body = QJsonDocument(req).toJson(QJsonDocument::Compact);
+                HttpResponse resp = HttpPostJson(SERVER_HOST, SERVER_PORT, g_pathDeact, body);
+                if (resp.statusCode == 0 || resp.statusCode >= 500) {
+                    keepTokens.append(tokens[i]);
+                    keepMachines.append(mid);
+                }
+            }
+            QSettings out(_S("LingQiao"), _S("Injector"));
+            if (keepTokens.isEmpty()) {
+                out.remove("pending_deactivate_tokens");
+                out.remove("pending_deactivate_machines");
+            } else {
+                out.setValue("pending_deactivate_tokens", keepTokens);
+                out.setValue("pending_deactivate_machines", keepMachines);
+            }
+        });
+    }
+
+    void deactivateSessionOnServer(const QString& token, const QString& mid) {
+        if (token.isEmpty() || mid.isEmpty()) return;
+        QtConcurrent::run([token, mid]() {
+            QJsonObject req;
+            req["client_id"] = QString::fromWCharArray(CLIENT_ID);
+            req["session_token"] = token;
+            req["machine_id"] = mid;
+            QByteArray body = QJsonDocument(req).toJson(QJsonDocument::Compact);
+            HttpResponse resp = HttpPostJson(SERVER_HOST, SERVER_PORT, g_pathDeact, body);
+            if (resp.statusCode == 0 || resp.statusCode >= 500) {
+                queuePendingDeactivation(token, mid);
+            }
+        });
+    }
+
+    void resetToInactiveState(const QString& reason, const QString& statusText,
+                              bool notifyServer = false,
+                              const QString& tokenOverride = QString(),
+                              const QString& midOverride = QString(),
+                              const QString& statusState = QStringLiteral("error")) {
+        QString token = tokenOverride.isEmpty() ? m_sessionToken : tokenOverride;
+        QString mid = midOverride.isEmpty() ? m_machineID : midOverride;
+        if (notifyServer) deactivateSessionOnServer(token, mid);
+
+        logEvent("SESSION", reason);
+        m_sessionToken.clear();
+        m_machineID.clear();
+        m_cardExpiresAt = 0;
+        m_heartbeatFailCount = 0;
+        m_heartbeatInProgress = false;
+        SetEnvironmentVariableW(L"INJECTOR_SESSION_TOKEN", NULL);
+        clearSavedSession();
+        if (m_cardInput) m_cardInput->clear();
+        clearExpiryStatus();
+        if (m_balanceLabel) m_balanceLabel->setVisible(false);
+        stopChatPolling();
+        setUiLocked(true);
+        updateTrayIcon();
+        setConnDot("error");
+        if (!statusText.isEmpty()) setStatus(statusState, statusText);
+    }
+
     bool tryRestoreSession() {
+        flushPendingDeactivations();
         QSettings s(_S("LingQiao"), _S("Injector"));
         QString encToken = s.value("session_token").toString();
         QString mid = s.value("machine_id").toString();
@@ -93,7 +190,9 @@
         if (token.isEmpty() || mid.isEmpty()) return false;
         // Check if card already expired
         if (exp > 0 && exp < QDateTime::currentSecsSinceEpoch()) {
-            clearSavedSession();
+            resetToInactiveState("Saved session expired before restore",
+                QString::fromUtf8(_S("卡密已过期，请输入新卡密")),
+                true, token, mid);
             return false;
         }
 
@@ -126,17 +225,24 @@
                     } else {
                     QJsonObject obj = doc.object();
                     if (obj["status"].toString() == "ok") {
+                        qint64 restoredExp = (qint64)obj["card_expires_at"].toDouble();
+                        if (restoredExp > 0 && restoredExp <= QDateTime::currentSecsSinceEpoch()) {
+                            safeThis->resetToInactiveState("Restored heartbeat returned expired card",
+                                QString::fromUtf8(_S("卡密已过期，请输入新卡密")),
+                                true, hbToken, hbMid);
+                            return;
+                        }
                         safeThis->m_activated = true;
-                        safeThis->m_cardExpiresAt = (qint64)obj["card_expires_at"].toDouble();
+                        safeThis->m_cardExpiresAt = restoredExp;
                         safeThis->setUiLocked(false);
                         safeThis->setConnDot("ok");
                         safeThis->downloadDllAsync();
                         safeThis->fetchBalance();
+                        safeThis->startChatPolling();
                         safeThis->CheckEnterpriseUpdateAsync();
                         if (safeThis->m_cardExpiresAt > 0) {
-                            safeThis->m_cardExpiry->setText(QString::fromUtf8(_S("到期: %1"))
+                            safeThis->setExpiryStatus(QString::fromUtf8(_S("到期：%1"))
                                 .arg(QDateTime::fromSecsSinceEpoch(safeThis->m_cardExpiresAt).toString("yyyy-MM-dd hh:mm")));
-                            safeThis->m_cardExpiry->setVisible(true);
                         }
                         safeThis->updateTrayIcon();
                         safeThis->logEvent("SESSION", "Session restored via heartbeat");
@@ -145,11 +251,9 @@
                     }
                 }
                 // Heartbeat failed — clear saved session, user needs to re-activate
-                safeThis->logEvent("SESSION", "Heartbeat failed during async restore");
-                safeThis->clearSavedSession();
-                safeThis->m_sessionToken.clear();
-                safeThis->m_machineID.clear();
-                safeThis->m_activated = false;
+                safeThis->resetToInactiveState("Heartbeat failed during async restore",
+                    QString::fromUtf8(_S("会话已失效，请输入新卡密")),
+                    true, hbToken, hbMid);
             }, Qt::QueuedConnection);
         });
         return true; // token was valid enough to attempt restore
@@ -163,42 +267,20 @@
 
         if (remaining <= 0) {
             // Card expired — force deactivate
-            logEvent("EXPIRY", "Card expired, forcing deactivation");
-            setStatus("error", QString::fromUtf8(_S("卡密已过期，请续费")));
-            if (!m_sessionToken.isEmpty() && !m_machineID.isEmpty()) {
-                QtConcurrent::run([token = m_sessionToken, mid = m_machineID]() {
-                    QJsonObject req;
-                    req["client_id"] = QString::fromWCharArray(CLIENT_ID);
-                    req["session_token"] = token;
-                    req["machine_id"] = mid;
-                    QByteArray body = QJsonDocument(req).toJson(QJsonDocument::Compact);
-                    HttpPostJson(SERVER_HOST, SERVER_PORT, g_pathDeact, body);
-                });
-            }
-            m_sessionToken.clear();
-            m_machineID.clear();
-            m_activated = false;
-            m_cardExpiresAt = 0;
-            clearSavedSession();
-            updateTrayIcon();
             playSound("error");
-            showTrayMessage(QString::fromUtf8(_S("灵桥")), QString::fromUtf8(_S("卡密已过期，请续费")));
-            setUiLocked(true);
-            setConnDot("error");
+            resetToInactiveState("Card expired, forcing deactivation",
+                QString::fromUtf8(_S("卡密已过期，请输入新卡密")),
+                true);
         } else if (remaining <= 3600) {
             // Less than 1 hour
             int min = (int)(remaining / 60);
-            m_cardExpiry->setText(QString::fromUtf8(_S("⚠ 即将到期: %1 分钟")).arg(min));
-            m_cardExpiry->setStyleSheet("font-size: 11px; padding-left: 2px; background: transparent; color: #f56565;");
-            m_cardExpiry->setVisible(true);
+            setExpiryStatus(QString::fromUtf8(_S("即将到期：%1 分钟")).arg(min), QStringLiteral("danger"));
         } else if (remaining <= 86400) {
             // Less than 24 hours
             int hr = (int)(remaining / 3600);
-            m_cardExpiry->setText(QString::fromUtf8(_S("到期: %1 (%2 小时后)"))
+            setExpiryStatus(QString::fromUtf8(_S("到期：%1（%2 小时后）"))
                 .arg(QDateTime::fromSecsSinceEpoch(m_cardExpiresAt).toString("yyyy-MM-dd hh:mm"))
-                .arg(hr));
-            m_cardExpiry->setStyleSheet("font-size: 11px; padding-left: 2px; background: transparent; color: #fbbf3a;");
-            m_cardExpiry->setVisible(true);
+                .arg(hr), QStringLiteral("warn"));
         }
     }
 
@@ -218,6 +300,7 @@
         m_trayIcon->setIcon(appIcon);
         QApplication::setWindowIcon(appIcon);
         m_trayMenu = new QMenu(this);
+        m_trayMenu->setStyleSheet(POPUP_CSS);
         m_trayMenu->addAction(QString::fromUtf8(_S("显示窗口")), this, [this]() {
             showNormal(); activateWindow(); raise();
         });
@@ -302,8 +385,6 @@
                 // Check if card input is empty or different
                 if (m_cardInput->text().trimmed() != clip) {
                     m_cardInput->setText(clip);
-                    showTrayMessage(QString::fromUtf8(_S("灵桥")),
-                        QString::fromUtf8(_S("已从剪贴板检测到卡密: %1")).arg(clip));
                     playSound("info");
                     logEvent("CLIPBOARD", "Detected card code: " + maskCard(clip));
                 }

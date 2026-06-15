@@ -115,23 +115,24 @@ public slots:
                 emit heartbeatOk(exp);
             } else emit heartbeatFail();
         } else if (resp.statusCode == 401) {
-            // Session expired or invalid — trigger re-auth
-            emit heartbeatFail();
+            // Session expired or invalid.
+            emit heartbeatRejected(QString::fromUtf8(_S("会话已失效")));
         } else if (resp.statusCode == 403) {
             QJsonParseError parseError{};
             QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
             QJsonObject obj = (parseError.error == QJsonParseError::NoError && doc.isObject())
                 ? doc.object() : QJsonObject();
-            QString errMsg = obj["message"].toString();
+            QString errMsg = obj["message"].toString(QString::fromUtf8(_S("卡密无效或已过期")));
             if (errMsg.contains(QString::fromUtf8(_S("版本过低"))))
                 emit versionRejected(errMsg, obj["download_url"].toString(), obj["sha256"].toString());
             else
-                emit heartbeatFail();
+                emit heartbeatRejected(errMsg);
         } else emit heartbeatFail();
     }
 signals:
     void heartbeatOk(qint64 cardExpiresAt);
     void heartbeatFail();
+    void heartbeatRejected(const QString& message);
     void versionRejected(const QString& message, const QString& downloadURL, const QString& sha256);
     void updateAvailable(const QString& latestVersion, const QString& downloadURL, bool forceUpdate, const QString& sha256);
 };

@@ -3,11 +3,12 @@
  * Injected by CefHook.dll on every page load.
  *
  * Answering modes:
+ *   Tab          — Toggle answering on/off
  *   F2           — Answer current question
- *   F3           — Toggle batch mode (auto-advance)
+ *   F3           — Toggle cursor feedback (loading spinner)
  *   F4           — Toggle AI model
  *   Middle-click — Fetch answer, middle-click again to fill
- *   Ctrl+C       — Copy question to fetch answer, left-click blank area to fill
+ *   Ctrl+C       — Copy question to fetch answer, middle-click to fill
  *   Escape       — Cancel pending middle-click / clipboard operation
  *
  * API Key is read from window.__DEEPSEEK_API_KEY (set by CefHook.dll from INJECTOR_API_KEY env var).
@@ -15,20 +16,48 @@
 (function() {
     'use strict';
 
+    /* Silence all console output */
+    console.log = console.warn = console.error = console.info = console.debug = function(){};
+
     /* ================================================================
      * Constants & In-memory State
      * ================================================================ */
 
     var API_URL = 'https://api.deepseek.com/chat/completions';
     var MODELS   = ['deepseek-v4-pro', 'deepseek-v4-flash'];
+    var CURSOR_FEEDBACK_STORAGE_KEY = '__autoExamCursorFeedback';
 
     var config = {
-        model:      MODELS[0],
-        autoNext:   true,
-        batchDelay: 2000
+        model:      MODELS[0]
     };
 
-    var batchMode = false;
+    var enabled = true;
+    var cursorFeedback = loadCursorFeedbackPreference();
+    var cursorStyleEl = null;
+
+    function loadCursorFeedbackPreference() {
+        try {
+            var saved = sessionStorage.getItem(CURSOR_FEEDBACK_STORAGE_KEY);
+            if (saved === '0') return false;
+            if (saved === '1') return true;
+        } catch(e) {}
+        return true;
+    }
+
+    function saveCursorFeedbackPreference(value) {
+        try {
+            sessionStorage.setItem(CURSOR_FEEDBACK_STORAGE_KEY, value ? '1' : '0');
+        } catch(e) {}
+    }
+
+    function ensureCursorStyle() {
+        if (!cursorStyleEl) {
+            cursorStyleEl = document.createElement('style');
+            cursorStyleEl.id = '__cefCursorFeedback';
+            document.head.appendChild(cursorStyleEl);
+        }
+        return cursorStyleEl;
+    }
 
     function getApiKey() {
         if (typeof window.__DEEPSEEK_API_KEY === 'string' && window.__DEEPSEEK_API_KEY)
@@ -136,11 +165,11 @@
         if (typeNum === -1 && typeName) {
             // 关键词模糊匹配：兼容平台题型名称变体（如"选择题"→"单选题"、"分析题"→"论述题"、"选填题"→"填空题"等）
             var TYPE_KEYWORDS = [
-                { pattern: /单选|单项选择|单选选择/,                              type: 0 },
-                { pattern: /多选|多项选择|复选|多选选择/,                          type: 1 },
-                { pattern: /填空|选填|完形填空|补全/,                              type: 2 },
-                { pattern: /判断|对错|是非|正误/,                                 type: 3 },
-                { pattern: /简答|论述|分析|问答|名词解释|阅读理解|案例分析|综合|输入|主观/, type: 4 }
+                { pattern: /单选|单项选择|单选选择/,                                      type: 0 },
+                { pattern: /多选|多项选择|复选|多选选择|共用选项|选做/,                      type: 1 },
+                { pattern: /填空|填框|填充|填入|选填|选词填空|完型填空|完形填空|补全/,          type: 2 },
+                { pattern: /判断|对错|是非|正误/,                                         type: 3 },
+                { pattern: /简答|论述|分析|问答|名词解释|阅读理解|案例分析|综合|输入|主观|程序|代码|编程|计算|分录|听力|口语|测评|写作|其它|其他|连线|排序/, type: 4 }
             ];
             var _matched = false;
             for (var _k = 0; _k < TYPE_KEYWORDS.length; _k++) {
@@ -243,7 +272,8 @@
             return p;
 
         case 4:
-            return '【简答题】' + question.text + '\n\n请简洁、专业地回答上述问题。直接输出答案，不需要解释。';
+            return '【' + (question.typeName || '简答题') + '】' + question.text +
+                '\n\n请简洁、专业地回答上述问题。直接输出答案，不需要解释。';
 
         default:
             return question.text;
@@ -497,31 +527,18 @@
         });
     }
 
-    /* ================================================================
-     * Navigation
-     * ================================================================ */
 
-    function hasNextQuestion() {
-        return !!document.querySelector('a.jb_btn[onclick*="getTheNextQuestion(1)"]');
-    }
-
-    function goToNextQuestion() {
-        if (!hasNextQuestion()) return false;
-        try {
-            if (typeof getTheNextQuestion === 'function') {
-                getTheNextQuestion(1); return true;
-            }
-        } catch(e) {}
-        var btn = document.querySelector('a.jb_btn[onclick*="getTheNextQuestion(1)"]');
-        if (btn) { btn.click(); return true; }
-        return false;
-    }
 
     /* ================================================================
-     * Core Logic — F2 / F3 / F4
+     * Core Logic — F2 / F4 / Tab
      * ================================================================ */
 
     function go() {
+        if (!enabled) {
+            console.warn('[AutoExam] Disabled — press Tab to enable');
+            return;
+        }
+
         var apiKey = getApiKey();
         if (!apiKey) {
             console.error('[AutoExam] API Key not set — the injector must provide INJECTOR_API_KEY');
@@ -549,9 +566,6 @@
                 var ansDisplay = cached.type === 'multi' ? cached.answer.join(',') :
                     (cached.type === 'blank' ? cached.answer.join(' | ') : cached.answer);
                 console.log('[AutoExam] Done #' + info.current + ' (cached) → ' + String(ansDisplay).substring(0, 30));
-                if (config.autoNext && hasNextQuestion() && batchMode) {
-                    setTimeout(function() { if (batchMode) goToNextQuestion(); }, config.batchDelay);
-                }
             });
             return;
         }
@@ -569,25 +583,10 @@
                 var ansDisplay = answer.type === 'multi'  ? answer.answer.join(',') :
                                 (answer.type === 'blank' ? answer.answer.join(' | ') : answer.answer);
                 console.log('[AutoExam] Done #' + info.current + ' → ' + String(ansDisplay).substring(0, 30));
-
-                if (config.autoNext && hasNextQuestion() && batchMode) {
-                    setTimeout(function() {
-                        if (batchMode) goToNextQuestion();
-                    }, config.batchDelay);
-                }
             });
         }).catch(function(err) {
             console.error('[AutoExam] API error:', (err.message || 'request failed'));
         });
-    }
-
-    function toggleBatch() {
-        batchMode = !batchMode;
-        console.log('[AutoExam] Batch mode:', batchMode ? 'ON' : 'OFF');
-
-        if (batchMode) {
-            go();
-        }
     }
 
     function toggleModel() {
@@ -596,18 +595,36 @@
         console.log('[AutoExam] Model switched to:', config.model);
     }
 
+    function toggleEnabled() {
+        enabled = !enabled;
+        console.log('[AutoExam] ' + (enabled ? 'Enabled' : 'Disabled'));
+    }
+
+    function toggleCursorFeedback() {
+        cursorFeedback = !cursorFeedback;
+        saveCursorFeedbackPreference(cursorFeedback);
+        if (cursorFeedback) {
+            if (middleBtnState === 'loading' || clipboardState === 'loading') {
+                setCursorLoading();
+            }
+        } else {
+            clearCursorLoading();
+        }
+        console.log('[AutoExam] Cursor feedback: ' + (cursorFeedback ? 'ON' : 'OFF'));
+    }
+
     /* ================================================================
      * Middle-click & Clipboard Answering
      *
      * Mode A — Middle-click:
      *   1. Click middle button on exam page → fetch answer
-     *   2. Cursor changes to pointer when ready
+     *   2. Cursor changes to wait when loading, back to normal when ready
      *   3. Click middle button again → fill answer
      *
      * Mode B — Clipboard (Ctrl+C):
      *   1. Select + copy question text → fetch answer (with type prefix support)
-     *   2. Cursor changes to pointer when ready
-     *   3. Left-click blank area below textarea → fill answer
+     *   2. Cursor changes to wait when loading, back to normal when ready
+     *   3. Middle-click → fill answer (shared with Mode A, no conflict)
      * ================================================================ */
 
     var middleBtnState    = 'idle';   // idle | loading | ready
@@ -619,15 +636,15 @@
         middleBtnState    = 'idle';
         clipboardState    = 'idle';
         pendingAnswerData = null;
-        document.body.style.cursor = '';
+        clearCursorLoading();
     }
 
     function setCursorLoading() {
-        document.body.style.cursor = 'wait';
+        if (cursorFeedback) ensureCursorStyle().textContent = 'body,body *{cursor:wait!important}';
     }
 
-    function setCursorReady() {
-        document.body.style.cursor = 'pointer';
+    function clearCursorLoading() {
+        if (cursorStyleEl) cursorStyleEl.textContent = '';
     }
 
     function parseClipboardQuestion(text) {
@@ -636,16 +653,16 @@
         var questionText = text;
 
         // 扩展正则：覆盖更多题型名称变体（选择题、分析题、选填题、对错题等）
-        var typeMatch = text.match(/^(单选题?|单项选择题?|选择题|多选题?|多项选择题?|复选题?|判断题?|对错题?|是非题?|填空题?|选填题?|完形填空|补全题?|简答题?|论述题?|分析题?|问答题?|案例分析题?|名词解释|阅读理解|综合题?|主观题?|输入题?)\s*[\]】)]/);
+        var typeMatch = text.match(/^(单选题?|单项选择题?|选择题|多选题?|多项选择题?|复选题?|共用选项题?|选做题?|判断题?|对错题?|是非题?|填空题?|填框题?|填充题?|填入题?|选填题?|选词填空|完型填空|完形填空|补全题?|简答题?|论述题?|分析题?|问答题?|案例分析题?|名词解释|阅读理解|综合题?|主观题?|输入题?|程序题?|代码题?|编程题?|计算题?|分录题?|听力题?|口语题?|测评题?|写作题?|连线题?|排序题?|其它|其他)\s*[\]】)]/);
         if (typeMatch) {
             typeName     = typeMatch[1];
             questionText = text.substring(typeMatch[0].length).replace(/^\s+/, '');
             // 关键词模糊匹配
             if (/单选|单项选择|选择/.test(typeName) && !/多选|多项|复选/.test(typeName)) {
                 type = 0;
-            } else if (/多选|多项选择|复选/.test(typeName)) {
+            } else if (/多选|多项选择|复选|共用选项|选做/.test(typeName)) {
                 type = 1;
-            } else if (/填空|选填|完形|补全/.test(typeName)) {
+            } else if (/填空|填框|填充|填入|选填|选词填空|完型|完形|补全/.test(typeName)) {
                 type = 2;
             } else if (/判断|对错|是非|正误/.test(typeName)) {
                 type = 3;
@@ -664,68 +681,25 @@
         };
     }
 
-    function findNearestTextareaAbove(x, y) {
-        var textareas = document.querySelectorAll('textarea');
-        var best      = null;
-        var bestDist  = Infinity;
-        for (var i = 0; i < textareas.length; i++) {
-            var ta = textareas[i];
-            var rect = ta.getBoundingClientRect();
-            if (rect.bottom > y) continue;
-            var dist = y - rect.bottom;
-            if (dist < bestDist) {
-                bestDist = dist;
-                best     = ta;
-            }
-        }
-        return best;
-    }
-
-    function fillClipboardSync(textarea, answer) {
-        if (answer.type === 'blank') {
-            var outer = textarea.closest('.eidtDiv') || textarea.closest('.subEditor');
-            var group = outer ? outer.parentElement.querySelectorAll('textarea') : null;
-            if (!group || group.length === 0) group = [textarea];
-            for (var i = 0; i < group.length; i++) {
-                var ans = answer.answer[i] || answer.answer[0] || '';
-                setEditorContent(group[i], ans);
-            }
-            return true;
-        }
-        setEditorContent(textarea, answer.answer);
-        return true;
-    }
-
-    function fillClipboardAsync(textarea, answer) {
-        return new Promise(function(resolve) {
-            var outer = textarea.closest('.eidtDiv') || textarea.closest('.subEditor') || textarea.parentElement;
-            var group = (answer.type === 'blank' && outer)
-                ? outer.parentElement.querySelectorAll('textarea')
-                : null;
-            if (!group || group.length === 0) group = [textarea];
-
-            var start = Date.now();
-            function check() {
-                var allReady = true;
-                for (var i = 0; i < group.length; i++) {
-                    try {
-                        var ed = UE.getEditor(group[i].id);
-                        if (!ed || !ed.isReady || !ed.isReady()) { allReady = false; break; }
-                    } catch(e) { allReady = false; break; }
+    function resolveClipboardQuestion(selection) {
+        if (selection && selection.length >= 3) {
+            var question = parseClipboardQuestion(selection);
+            if ((question.type === 0 || question.type === 1 || question.type === 3) && question.options.length === 0) {
+                var domQ = parseCurrentQuestion();
+                if (domQ && domQ.options.length > 0) {
+                    question.options = domQ.options;
                 }
-                if (allReady || Date.now() - start > 5000) {
-                    resolve(fillClipboardSync(textarea, answer));
-                    return;
-                }
-                setTimeout(check, 150);
             }
-            check();
-        });
+            return question;
+        }
+
+        return parseCurrentQuestion();
     }
 
-    // ---- Middle-click listener ----
+    // ---- Middle-click listener (handles both middle-click fetch and clipboard fill) ----
     document.addEventListener('mousedown', function(e) {
         if (e.button !== 1) return;
+        if (!enabled) return;
 
         var isExamPage = !!document.querySelector('.questionLi');
         if (!isExamPage) return;
@@ -735,6 +709,20 @@
 
         e.preventDefault();
 
+        // Priority 1: Clipboard mode — fill answer fetched via Ctrl+C
+        if (clipboardState === 'ready' && pendingAnswerData) {
+            fillAnswerAsync(pendingAnswerData.question, pendingAnswerData.answer).then(function(ok) {
+                resetAnswerStates();
+                if (ok) {
+                    console.log('[AutoExam] Clipboard fill done (middle-click)');
+                } else {
+                    console.warn('[AutoExam] Clipboard fill failed');
+                }
+            });
+            return;
+        }
+
+        // Priority 2: Middle-click mode — fill answer fetched via middle-click
         if (middleBtnState === 'ready' && pendingAnswerData) {
             fillAnswerAsync(pendingAnswerData.question, pendingAnswerData.answer).then(function(ok) {
                 resetAnswerStates();
@@ -747,8 +735,10 @@
             return;
         }
 
-        if (middleBtnState === 'loading') return;
+        // Already loading — ignore
+        if (middleBtnState === 'loading' || clipboardState === 'loading') return;
 
+        // Start new middle-click fetch
         if (!getApiKey()) {
             console.error('[AutoExam] API Key not set');
             return;
@@ -770,7 +760,7 @@
             pendingAnswerData = { question: question, answer: cached };
             middleBtnState    = 'ready';
             clipboardState    = 'idle';
-            setCursorReady();
+            clearCursorLoading();
             console.log('[AutoExam] Middle-click: cached answer ready');
             return;
         }
@@ -780,7 +770,7 @@
             pendingAnswerData = { question: question, answer: answer };
             middleBtnState    = 'ready';
             clipboardState    = 'idle';
-            setCursorReady();
+            clearCursorLoading();
             console.log('[AutoExam] Middle-click: answer ready (press middle button to fill)');
         }).catch(function(err) {
             resetAnswerStates();
@@ -806,7 +796,7 @@
             pendingAnswerData = { question: question, answer: cached };
             clipboardState    = 'ready';
             middleBtnState    = 'idle';
-            setCursorReady();
+            clearCursorLoading();
             console.log('[AutoExam] Clipboard: cached answer ready');
             return;
         }
@@ -815,8 +805,8 @@
             cacheAnswer(question.text, answer);
             pendingAnswerData = { question: question, answer: answer };
             clipboardState    = 'ready';
-            setCursorReady();
-            console.log('[AutoExam] Clipboard: answer ready (left-click blank area to fill)');
+            clearCursorLoading();
+            console.log('[AutoExam] Clipboard: answer ready (middle-click to fill)');
         }).catch(function(err) {
             resetAnswerStates();
             console.error('[AutoExam] Clipboard API error:', (err.message || 'request failed'));
@@ -825,6 +815,7 @@
 
     // ---- Clipboard listener (Ctrl+C, main path) ----
     document.addEventListener('copy', function(e) {
+        if (!enabled) return;
         var isExamPage = !!document.querySelector('.questionLi');
         if (!isExamPage) return;
         if (!getApiKey()) return;
@@ -833,20 +824,8 @@
         lastCopyTime = Date.now();
 
         var selection = (window.getSelection() || '').toString().trim();
-        var question;
-
-        if (selection && selection.length >= 3) {
-            question = parseClipboardQuestion(selection);
-            if ((question.type === 0 || question.type === 1 || question.type === 3) && question.options.length === 0) {
-                var domQ = parseCurrentQuestion();
-                if (domQ && domQ.options.length > 0) {
-                    question.options = domQ.options;
-                }
-            }
-        } else {
-            question = parseCurrentQuestion();
-            if (!question) return;
-        }
+        var question = resolveClipboardQuestion(selection);
+        if (!question) return;
 
         startClipboardFetch(question);
     });
@@ -854,6 +833,7 @@
     // ---- Ctrl+C keyboard listener (fallback when page blocks copy event) ----
     document.addEventListener('keydown', function(e) {
         if (!e.ctrlKey || (e.key !== 'c' && e.key !== 'C')) return;
+        if (!enabled) return;
 
         var tag = (e.target.tagName || '').toLowerCase();
         if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
@@ -863,56 +843,21 @@
         if (!getApiKey()) return;
         if (clipboardState === 'loading' || middleBtnState === 'loading') return;
 
-        var selection = (window.getSelection() || '').toString().trim();
-        if (selection && selection.length >= 3) return;
-
         setTimeout(function() {
             if (Date.now() - lastCopyTime < 500) return;
             if (clipboardState === 'loading' || middleBtnState === 'loading') return;
 
-            var question = parseCurrentQuestion();
+            var selection = (window.getSelection() || '').toString().trim();
+            var question = resolveClipboardQuestion(selection);
             if (!question) return;
 
             startClipboardFetch(question);
         }, 200);
     });
 
-    // ---- Left-click listener (clipboard mode fill) ----
-    document.addEventListener('click', function(e) {
-        if (e.button !== 0) return;
-        if (clipboardState !== 'ready') return;
-        if (!pendingAnswerData) return;
-
-        var tag = (e.target.tagName || '').toLowerCase();
-        if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return;
-        if (tag === 'button' || tag === 'a') return;
-        if (e.target.closest('button') || e.target.closest('a')) return;
-
-        var textarea = findNearestTextareaAbove(e.clientX, e.clientY);
-        if (!textarea) {
-            console.warn('[AutoExam] Clipboard: no textarea found above click point');
-            return;
-        }
-
-        e.preventDefault();
-        e.stopPropagation();
-
-        var question = pendingAnswerData.question;
-        var answer   = pendingAnswerData.answer;
-
-        fillClipboardAsync(textarea, answer).then(function(ok) {
-            resetAnswerStates();
-            if (ok) {
-                console.log('[AutoExam] Clipboard fill done');
-            } else {
-                console.warn('[AutoExam] Clipboard fill failed');
-            }
-        });
-    });
-
     /* ================================================================
      * Keyboard Shortcuts
-     * F2 = answer  |  F3 = batch  |  F4 = toggle model
+     * Tab = toggle on/off  |  F2 = answer  |  F4 = toggle model
      * Only active when focus is not on text inputs.
      * ================================================================ */
 
@@ -922,9 +867,13 @@
 
         var fn = null;
         switch (e.key) {
-            case 'F2': fn = 'go';          break;
-            case 'F3': fn = 'toggleBatch'; break;
-            case 'F4': fn = 'toggleModel'; break;
+            case 'Tab':
+                e.preventDefault();
+                if (window.AutoExam && window.AutoExam.toggle) window.AutoExam.toggle();
+                return;
+            case 'F2': fn = 'go';                   break;
+            case 'F3': fn = 'toggleCursorFeedback'; break;
+            case 'F4': fn = 'toggleModel';          break;
             case 'Escape':
                 if (typeof resetAnswerStates === 'function' && (middleBtnState !== 'idle' || clipboardState !== 'idle')) {
                     resetAnswerStates();
@@ -956,7 +905,7 @@
 
         console.log('[AutoExam] Initialized — API key: ' + (getApiKey() ? 'set' : 'NOT SET') +
                     ' | model: ' + config.model +
-                    ' | hotkeys: F2=answer F3=batch F4=model Middle=click Clipboard=Ctrl+C');
+                    ' | hotkeys: Tab=toggle F2=answer F3=cursor F4=model Middle=click Clipboard=Ctrl+C');
     }
 
     if (document.readyState === 'loading') {
@@ -970,9 +919,10 @@
      * ================================================================ */
 
     window.AutoExam = {
-        go:           go,
-        toggleBatch:  toggleBatch,
-        toggleModel:  toggleModel
+        go:                  go,
+        toggle:              toggleEnabled,
+        toggleCursorFeedback: toggleCursorFeedback,
+        toggleModel:         toggleModel
     };
 
 })();

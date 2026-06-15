@@ -1,23 +1,28 @@
 package main
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"time"
+
+	cardops "github.com/lingqiao/server/internal/cards"
 )
 
 // APIHandler handles all HTTP API requests.
 type APIHandler struct {
-	cm *CardManager
+	cm   *CardManager
+	chat *ChatStore
 }
 
 func NewAPIHandler(cm *CardManager) *APIHandler {
-	return &APIHandler{cm: cm}
+	return &APIHandler{cm: cm, chat: NewChatStore(cm.storage, time.Now)}
 }
 
 type request struct {
@@ -27,6 +32,12 @@ type request struct {
 	Fingerprint   string `json:"fingerprint"`
 	SessionToken  string `json:"session_token"`
 	ClientVersion string `json:"client_version"`
+	Content       string `json:"content"`
+	Nickname      string `json:"nickname"`
+	AfterID       int64  `json:"after_id"`
+	ReplyToID     int64  `json:"reply_to_id"`
+	MessageID     int64  `json:"message_id"`
+	Reaction      string `json:"reaction"`
 }
 
 type response struct {
@@ -35,6 +46,40 @@ type response struct {
 	SessionToken  string `json:"session_token,omitempty"`
 	ExpiresAt     int64  `json:"expires_at,omitempty"`
 	CardExpiresAt int64  `json:"card_expires_at,omitempty"`
+}
+
+func (h *APIHandler) validateBoundSession(token, machineID, cardCode string) (*Session, error) {
+	if h == nil || h.cm == nil {
+		return nil, fmt.Errorf("session service unavailable")
+	}
+	if token == "" {
+		return nil, fmt.Errorf("session_token is required")
+	}
+	if machineID == "" {
+		return nil, fmt.Errorf("machine_id is required")
+	}
+	now := time.Now()
+	h.cm.mu.RLock()
+	session, exists := h.cm.sessions[token]
+	var card *Card
+	if exists {
+		card = h.cm.cards[session.CardCode]
+	}
+	h.cm.mu.RUnlock()
+
+	if !exists || session == nil || session.ExpiresAt.Before(now) {
+		return nil, fmt.Errorf("invalid or expired session")
+	}
+	if session.MachineID != machineID {
+		return nil, fmt.Errorf("session machine mismatch")
+	}
+	if cardCode != "" && normalizeCardCode(session.CardCode) != normalizeCardCode(cardCode) {
+		return nil, fmt.Errorf("session card mismatch")
+	}
+	if card == nil || card.Status == CardDisabled || card.Status == CardExpired || now.After(card.ExpiresAt) {
+		return nil, fmt.Errorf("card no longer valid")
+	}
+	return session, nil
 }
 
 func (h *APIHandler) readSignedRequest(r *http.Request) (*request, error) {
@@ -220,28 +265,21 @@ func (h *APIHandler) HandleDllDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify HMAC signature if present (signed DLL download)
-	if r.Header.Get("X-HMAC-Signature") != "" {
-		if err := verifyRequestHMAC(r, r.URL.Path); err != nil {
-			writeError(w, http.StatusUnauthorized, "signature verification failed")
-			return
-		}
+	// Verify HMAC signature — mandatory for all DLL downloads
+	if err := verifyRequestHMAC(r, r.URL.Path); err != nil {
+		writeError(w, http.StatusUnauthorized, "signature verification failed")
+		return
 	}
 
 	token := r.Header.Get("X-Session-Token")
-	if token == "" {
-		token = r.URL.Query().Get("token")
-	}
 	if token == "" {
 		writeError(w, http.StatusBadRequest, "token is required")
 		return
 	}
 
-	h.cm.mu.RLock()
-	session, exists := h.cm.sessions[token]
-	h.cm.mu.RUnlock()
-	if !exists || session.ExpiresAt.Before(time.Now()) {
-		writeError(w, http.StatusUnauthorized, "invalid or expired session")
+	session, err := h.validateBoundSession(token, r.Header.Get("X-Machine-ID"), r.Header.Get("X-Card-Code"))
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 
@@ -293,29 +331,34 @@ func encryptDLLForClient(plain, key []byte) ([]byte, error) {
 	return encrypted, nil
 }
 
-func (h *APIHandler) SessionCleanupTask() {
+func (h *APIHandler) SessionCleanupTask(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
-	for range ticker.C {
-		h.cm.CleanupExpired()
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			h.cm.CleanupExpired()
+		}
 	}
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 func translateCardError(err error) string {
-	msg := err.Error()
-	switch msg {
-	case "card not found":
+	switch {
+	case errors.Is(err, cardops.ErrCardNotFound):
 		return "卡密不存在 — 请检查是否输入正确"
-	case "card is blacklisted":
+	case errors.Is(err, cardops.ErrCardBlacklisted):
 		return "卡密已被列入黑名单"
-	case "card is disabled":
+	case errors.Is(err, cardops.ErrCardDisabled):
 		return "卡密已被禁用 — 请联系管理员"
-	case "card has expired":
+	case errors.Is(err, cardops.ErrCardExpired):
 		return "卡密已过期 — 请续费或更换卡密"
-	case "card already bound to another machine":
+	case errors.Is(err, cardops.ErrCardBoundToOtherMachine):
 		return "卡密已绑定到其他机器 — 请联系管理员解绑"
 	default:
-		return msg
+		return err.Error()
 	}
 }
