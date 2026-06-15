@@ -247,6 +247,7 @@
         m_chatUnreadCount = 0;
         if (m_chatHeading) m_chatHeading->setText(QString::fromUtf8(_S("公共聊天")));
         updatePageNav();
+        updateChatView(m_localMessages, true);
     }
 
     void updatePageNav() {
