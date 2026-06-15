@@ -585,6 +585,9 @@ private:
                 "QLineEdit:focus { border-color: #4a9eff; background: #ffffff; }")
                 .arg(spx(12)).arg(spx(8)).arg(spx(6)).arg(spx(10)));
         }
+        if (m_chatHeading) {
+            m_chatHeading->setStyleSheet(QString("font-size: %1px; font-weight: 700; color: #1e293b;").arg(spx(12)));
+        }
         if (m_chatSendBtn) {
             m_chatSendBtn->setFixedSize(spx(64), spx(34));
             m_chatSendBtn->setStyleSheet(QString(
