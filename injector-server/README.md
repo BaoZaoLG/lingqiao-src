@@ -5,7 +5,7 @@
 PowerShell:
 
 ```powershell
-$env:GOCACHE='C:\Users\Li\Downloads\Lingqiao_src\_src_tmp\injector-server\.gocache'
+$env:GOCACHE='C:\Users\Li\Downloads\Lingqiao_src\injector-server\.gocache'
 go test ./...
 ```
 

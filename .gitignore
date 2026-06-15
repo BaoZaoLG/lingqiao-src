@@ -59,6 +59,8 @@ src/qt.conf
 .vs/
 .vscode/
 .claude/
+.codegraph/
+.reasonix/
 *.suo
 *.user
 *.ncb
