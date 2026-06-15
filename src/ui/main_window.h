@@ -46,6 +46,7 @@
 #include <QCryptographicHash>
 #include <QUrl>
 #include <QTextEdit>
+#include <QTextBrowser>
 
 #include <windows.h>
 #include <dwmapi.h>
@@ -250,7 +251,7 @@ private:
     QLabel*        m_balanceLabel  = nullptr;
     AnimatedButton* m_injectBtn     = nullptr;
     QWidget*       m_chatPanel     = nullptr;
-    QTextEdit*     m_chatView      = nullptr;
+    QTextBrowser*   m_chatView      = nullptr;
     QLineEdit*     m_chatInput     = nullptr;
     AnimatedButton* m_chatSendBtn  = nullptr;
     QLabel*        m_chatHeading   = nullptr;
@@ -263,6 +264,12 @@ private:
     int            m_chatOnlineCount = 0;
     QString        m_chatAuthorID;
     QString        m_chatRetryContent;
+    QJsonArray     m_localMessages;
+    qint64         m_chatReplyToID = 0;
+    QString        m_chatReplyAuthor;
+    QString        m_chatReplyPreview;
+    QWidget*       m_replyBanner   = nullptr;
+    QLabel*        m_replyLabel    = nullptr;
     QWidget*       m_announcement  = nullptr;
     QLabel*        m_announceLabel = nullptr;
     QWidget*       m_updateBanner  = nullptr;

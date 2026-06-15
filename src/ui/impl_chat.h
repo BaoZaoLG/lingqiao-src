@@ -6,15 +6,35 @@
         m_chatHeading = heading(QString::fromUtf8(_S("公共聊天")));
         o->addWidget(m_chatHeading);
 
-        m_chatView = new QTextEdit();
+        m_chatView = new QTextBrowser();
         m_chatView->setReadOnly(true);
-        m_chatView->setAcceptRichText(false);
-        m_chatView->setFixedHeight(120);
+        m_chatView->setAcceptRichText(true);
+        m_chatView->setFixedHeight(240);
         m_chatView->setPlaceholderText(QString::fromUtf8(_S("激活后可查看公共消息")));
+        m_chatView->setTextInteractionFlags(Qt::TextBrowserInteraction);
+        m_chatView->setOpenExternalLinks(false);
         m_chatView->setStyleSheet(
             "QTextEdit { background: rgba(255,255,255,0.26); border: 1px solid rgba(200,200,210,0.32); "
             "border-radius: 8px; padding: 8px; color: #334155; font-size: 12px; }");
+        connect(m_chatView, &QTextBrowser::anchorClicked, this, &MainWindow::onChatAnchorClicked);
         o->addWidget(m_chatView);
+
+        // Reply Banner
+        m_replyBanner = new QFrame();
+        m_replyBanner->setObjectName("replyBanner");
+        m_replyBanner->setStyleSheet("QFrame#replyBanner { background: rgba(3, 105, 161, 0.1); border: 1px solid rgba(3, 105, 161, 0.2); border-radius: 6px; padding: 4px 8px; }");
+        QHBoxLayout* rbLayout = new QHBoxLayout(m_replyBanner);
+        rbLayout->setContentsMargins(6, 4, 6, 4);
+        m_replyLabel = new QLabel();
+        m_replyLabel->setStyleSheet("font-size: 11px; color: #0369a1;");
+        rbLayout->addWidget(m_replyLabel, 1);
+        QPushButton* cancelReplyBtn = new QPushButton("×");
+        cancelReplyBtn->setFixedSize(16, 16);
+        cancelReplyBtn->setStyleSheet("QPushButton { border: none; background: transparent; color: #0369a1; font-weight: bold; font-size: 14px; } QPushButton:hover { color: #e11d48; }");
+        connect(cancelReplyBtn, &QPushButton::clicked, this, &MainWindow::clearReplyTarget);
+        rbLayout->addWidget(cancelReplyBtn);
+        m_replyBanner->setVisible(false);
+        o->addWidget(m_replyBanner);
 
         QHBoxLayout* row = new QHBoxLayout();
         row->setContentsMargins(0, 0, 0, 0);
@@ -64,6 +84,8 @@
         m_chatLastID = 0;
         m_chatUnreadCount = 0;
         m_chatOnlineCount = 0;
+        m_localMessages = QJsonArray();
+        clearReplyTarget();
         m_lastChatStatus = QString::fromUtf8(_S("未连接"));
         if (m_chatHeading) m_chatHeading->setText(QString::fromUtf8(_S("公共聊天")));
         if (m_chatView) m_chatView->clear();
@@ -81,6 +103,244 @@
         return req;
     }
 
+    void clearReplyTarget() {
+        m_chatReplyToID = 0;
+        m_chatReplyAuthor.clear();
+        m_chatReplyPreview.clear();
+        if (m_replyBanner) m_replyBanner->setVisible(false);
+    }
+
+    void onChatAnchorClicked(const QUrl& link) {
+        QString url = link.toString();
+        if (url.startsWith("reply:")) {
+            qint64 id = url.mid(6).toLongLong();
+            for (const QJsonValue& val : m_localMessages) {
+                QJsonObject msg = val.toObject();
+                if ((qint64)msg["id"].toDouble() == id) {
+                    m_chatReplyToID = id;
+                    m_chatReplyAuthor = msg["author"].toString();
+                    m_chatReplyPreview = msg["content"].toString();
+                    if (m_chatReplyPreview.length() > 30) {
+                        m_chatReplyPreview = m_chatReplyPreview.left(30) + "...";
+                    }
+                    if (m_replyLabel) {
+                        m_replyLabel->setText(QString::fromUtf8(_S("回复 @%1: \"%2\""))
+                            .arg(m_chatReplyAuthor, m_chatReplyPreview));
+                    }
+                    if (m_replyBanner) m_replyBanner->setVisible(true);
+                    break;
+                }
+            }
+        } else if (url.startsWith("react:")) {
+            QStringList parts = url.split(':');
+            if (parts.size() >= 3) {
+                qint64 messageID = parts[1].toLongLong();
+                QString reaction = parts[2];
+                sendChatReaction(messageID, reaction);
+            }
+        }
+    }
+
+    void sendChatReaction(qint64 messageID, const QString& reaction) {
+        if (!m_activated || m_sessionToken.isEmpty() || m_machineID.isEmpty()) return;
+        QPointer<MainWindow> safeThis(this);
+        QJsonObject req = buildChatAuthRequest();
+        req["message_id"] = messageID;
+        req["reaction"] = reaction;
+        QByteArray body = QJsonDocument(req).toJson(QJsonDocument::Compact);
+        QtConcurrent::run([safeThis, body]() {
+            HttpResponse resp = HttpPostJson(SERVER_HOST, SERVER_PORT, L"/api/v1/chat/react", body);
+            QMetaObject::invokeMethod(safeThis, [safeThis, resp]() {
+                if (!safeThis) return;
+                if (resp.statusCode == 200) {
+                    safeThis->fetchChatMessages();
+                } else if (resp.statusCode == 403) {
+                    QJsonParseError parseError{};
+                    QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
+                    QString errText = QString::fromUtf8(_S("你已被禁言，暂时无法进行表情反应"));
+                    if (parseError.error == QJsonParseError::NoError && doc.isObject()) {
+                        QString msg = doc.object()["message"].toString();
+                        if (!msg.isEmpty()) errText = msg;
+                    }
+                    safeThis->setStatus("warn", errText);
+                }
+            }, Qt::QueuedConnection);
+        });
+    }
+
+    QString renderChatHtml(const QJsonArray& messages) {
+        QString html = QStringLiteral("<html><head><style>"
+            "body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 12px; color: #334155; margin: 0; padding: 0; }"
+            "a { text-decoration: none; }"
+            "</style></head><body>");
+
+        for (int i = 0; i < messages.size(); ++i) {
+            QJsonObject msg = messages[i].toObject();
+            qint64 id = (qint64)msg["id"].toDouble();
+            QString author = msg["author"].toString();
+            QString content = msg["content"].toString();
+            QString created = msg["created_at"].toString();
+            QString type = msg["type"].toString("user");
+            
+            QString timeText = QDateTime::fromString(created, Qt::ISODateWithMs).toLocalTime().toString("hh:mm");
+            if (timeText.isEmpty()) timeText = QDateTime::currentDateTime().toString("hh:mm");
+
+            QString authorID = msg["author_id"].toString();
+            bool isSelf = (!authorID.isEmpty() && authorID == m_chatAuthorID);
+
+            if (type == "system") {
+                html += QString(
+                    "<table align=\"center\" style=\"margin-top: 6px; margin-bottom: 6px;\">"
+                    "  <tr>"
+                    "    <td bgcolor=\"#f8fafc\" style=\"color: #64748b; padding: 4px 12px; font-size: 11px; border: 1px solid #e2e8f0; border-radius: 4px;\">"
+                    "      [系统] %1"
+                    "    </td>"
+                    "  </tr>"
+                    "</table>"
+                ).arg(content.toHtmlEscaped());
+            } else {
+                QString align = isSelf ? "right" : "left";
+                QString bgColor = isSelf ? "#e0f2fe" : "#f1f5f9";
+                QString textColor = isSelf ? "#0369a1" : "#1e293b";
+                QString displayName = isSelf ? QString::fromUtf8(_S("我")) : author;
+
+                html += QString(
+                    "<table align=\"%1\" style=\"margin-top: 6px; margin-bottom: 6px; max-width: 85%;\">"
+                    "  <tr>"
+                    "    <td align=\"%1\" style=\"color: #64748b; font-size: 11px;\">"
+                    "      <b>%2</b> (%3) &nbsp;<a href=\"reply:%4\" style=\"color: #0284c7;\">[回复]</a>"
+                    "    </td>"
+                    "  </tr>"
+                    "  <tr>"
+                    "    <td bgcolor=\"%5\" style=\"color: %6; padding: 6px 12px; border-radius: 6px; font-size: 12px;\">"
+                ).arg(align, displayName.toHtmlEscaped(), timeText, QString::number(id), bgColor, textColor);
+
+                // Quoted reply
+                QJsonObject replyPreview = msg["reply_preview"].toObject();
+                if (!replyPreview.isEmpty()) {
+                    QString replyAuthor = replyPreview["author"].toString();
+                    QString replyContent = replyPreview["content"].toString();
+                    html += QString(
+                        "<div style=\"background-color: rgba(255,255,255,0.45); border-left: 3px solid #94a3b8; padding: 3px 6px; margin-bottom: 5px; font-size: 11px; color: #475569;\">"
+                        "  回复 @%1: %2"
+                        "</div>"
+                    ).arg(replyAuthor.toHtmlEscaped(), replyContent.toHtmlEscaped());
+                }
+
+                html += content.toHtmlEscaped();
+
+                // Reactions
+                QJsonObject reactions = msg["reactions"].toObject();
+                QJsonArray reacted = msg["reacted"].toArray();
+                
+                QStringList reactionLinks;
+                QStringList whitelist = { "👍", "❤️", "😂", "？", "收到" };
+                
+                for (const QString& emo : whitelist) {
+                    int count = reactions[emo].toInt(0);
+                    bool hasReacted = false;
+                    for (int r = 0; r < reacted.size(); ++r) {
+                        if (reacted[r].toString() == emo) {
+                            hasReacted = true;
+                            break;
+                        }
+                    }
+                    if (count > 0) {
+                        QString color = hasReacted ? "#2563eb" : "#64748b";
+                        QString weight = hasReacted ? "bold" : "normal";
+                        reactionLinks.append(QString("<a href=\"react:%1:%2\" style=\"color: %3; font-weight: %4;\">%5 %6</a>")
+                            .arg(QString::number(id), emo, color, weight, emo, QString::number(count)));
+                    } else if (!isSelf) {
+                        reactionLinks.append(QString("<a href=\"react:%1:%2\" style=\"color: #94a3b8;\">%3</a>")
+                            .arg(QString::number(id), emo, emo));
+                    }
+                }
+
+                if (!reactionLinks.isEmpty()) {
+                    html += "<br/><span style=\"font-size: 10px; line-height: 18px;\">" + reactionLinks.join(" &nbsp;|&nbsp; ") + "</span>";
+                }
+
+                html += "</td></tr></table><div style=\"clear: both;\"></div>";
+            }
+        }
+        html += "</body></html>";
+        return html;
+    }
+
+    void updateChatView(const QJsonArray& messages) {
+        bool changed = (messages.size() != m_localMessages.size());
+        if (!changed) {
+            for (int i = 0; i < messages.size(); ++i) {
+                QJsonObject a = messages[i].toObject();
+                QJsonObject b = m_localMessages[i].toObject();
+                if (a["id"].toDouble() != b["id"].toDouble() ||
+                    a["reactions"] != b["reactions"] ||
+                    a["reacted"] != b["reacted"] ||
+                    a["author"] != b["author"] ||
+                    a["content"] != b["content"]) {
+                    changed = true;
+                    break;
+                }
+            }
+        }
+
+        if (!changed && !m_localMessages.isEmpty()) {
+            return;
+        }
+
+        int scrollVal = 0;
+        int scrollMax = 0;
+        QScrollBar* bar = m_chatView ? m_chatView->verticalScrollBar() : nullptr;
+        if (bar) {
+            scrollVal = bar->value();
+            scrollMax = bar->maximum();
+        }
+
+        m_localMessages = messages;
+        QString html = renderChatHtml(messages);
+        if (m_chatView) {
+            m_chatView->setHtml(html);
+        }
+
+        qint64 lastReadID = m_chatLastID;
+        qint64 maxID = lastReadID;
+        int newUnreads = 0;
+
+        for (const QJsonValue& val : messages) {
+            QJsonObject msg = val.toObject();
+            qint64 id = (qint64)msg["id"].toDouble();
+            maxID = qMax(maxID, id);
+            if (id > lastReadID) {
+                newUnreads++;
+            }
+        }
+
+        const bool communityVisible = m_pageStack && m_pageStack->currentIndex() == 1
+            && isActiveWindow() && !isMinimized() && isVisible();
+        if (communityVisible) {
+            m_chatLastID = maxID;
+            m_chatUnreadCount = 0;
+            if (m_chatHeading) m_chatHeading->setText(QString::fromUtf8(_S("公共聊天")));
+        } else {
+            if (newUnreads > 0) {
+                m_chatUnreadCount = newUnreads;
+                if (m_chatHeading) {
+                    m_chatHeading->setText(QString::fromUtf8(_S("公共聊天（%1 条未读）")).arg(m_chatUnreadCount));
+                }
+            }
+        }
+
+        updatePageNav();
+
+        if (bar) {
+            if (scrollVal >= scrollMax - 15) {
+                bar->setValue(bar->maximum());
+            } else {
+                bar->setValue(scrollVal);
+            }
+        }
+    }
+
     void fetchChatMessages() {
         if (!m_activated || m_sessionToken.isEmpty() || m_machineID.isEmpty() || m_chatFetchInProgress) return;
         QString card = m_cardInput ? m_cardInput->text().trimmed() : QString();
@@ -88,7 +348,7 @@
         m_chatFetchInProgress = true;
         QPointer<MainWindow> safeThis(this);
         QJsonObject req = buildChatAuthRequest();
-        req["after_id"] = m_chatLastID;
+        req["after_id"] = 0;
         QByteArray body = QJsonDocument(req).toJson(QJsonDocument::Compact);
         QtConcurrent::run([safeThis, body]() {
             HttpResponse resp = HttpPostJson(SERVER_HOST, SERVER_PORT, L"/api/v1/chat/messages", body);
@@ -109,17 +369,7 @@
                 QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
                 if (parseError.error != QJsonParseError::NoError || !doc.isObject()) return;
                 QJsonArray messages = doc.object()["messages"].toArray();
-                for (const QJsonValue& value : messages) {
-                    if (!value.isObject()) continue;
-                    QJsonObject msg = value.toObject();
-                    qint64 id = (qint64)msg["id"].toDouble();
-                    QString author = msg["author"].toString();
-                    QString content = msg["content"].toString();
-                    QString created = msg["created_at"].toString();
-                    QString type = msg["type"].toString("user");
-                    if (id <= safeThis->m_chatLastID || content.isEmpty()) continue;
-                    safeThis->appendChatMessage(id, type, author, content, created);
-                }
+                safeThis->updateChatView(messages);
             }, Qt::QueuedConnection);
         });
     }
@@ -188,8 +438,21 @@
                 }
                 if (resp.statusCode != 200 || resp.body.isEmpty()) {
                     if (saving) {
-                        QString detail = resp.statusCode != 0 ? QString("HTTP %1").arg(resp.statusCode) : resp.error;
-                        safeThis->setStatus("warn", safeThis->readableHttpFailure(QString::fromUtf8(_S("昵称保存")), detail));
+                        QJsonParseError parseError{};
+                        QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
+                        QString errText = safeThis->readableHttpFailure(QString::fromUtf8(_S("昵称保存")), 
+                            resp.statusCode != 0 ? QString("HTTP %1").arg(resp.statusCode) : resp.error);
+                        if (resp.statusCode == 403) {
+                            errText = QString::fromUtf8(_S("昵称保存失败：你已被禁言，暂时无法修改昵称"));
+                        }
+                        if (parseError.error == QJsonParseError::NoError && doc.isObject()) {
+                            QString msg = doc.object()["message"].toString();
+                            if (!msg.isEmpty()) {
+                                if (resp.statusCode == 403) errText = msg;
+                                else errText = QString::fromUtf8(_S("昵称保存失败：")) + msg;
+                            }
+                        }
+                        safeThis->setStatus("warn", errText);
                     }
                     return;
                 }
@@ -197,6 +460,12 @@
                 QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
                 if (parseError.error != QJsonParseError::NoError || !doc.isObject()) return;
                 QJsonObject profile = doc.object()["profile"].toObject();
+                
+                QString authorID = profile["author_id"].toString();
+                if (!authorID.isEmpty()) {
+                    safeThis->m_chatAuthorID = authorID;
+                }
+                
                 QString nextNickname = profile["nickname"].toString();
                 if (!nextNickname.isEmpty() && safeThis->m_chatNicknameInput) {
                     safeThis->m_chatNicknameInput->setText(nextNickname);
@@ -219,6 +488,9 @@
         QPointer<MainWindow> safeThis(this);
         QJsonObject req = buildChatAuthRequest();
         req["content"] = content;
+        if (m_chatReplyToID > 0) {
+            req["reply_to_id"] = m_chatReplyToID;
+        }
         QByteArray body = QJsonDocument(req).toJson(QJsonDocument::Compact);
         QtConcurrent::run([safeThis, body]() {
             HttpResponse resp = HttpPostJson(SERVER_HOST, SERVER_PORT, L"/api/v1/chat/send", body);
@@ -227,6 +499,7 @@
                 if (safeThis->m_chatSendBtn) safeThis->m_chatSendBtn->setEnabled(safeThis->m_activated);
                 if (resp.statusCode == 200) {
                     safeThis->m_chatRetryContent.clear();
+                    safeThis->clearReplyTarget();
                     safeThis->m_lastChatStatus = QString::fromUtf8(_S("消息已发送"));
                     if (safeThis->m_chatInput) safeThis->m_chatInput->clear();
                     if (safeThis->m_chatSendBtn) safeThis->m_chatSendBtn->setText(QString::fromUtf8(_S("发送")));
@@ -239,35 +512,30 @@
                 } else if (resp.statusCode == 401) {
                     safeThis->resetToInactiveState("Chat auth rejected",
                         QString::fromUtf8(_S("会话已失效，请输入新卡密")), true);
+                } else if (resp.statusCode == 403) {
+                    QJsonParseError parseError{};
+                    QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
+                    QString errText = QString::fromUtf8(_S("消息发送失败：你已被禁言，暂时无法发送消息"));
+                    if (parseError.error == QJsonParseError::NoError && doc.isObject()) {
+                        QString msg = doc.object()["message"].toString();
+                        if (!msg.isEmpty()) errText = msg;
+                    }
+                    safeThis->m_lastChatStatus = errText;
+                    safeThis->setStatus("warn", errText);
+                    if (safeThis->m_chatSendBtn) safeThis->m_chatSendBtn->setText(QString::fromUtf8(_S("重试")));
                 } else {
+                    QJsonParseError parseError{};
+                    QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
                     QString detail = resp.statusCode != 0 ? QString("HTTP %1").arg(resp.statusCode) : resp.error;
                     QString msg = safeThis->readableHttpFailure(QString::fromUtf8(_S("消息发送")), detail);
+                    if (parseError.error == QJsonParseError::NoError && doc.isObject()) {
+                        QString serverMsg = doc.object()["message"].toString();
+                        if (!serverMsg.isEmpty()) msg = QString::fromUtf8(_S("消息发送失败：")) + serverMsg;
+                    }
                     safeThis->m_lastChatStatus = msg;
                     safeThis->setStatus("warn", msg);
                     if (safeThis->m_chatSendBtn) safeThis->m_chatSendBtn->setText(QString::fromUtf8(_S("重试")));
                 }
             }, Qt::QueuedConnection);
         });
-    }
-
-    void appendChatMessage(qint64 id, const QString& type, const QString& author, const QString& content, const QString& created) {
-        if (!m_chatView) return;
-        m_chatLastID = qMax(m_chatLastID, id);
-        QString timeText = QDateTime::fromString(created, Qt::ISODateWithMs).toLocalTime().toString("hh:mm");
-        if (timeText.isEmpty()) timeText = QDateTime::currentDateTime().toString("hh:mm");
-        QString label = type == "system" ? QString::fromUtf8(_S("系统")) : author;
-        QString line = QString("[%1] %2: %3")
-            .arg(timeText, label.toHtmlEscaped(), content.toHtmlEscaped());
-        m_chatView->append(line);
-        QScrollBar* bar = m_chatView->verticalScrollBar();
-        if (bar) bar->setValue(bar->maximum());
-        const bool communityVisible = m_pageStack && m_pageStack->currentIndex() == 1
-            && isActiveWindow() && !isMinimized() && isVisible();
-        if (!communityVisible) {
-            m_chatUnreadCount++;
-            if (m_chatHeading) {
-                m_chatHeading->setText(QString::fromUtf8(_S("公共聊天（%1 条未读）")).arg(m_chatUnreadCount));
-            }
-            updatePageNav();
-        }
     }
