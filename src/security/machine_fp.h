@@ -18,13 +18,15 @@
 #include <windows.h>
 #include <iphlpapi.h>
 #include <intrin.h>
+
 #include <QString>
-#include "crypto.h"
+
 #include "config.h"
+#include "crypto.h"
 #include "strcrypt.h"
 
 // Read BIOS serial number from SMBIOS registry (hard to spoof)
-static bool GetBiosSerial(char* buf, DWORD bufSize) {
+inline bool GetBiosSerial(char* buf, DWORD bufSize) {
     HKEY hKey;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
             L"HARDWARE\\DESCRIPTION\\System\\BIOS", 0, KEY_READ, &hKey) != ERROR_SUCCESS)
@@ -36,7 +38,7 @@ static bool GetBiosSerial(char* buf, DWORD bufSize) {
 }
 
 // Get CPU ID via cpuid instruction (hardware-bound, not spoofable without hypervisor)
-static void GetCpuId(char* buf, DWORD bufSize) {
+inline void GetCpuId(char* buf, DWORD bufSize) {
     int cpuInfo[4] = {0};
     __cpuid(cpuInfo, 0); // highest ext + vendor
     int maxFunc = cpuInfo[0];
@@ -50,7 +52,7 @@ static void GetCpuId(char* buf, DWORD bufSize) {
 }
 
 // Get motherboard serial from SMBIOS
-static bool GetBaseboardSerial(char* buf, DWORD bufSize) {
+inline bool GetBaseboardSerial(char* buf, DWORD bufSize) {
     HKEY hKey;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
             L"HARDWARE\\DESCRIPTION\\System\\BIOS", 0, KEY_READ, &hKey) != ERROR_SUCCESS)
@@ -66,7 +68,7 @@ static bool GetBaseboardSerial(char* buf, DWORD bufSize) {
 }
 
 // Get system UUID from SMBIOS registry
-static bool GetSystemUuid(char* buf, DWORD bufSize) {
+inline bool GetSystemUuid(char* buf, DWORD bufSize) {
     HKEY hKey;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
             L"SOFTWARE\\Microsoft\\Cryptography", 0, KEY_READ | KEY_WOW64_64KEY, &hKey) != ERROR_SUCCESS)
@@ -78,7 +80,7 @@ static bool GetSystemUuid(char* buf, DWORD bufSize) {
 }
 
 // Get first physical disk serial number via DeviceIoControl
-static bool GetDiskSerial(char* buf, DWORD bufSize) {
+inline bool GetDiskSerial(char* buf, DWORD bufSize) {
     HANDLE hDisk = CreateFileW(L"\\\\\\.\\PhysicalDrive0", 0,
         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
     if (hDisk == INVALID_HANDLE_VALUE) return false;
@@ -109,7 +111,7 @@ static bool GetDiskSerial(char* buf, DWORD bufSize) {
     return false;
 }
 
-static QString GetMachineFingerprint() {
+inline QString GetMachineFingerprint() {
     char volSerial[32] = "0", macAddr[32] = "00:00:00:00:00:00";
     char compName[64] = "unknown", userName[64] = "unknown";
     char biosSerial[128] = "none", cpuId[32] = "0", boardSerial[128] = "none";

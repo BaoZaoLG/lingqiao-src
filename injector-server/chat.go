@@ -19,6 +19,7 @@ const (
 	chatPresenceAge  = 60 * time.Second
 )
 
+// ChatMessage ...
 type ChatMessage struct {
 	ID            int64               `json:"id"`
 	Type          string              `json:"type"`
@@ -36,17 +37,20 @@ type ChatMessage struct {
 	Deleted       bool                `json:"deleted,omitempty"`
 }
 
+// ChatReplyPreview ...
 type ChatReplyPreview struct {
 	Author  string `json:"author"`
 	Content string `json:"content"`
 }
 
+// ChatProfile ...
 type ChatProfile struct {
 	AuthorID  string    `json:"author_id"`
 	Nickname  string    `json:"nickname"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// ChatStore ...
 type ChatStore struct {
 	mu       sync.Mutex
 	storage  *JSONStorage
@@ -59,12 +63,14 @@ type ChatStore struct {
 	lastSent map[string]time.Time
 }
 
+// ChatMute ...
 type ChatMute struct {
 	AuthorID string    `json:"author_id"`
 	Reason   string    `json:"reason,omitempty"`
 	Expires  time.Time `json:"expires_at"`
 }
 
+// NewChatStore ...
 func NewChatStore(storage *JSONStorage, now func() time.Time) *ChatStore {
 	if now == nil {
 		now = time.Now
@@ -83,6 +89,7 @@ func NewChatStore(storage *JSONStorage, now func() time.Time) *ChatStore {
 	return s
 }
 
+// Add ...
 func (s *ChatStore) Add(session *Session, content string, replyToID ...int64) (ChatMessage, error) {
 	if session == nil {
 		return ChatMessage{}, fmt.Errorf("session is required")
@@ -125,6 +132,7 @@ func (s *ChatStore) Add(session *Session, content string, replyToID ...int64) (C
 	return s.publicChatMessageLocked(msg), nil
 }
 
+// Profile ...
 func (s *ChatStore) Profile(session *Session) (ChatProfile, error) {
 	if session == nil {
 		return ChatProfile{}, fmt.Errorf("session is required")
@@ -144,6 +152,7 @@ func (s *ChatStore) Profile(session *Session) (ChatProfile, error) {
 	return profile, nil
 }
 
+// SetProfile ...
 func (s *ChatStore) SetProfile(session *Session, nickname string) (ChatProfile, error) {
 	if session == nil {
 		return ChatProfile{}, fmt.Errorf("session is required")
@@ -172,6 +181,7 @@ func (s *ChatStore) SetProfile(session *Session, nickname string) (ChatProfile, 
 	return profile, nil
 }
 
+// AddSystem ...
 func (s *ChatStore) AddSystem(content string) (ChatMessage, error) {
 	content = normalizeChatContent(content)
 	if content == "" {
@@ -195,6 +205,7 @@ func (s *ChatStore) AddSystem(content string) (ChatMessage, error) {
 	return s.publicChatMessageLocked(msg), nil
 }
 
+// Delete ...
 func (s *ChatStore) Delete(id int64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -209,6 +220,7 @@ func (s *ChatStore) Delete(id int64) bool {
 	return false
 }
 
+// React ...
 func (s *ChatStore) React(session *Session, messageID int64, reaction string) (ChatMessage, error) {
 	if session == nil {
 		return ChatMessage{}, fmt.Errorf("session is required")
@@ -246,6 +258,7 @@ func (s *ChatStore) React(session *Session, messageID int64, reaction string) (C
 	return ChatMessage{}, fmt.Errorf("message not found")
 }
 
+// TouchPresence ...
 func (s *ChatStore) TouchPresence(session *Session) (int, error) {
 	if session == nil {
 		return 0, fmt.Errorf("session is required")
@@ -258,6 +271,7 @@ func (s *ChatStore) TouchPresence(session *Session) (int, error) {
 	return s.onlineLocked(now), nil
 }
 
+// Mute ...
 func (s *ChatStore) Mute(authorID string, duration time.Duration, reason string) (ChatMute, error) {
 	authorID = strings.TrimSpace(authorID)
 	if authorID == "" {
@@ -280,6 +294,7 @@ func (s *ChatStore) Mute(authorID string, duration time.Duration, reason string)
 	return mute, nil
 }
 
+// List ...
 func (s *ChatStore) List(afterID int64, currentSession ...*Session) []ChatMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -301,6 +316,7 @@ func (s *ChatStore) List(afterID int64, currentSession ...*Session) []ChatMessag
 	return result
 }
 
+// AdminList ...
 func (s *ChatStore) AdminList() []ChatMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -570,6 +586,7 @@ func removeString(values []string, target string) []string {
 	return result
 }
 
+// HandleChatSend ...
 func (h *APIHandler) HandleChatSend(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
@@ -600,6 +617,7 @@ func (h *APIHandler) HandleChatSend(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, map[string]interface{}{"message": msg})
 }
 
+// HandleChatProfile ...
 func (h *APIHandler) HandleChatProfile(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
@@ -632,6 +650,7 @@ func (h *APIHandler) HandleChatProfile(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, map[string]interface{}{"profile": profile})
 }
 
+// HandleChatReact ...
 func (h *APIHandler) HandleChatReact(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
@@ -658,6 +677,7 @@ func (h *APIHandler) HandleChatReact(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, map[string]interface{}{"message": msg})
 }
 
+// HandleChatPresence ...
 func (h *APIHandler) HandleChatPresence(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
@@ -680,6 +700,7 @@ func (h *APIHandler) HandleChatPresence(w http.ResponseWriter, r *http.Request) 
 	writeOK(w, map[string]interface{}{"online": online})
 }
 
+// HandleChatMessages ...
 func (h *APIHandler) HandleChatMessages(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return

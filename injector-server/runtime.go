@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// RuntimeConfig ...
 type RuntimeConfig struct {
 	DataDir    string
 	SessionTTL time.Duration
@@ -20,6 +21,7 @@ var (
 	}
 )
 
+// ConfigureRuntime ...
 func ConfigureRuntime(cfg RuntimeConfig) {
 	if cfg.DataDir == "" {
 		cfg.DataDir = "data"

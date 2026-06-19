@@ -1,8 +1,9 @@
 #include "manual_injector_core.h"
 
+#include <tlhelp32.h>
+
 #include <cwchar>
 #include <sstream>
-#include <tlhelp32.h>
 #include <vector>
 
 DWORD ManualInjectorParsePid(const wchar_t* text) {

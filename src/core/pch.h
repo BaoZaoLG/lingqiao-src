@@ -1,5 +1,4 @@
-﻿#ifndef PCH_H
-#define PCH_H
+#pragma once
 
 #include "framework.h"
 #include <tchar.h>
@@ -13,5 +12,3 @@ typedef std::string string_t;
 
 extern string_t IntToString(int value);
 extern string_t IntToHex(DWORD_PTR value);
-
-#endif //PCH_H

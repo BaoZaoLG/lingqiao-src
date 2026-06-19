@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// Account ...
 type Account struct {
 	ID        string
 	Username  string
@@ -14,16 +15,20 @@ type Account struct {
 	Disabled  bool
 }
 
+// IDGenerator ...
 type IDGenerator func() (string, error)
 
+// AccountService ...
 type AccountService struct {
 	generateID IDGenerator
 }
 
+// NewAccountService ...
 func NewAccountService(generateID IDGenerator) *AccountService {
 	return &AccountService{generateID: generateID}
 }
 
+// Create ...
 func (s *AccountService) Create(existing []Account, username, passwordHash, prefix string) (Account, error) {
 	if username == "" {
 		return Account{}, fmt.Errorf("username is required")
@@ -46,6 +51,7 @@ func (s *AccountService) Create(existing []Account, username, passwordHash, pref
 	}, nil
 }
 
+// UpdatePassword ...
 func (s *AccountService) UpdatePassword(account Account, passwordHash string) (Account, error) {
 	if account.ID == "" {
 		return Account{}, fmt.Errorf("agent not found")
@@ -54,11 +60,13 @@ func (s *AccountService) UpdatePassword(account Account, passwordHash string) (A
 	return account, nil
 }
 
+// UpdateStatus ...
 func (s *AccountService) UpdateStatus(account Account, disabled bool) Account {
 	account.Disabled = disabled
 	return account
 }
 
+// EnsureCanDelete ...
 func (s *AccountService) EnsureCanDelete(account *Account) error {
 	if account == nil || account.ID == "" {
 		return fmt.Errorf("agent not found")

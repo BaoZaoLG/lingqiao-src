@@ -3,15 +3,16 @@
 // Cryptographic utilities — HMAC-SHA256, hex encoding, TLS cert pinning
 // ============================================================================
 #include <windows.h>
-#include "strcrypt.h"
 #include <winhttp.h>
 #include <bcrypt.h>
+
+#include "strcrypt.h"
 
 #ifndef NT_SUCCESS
 #define NT_SUCCESS(status) ((status) >= 0)
 #endif
 
-static bool HmacSha256(const char* key, DWORD keyLen,
+inline bool HmacSha256(const char* key, DWORD keyLen,
                        const char* data, DWORD dataLen,
                        BYTE* output, DWORD* outputLen)
 {
@@ -38,7 +39,7 @@ static bool HmacSha256(const char* key, DWORD keyLen,
     return NT_SUCCESS(status);
 }
 
-static void ByteToHex(const BYTE* input, DWORD inputLen, char* output) {
+inline void ByteToHex(const BYTE* input, DWORD inputLen, char* output) {
     static const char hex[] = "0123456789abcdef";
     for (DWORD i = 0; i < inputLen; i++) {
         output[i * 2]     = hex[(input[i] >> 4) & 0xF];
@@ -48,7 +49,7 @@ static void ByteToHex(const BYTE* input, DWORD inputLen, char* output) {
 }
 
 // Generate a random nonce (16 bytes → 32 hex chars)
-static void GenerateNonce(char* output) {
+inline void GenerateNonce(char* output) {
     BYTE buf[16];
     if (BCryptGenRandom(NULL, buf, sizeof(buf), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
         HCRYPTPROV hProv = 0;
@@ -63,7 +64,7 @@ static void GenerateNonce(char* output) {
 }
 
 // Get current Unix timestamp in seconds
-static __int64 GetUnixTimestamp() {
+inline __int64 GetUnixTimestamp() {
     FILETIME ft;
     GetSystemTimeAsFileTime(&ft);
     __int64 t = ((__int64)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
@@ -71,7 +72,7 @@ static __int64 GetUnixTimestamp() {
 }
 
 // Build HMAC signed data: "timestamp|nonce|body" for anti-replay
-static bool HmacSha256Signed(const char* key, DWORD keyLen,
+inline bool HmacSha256Signed(const char* key, DWORD keyLen,
                               const char* timestamp, const char* nonce,
                               const char* body, DWORD bodyLen,
                               BYTE* output, DWORD* outputLen)
@@ -94,7 +95,7 @@ static bool HmacSha256Signed(const char* key, DWORD keyLen,
 
 // PBKDF2-HMAC-SHA256 key derivation — derives HMAC key from master secret
 // so the raw secret never appears as a signing key directly.
-static bool DeriveKey(const char* masterSecret, DWORD secretLen,
+inline bool DeriveKey(const char* masterSecret, DWORD secretLen,
                       const char* salt, DWORD saltLen,
                       BYTE* derivedKey, DWORD derivedKeyLen)
 {
@@ -116,7 +117,7 @@ static bool DeriveKey(const char* masterSecret, DWORD secretLen,
 // SHA-256 fingerprint of the server's self-signed TLS certificate.
 // Regenerate when certs/server.crt is renewed:
 //   openssl x509 -in certs/server.crt -outform DER | sha256sum
-static const char* CERT_PIN_SHA256 = LQ_SP("9f3435586bdb2528c1b1b460748782a96e2670ff4690b388796c85241b306458");
+inline const char* CERT_PIN_SHA256 = LQ_SP("9f3435586bdb2528c1b1b460748782a96e2670ff4690b388796c85241b306458");
 
 // ============================================================================
 // AES-256-GCM encryption/decryption (via BCrypt)
@@ -126,7 +127,7 @@ static const char* CERT_PIN_SHA256 = LQ_SP("9f3435586bdb2528c1b1b460748782a96e26
 // AES-256-GCM encrypt. Returns true on success.
 // output must have room for dataLen + 16 bytes (tag).
 // *outputLen = dataLen + 16 (tag appended).
-static bool AesGcmEncrypt(const BYTE* key, DWORD keyLen,
+inline bool AesGcmEncrypt(const BYTE* key, DWORD keyLen,
                           const BYTE* iv, DWORD ivLen,
                           const BYTE* data, DWORD dataLen,
                           BYTE* output, DWORD* outputLen)
@@ -169,7 +170,7 @@ static bool AesGcmEncrypt(const BYTE* key, DWORD keyLen,
 // AES-256-GCM decrypt. Returns true on success.
 // data must include the 16-byte GCM tag at the end.
 // *outputLen = dataLen - 16.
-static bool AesGcmDecrypt(const BYTE* key, DWORD keyLen,
+inline bool AesGcmDecrypt(const BYTE* key, DWORD keyLen,
                           const BYTE* iv, DWORD ivLen,
                           const BYTE* data, DWORD dataLen,
                           BYTE* output, DWORD* outputLen)
@@ -209,7 +210,7 @@ static bool AesGcmDecrypt(const BYTE* key, DWORD keyLen,
     return NT_SUCCESS(status);
 }
 
-static bool VerifyServerCert(HINTERNET hRequest) {
+inline bool VerifyServerCert(HINTERNET hRequest) {
     CERT_CONTEXT* pCert = nullptr;
     DWORD certSize = sizeof(pCert);
     if (!WinHttpQueryOption(hRequest, WINHTTP_OPTION_SERVER_CERT_CONTEXT, &pCert, &certSize) || !pCert)
@@ -242,7 +243,7 @@ static bool VerifyServerCert(HINTERNET hRequest) {
 #pragma comment(lib, "crypt32.lib")
 
 // Encrypt plaintext with DPAPI (user-scoped). Returns Base64 string.
-static QString DpapiProtect(const QByteArray& plaintext) {
+inline QString DpapiProtect(const QByteArray& plaintext) {
     DATA_BLOB in, out;
     in.pbData = (BYTE*)plaintext.constData();
     in.cbData = (DWORD)plaintext.size();
@@ -254,7 +255,7 @@ static QString DpapiProtect(const QByteArray& plaintext) {
 }
 
 // Decrypt Base64 DPAPI ciphertext. Returns plaintext bytes.
-static QByteArray DpapiUnprotect(const QString& base64Cipher) {
+inline QByteArray DpapiUnprotect(const QString& base64Cipher) {
     QByteArray cipher = QByteArray::fromBase64(base64Cipher.toUtf8());
     DATA_BLOB in, out;
     in.pbData = (BYTE*)cipher.constData();

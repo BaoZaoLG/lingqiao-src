@@ -372,6 +372,15 @@
         o->setSpacing(12);
         o->addWidget(heading(QString::fromUtf8(_S("API 密钥"))));
 
+        m_providerCombo = new QComboBox();
+        m_providerCombo->setFixedHeight(36);
+        for (const auto& provider : aiProviders()) {
+            m_providerCombo->addItem(provider.displayName, provider.id);
+        }
+        installThemedComboBox(m_providerCombo);
+        m_providerCombo->setEnabled(false);
+        o->addWidget(m_providerCombo);
+
         m_apiKeyInput = new QLineEdit();
         m_apiKeyInput->setPlaceholderText(QString::fromUtf8(_S("输入 DeepSeek API Key")));
         m_apiKeyInput->setFixedHeight(38);

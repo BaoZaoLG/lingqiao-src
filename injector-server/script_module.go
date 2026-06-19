@@ -18,6 +18,7 @@ const maxScriptModuleBytes = 2 << 20
 
 var scriptVersionRe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
+// ScriptModule ...
 type ScriptModule struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
@@ -44,6 +45,7 @@ func scriptModulePath(id string) string {
 	return filepath.Join(scriptDir(), sanitizeScriptVersion(id)+".json")
 }
 
+// LoadActiveScriptModule ...
 func LoadActiveScriptModule() (*ScriptModule, error) {
 	scripts, activeID, err := ListScriptModules()
 	if err == nil && activeID != "" {
@@ -69,6 +71,7 @@ func LoadActiveScriptModule() (*ScriptModule, error) {
 	return &module, nil
 }
 
+// SaveActiveScriptModule ...
 func SaveActiveScriptModule(version, content string) (*ScriptModule, error) {
 	module, err := saveScriptModule(version, content, "", "active", true)
 	if err != nil {
@@ -77,6 +80,7 @@ func SaveActiveScriptModule(version, content string) (*ScriptModule, error) {
 	return module, SetActiveScriptModule(module.ID)
 }
 
+// SaveScriptModuleDraft ...
 func SaveScriptModuleDraft(version, content, note string) (*ScriptModule, error) {
 	return saveScriptModule(version, content, note, "", false)
 }
@@ -139,6 +143,7 @@ func saveScriptModule(version, content, note, name string, active bool) (*Script
 	return module, nil
 }
 
+// ListScriptModules ...
 func ListScriptModules() ([]ScriptModule, string, error) {
 	if err := migrateLegacyActiveScript(); err != nil {
 		return nil, "", err
@@ -161,6 +166,7 @@ func ListScriptModules() ([]ScriptModule, string, error) {
 	return idx.Scripts, idx.ActiveID, nil
 }
 
+// SetActiveScriptModule ...
 func SetActiveScriptModule(id string) error {
 	idx, err := readScriptIndex()
 	if err != nil {
@@ -189,6 +195,7 @@ func SetActiveScriptModule(id string) error {
 	return os.WriteFile(filepath.Join(scriptDir(), "active.json"), data, 0600)
 }
 
+// DeleteScriptModule ...
 func DeleteScriptModule(id string) error {
 	idx, err := readScriptIndex()
 	if err != nil {
@@ -343,6 +350,7 @@ func sanitizeScriptVersion(version string) string {
 	return strings.Trim(version, ".-_")
 }
 
+// HandleScriptDownload ...
 func (h *APIHandler) HandleScriptDownload(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) {
 		return
@@ -386,6 +394,7 @@ func (h *APIHandler) HandleScriptDownload(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// HandleScriptAdmin ...
 func (h *AdminHandler) HandleScriptAdmin(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:

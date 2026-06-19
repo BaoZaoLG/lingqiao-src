@@ -9,21 +9,25 @@ import (
 	"sync"
 )
 
+// Store ...
 type Store interface {
 	Save(name string, value any) error
 	Load(name string, value any) error
 }
 
+// JSONStore ...
 type JSONStore struct {
 	dir string
 	mu  sync.Mutex
 }
 
+// NewJSONStore ...
 func NewJSONStore(dir string) *JSONStore {
 	_ = os.MkdirAll(dir, 0755)
 	return &JSONStore{dir: dir}
 }
 
+// Save ...
 func (s *JSONStore) Save(name string, value any) error {
 	if err := validateName(name); err != nil {
 		return err
@@ -53,6 +57,7 @@ func (s *JSONStore) Save(name string, value any) error {
 	return os.Rename(tmpPath, path)
 }
 
+// Load ...
 func (s *JSONStore) Load(name string, value any) error {
 	if err := validateName(name); err != nil {
 		return err

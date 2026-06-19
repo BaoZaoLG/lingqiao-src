@@ -14,9 +14,9 @@
 #define NT_SUCCESS(status) ((status) >= 0)
 #endif
 
-static const char* HOOK_CERT_PIN_SHA256 = "9f3435586bdb2528c1b1b460748782a96e2670ff4690b388796c85241b306458";
+inline const char* HOOK_CERT_PIN_SHA256 = "9f3435586bdb2528c1b1b460748782a96e2670ff4690b388796c85241b306458";
 
-static void HookByteToHex(const BYTE* input, DWORD inputLen, char* output) {
+inline void HookByteToHex(const BYTE* input, DWORD inputLen, char* output) {
     static const char hex[] = "0123456789abcdef";
     for (DWORD i = 0; i < inputLen; i++) {
         output[i * 2] = hex[(input[i] >> 4) & 0xF];
@@ -25,7 +25,7 @@ static void HookByteToHex(const BYTE* input, DWORD inputLen, char* output) {
     output[inputLen * 2] = 0;
 }
 
-static bool HookSha256Hex(const char* data, DWORD dataLen, char* outputHex) {
+inline bool HookSha256Hex(const char* data, DWORD dataLen, char* outputHex) {
     BCRYPT_ALG_HANDLE hAlg = NULL;
     BCRYPT_HASH_HANDLE hHash = NULL;
     bool ok = false;
@@ -44,7 +44,7 @@ static bool HookSha256Hex(const char* data, DWORD dataLen, char* outputHex) {
     return ok;
 }
 
-static bool HookDeriveKey(const char* secret, BYTE* key, DWORD keyLen) {
+inline bool HookDeriveKey(const char* secret, BYTE* key, DWORD keyLen) {
     BCRYPT_ALG_HANDLE hAlg = NULL;
     NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, NULL, BCRYPT_ALG_HANDLE_HMAC_FLAG);
     if (!NT_SUCCESS(status)) return false;
@@ -59,7 +59,7 @@ static bool HookDeriveKey(const char* secret, BYTE* key, DWORD keyLen) {
     return NT_SUCCESS(status);
 }
 
-static bool HookHmacSha256(const BYTE* key, DWORD keyLen, const char* data, DWORD dataLen, BYTE* output, DWORD* outputLen) {
+inline bool HookHmacSha256(const BYTE* key, DWORD keyLen, const char* data, DWORD dataLen, BYTE* output, DWORD* outputLen) {
     BCRYPT_ALG_HANDLE hAlg = NULL;
     BCRYPT_HASH_HANDLE hHash = NULL;
     NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, NULL, BCRYPT_ALG_HANDLE_HMAC_FLAG);
@@ -88,14 +88,14 @@ static bool HookHmacSha256(const BYTE* key, DWORD keyLen, const char* data, DWOR
     return NT_SUCCESS(status);
 }
 
-static __int64 HookUnixTimestamp() {
+inline __int64 HookUnixTimestamp() {
     FILETIME ft;
     GetSystemTimeAsFileTime(&ft);
     __int64 t = ((__int64)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
     return (t - 116444736000000000LL) / 10000000LL;
 }
 
-static void HookGenerateNonce(char* output) {
+inline void HookGenerateNonce(char* output) {
     BYTE buf[16];
     if (BCryptGenRandom(NULL, buf, sizeof(buf), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
         memset(buf, 0, sizeof(buf));
@@ -103,7 +103,7 @@ static void HookGenerateNonce(char* output) {
     HookByteToHex(buf, sizeof(buf), output);
 }
 
-static bool HookBuildSignature(const BYTE* key, const wchar_t* path, char* sigHex, char* tsBuf, char* nonceHex) {
+inline bool HookBuildSignature(const BYTE* key, const wchar_t* path, char* sigHex, char* tsBuf, char* nonceHex) {
     _i64toa_s(HookUnixTimestamp(), tsBuf, 32, 10);
     HookGenerateNonce(nonceHex);
 
@@ -121,7 +121,7 @@ static bool HookBuildSignature(const BYTE* key, const wchar_t* path, char* sigHe
     return true;
 }
 
-static bool HookVerifyServerCert(HINTERNET hRequest) {
+inline bool HookVerifyServerCert(HINTERNET hRequest) {
     CERT_CONTEXT* pCert = nullptr;
     DWORD certSize = sizeof(pCert);
     if (!WinHttpQueryOption(hRequest, WINHTTP_OPTION_SERVER_CERT_CONTEXT, &pCert, &certSize) || !pCert)
@@ -146,7 +146,7 @@ static bool HookVerifyServerCert(HINTERNET hRequest) {
     return ok;
 }
 
-static bool HookJsonExtractString(const std::string& json, const char* key, std::string* out) {
+inline bool HookJsonExtractString(const std::string& json, const char* key, std::string* out) {
     std::string marker = std::string("\"") + key + "\"";
     size_t p = json.find(marker);
     if (p == std::string::npos) return false;
@@ -206,7 +206,7 @@ static bool HookJsonExtractString(const std::string& json, const char* key, std:
     return false;
 }
 
-static bool FetchVersionedScript(std::string* scriptOut, std::string* versionOut) {
+inline bool FetchVersionedScript(std::string* scriptOut, std::string* versionOut) {
     WCHAR sessionToken[256] = {0};
     GetEnvironmentVariableW(L"INJECTOR_SESSION_TOKEN", sessionToken, _countof(sessionToken));
     if (!sessionToken[0]) {

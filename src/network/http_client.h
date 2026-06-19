@@ -4,11 +4,14 @@
 // ============================================================================
 #include <windows.h>
 #include <winhttp.h>
+
 #include <functional>
-#include <QString>
+
 #include <QByteArray>
-#include "crypto.h"
+#include <QString>
+
 #include "config.h"
+#include "crypto.h"
 #include "strcrypt.h"
 
 struct HttpResponse { int statusCode; QByteArray body; QString error; };
@@ -32,14 +35,14 @@ public:
     HINTERNET release() { auto t = h_; h_ = nullptr; return t; }
 };
 
-static void ConfigurePinnedInternalRequest(HINTERNET hRequest, DWORD resolveMs, DWORD connectMs,
+inline void ConfigurePinnedInternalRequest(HINTERNET hRequest, DWORD resolveMs, DWORD connectMs,
                                            DWORD sendMs, DWORD receiveMs) {
     DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA;
     WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
     WinHttpSetTimeouts(hRequest, resolveMs, connectMs, sendMs, receiveMs);
 }
 
-static void ConfigureInternalRequest(HINTERNET hRequest, bool secure, DWORD resolveMs, DWORD connectMs,
+inline void ConfigureInternalRequest(HINTERNET hRequest, bool secure, DWORD resolveMs, DWORD connectMs,
                                      DWORD sendMs, DWORD receiveMs) {
     if (secure) {
         ConfigurePinnedInternalRequest(hRequest, resolveMs, connectMs, sendMs, receiveMs);
@@ -48,7 +51,7 @@ static void ConfigureInternalRequest(HINTERNET hRequest, bool secure, DWORD reso
     }
 }
 
-static void ReadResponseBody(HINTERNET hRequest, QByteArray* body) {
+inline void ReadResponseBody(HINTERNET hRequest, QByteArray* body) {
     char buf[4096];
     DWORD bytesRead = 0;
     while (WinHttpReadData(hRequest, buf, sizeof(buf) - 1, &bytesRead) && bytesRead > 0) {
@@ -57,7 +60,7 @@ static void ReadResponseBody(HINTERNET hRequest, QByteArray* body) {
     }
 }
 
-static HttpResponse HttpPostJson(const wchar_t* host, int port,
+inline HttpResponse HttpPostJson(const wchar_t* host, int port,
                                   const wchar_t* path, const QByteArray& body)
 {
     HttpResponse result = {0, QByteArray()};
@@ -111,7 +114,7 @@ static HttpResponse HttpPostJson(const wchar_t* host, int port,
     return result;
 }
 
-static HttpResponse WinHttpGetPinned(const wchar_t* host, int port, const wchar_t* path)
+inline HttpResponse WinHttpGetPinned(const wchar_t* host, int port, const wchar_t* path)
 {
     HttpResponse result = {0, QByteArray()};
     WinHttpHandle hSession(WinHttpOpen(_WS(L"CefBridge/2.0"),
@@ -133,18 +136,18 @@ static HttpResponse WinHttpGetPinned(const wchar_t* host, int port, const wchar_
     return result;
 }
 
-static HttpResponse WinHttpGetRaw(const wchar_t* host, int port, const wchar_t* path)
+inline HttpResponse WinHttpGetRaw(const wchar_t* host, int port, const wchar_t* path)
 {
     return WinHttpGetPinned(host, port, path);
 }
 
-static HttpResponse WinHttpGet(const wchar_t* host, int port, const wchar_t* path)
+inline HttpResponse WinHttpGet(const wchar_t* host, int port, const wchar_t* path)
 {
     return WinHttpGetPinned(host, port, path);
 }
 
 // Signed HTTPS GET with HMAC headers (for authenticated downloads like DLL)
-static HttpResponse WinHttpGetSigned(const wchar_t* host, int port, const wchar_t* path,
+inline HttpResponse WinHttpGetSigned(const wchar_t* host, int port, const wchar_t* path,
                                      const wchar_t* sessionToken = nullptr,
                                      const wchar_t* machineId = nullptr,
                                      const wchar_t* cardCode = nullptr)
@@ -209,7 +212,7 @@ static HttpResponse WinHttpGetSigned(const wchar_t* host, int port, const wchar_
 }
 
 // Generic HTTPS GET with Bearer token auth (for external APIs like DeepSeek)
-static HttpResponse HttpGetBearer(const wchar_t* host, const wchar_t* path, const QString& bearerToken)
+inline HttpResponse HttpGetBearer(const wchar_t* host, const wchar_t* path, const QString& bearerToken)
 {
     HttpResponse result = {0, QByteArray()};
     WinHttpHandle hSession(WinHttpOpen(_WS(L"CefBridge/2.0"),
@@ -248,7 +251,7 @@ static HttpResponse HttpGetBearer(const wchar_t* host, const wchar_t* path, cons
 }
 
 // Download a file from the server, save to localPath. Returns empty string on success, error message on failure.
-static QString HttpDownloadFile(const wchar_t* host, int port, const wchar_t* path,
+inline QString HttpDownloadFile(const wchar_t* host, int port, const wchar_t* path,
                                 const wchar_t* localPath, std::function<void(qint64 bytesRead, qint64 total)> progressCb,
                                 bool secure = true,
                                 const wchar_t* sessionToken = nullptr,

@@ -37,6 +37,11 @@
     }
 
     void fetchBalance() {
+        const auto& provider = currentProvider();
+        if (!provider.supportsBalance) {
+            m_balanceLabel->setVisible(false);
+            return;
+        }
         QString key = m_apiKeyInput->text().trimmed();
         if (key.isEmpty()) {
             m_balanceLabel->setVisible(false);

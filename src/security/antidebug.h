@@ -64,14 +64,14 @@ typedef struct _CONTEXT_DEBUG {
 // ============================================================================
 // Check 1: IsDebuggerPresent (basic, always include)
 // ============================================================================
-static bool CheckDebuggerPresent() {
+inline bool CheckDebuggerPresent() {
     return IsDebuggerPresent() != 0;
 }
 
 // ============================================================================
 // Check 2: NtQueryInformationProcess (ProcessDebugPort)
 // ============================================================================
-static bool CheckDebugPort() {
+inline bool CheckDebugPort() {
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     if (!ntdll) return false;
     auto NtQIP = (pNtQueryInformationProcess)
@@ -85,7 +85,7 @@ static bool CheckDebugPort() {
 // ============================================================================
 // Check 3: CheckRemoteDebuggerPresent
 // ============================================================================
-static bool CheckRemoteDebugger() {
+inline bool CheckRemoteDebugger() {
     BOOL debugged = FALSE;
     CheckRemoteDebuggerPresent(GetCurrentProcess(), &debugged);
     return debugged != FALSE;
@@ -94,7 +94,7 @@ static bool CheckRemoteDebugger() {
 // ============================================================================
 // Check 4: PEB BeingDebugged flag
 // ============================================================================
-static bool CheckPEBDebugged() {
+inline bool CheckPEBDebugged() {
 #ifdef _M_IX86
     PPEB_LITE peb = (PPEB_LITE)__readfsdword(0x30);
 #elif defined(_M_AMD64)
@@ -110,7 +110,7 @@ static bool CheckPEBDebugged() {
 // When a process is debugged, NtGlobalFlag has FLG_HEAP_ENABLE_TAIL_CHECK,
 // FLG_HEAP_ENABLE_FREE_CHECK, and FLG_HEAP_VALIDATE_PARAMETERS set (0x70).
 // ============================================================================
-static bool CheckNtGlobalFlag() {
+inline bool CheckNtGlobalFlag() {
 #ifdef _M_IX86
     PPEB_LITE peb = (PPEB_LITE)__readfsdword(0x30);
     DWORD* pNtGlobalFlag = (DWORD*)((BYTE*)peb + 0x68);
@@ -127,7 +127,7 @@ static bool CheckNtGlobalFlag() {
 // Check 6: NtQueryInformationProcess (ProcessDebugObjectHandle)
 // If a debug object exists, a debugger is attached.
 // ============================================================================
-static bool CheckDebugObjectHandle() {
+inline bool CheckDebugObjectHandle() {
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     if (!ntdll) return false;
     auto NtQIP = (pNtQueryInformationProcess)
@@ -143,7 +143,7 @@ static bool CheckDebugObjectHandle() {
 // Check 7: NtQueryInformationProcess (ProcessDebugFlags)
 // DebugFlags is 0 when debugger is attached.
 // ============================================================================
-static bool CheckDebugFlags() {
+inline bool CheckDebugFlags() {
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     if (!ntdll) return false;
     auto NtQIP = (pNtQueryInformationProcess)
@@ -158,7 +158,7 @@ static bool CheckDebugFlags() {
 // Check 8: Hardware breakpoint detection (DR0-DR3)
 // Debug registers are set when hardware breakpoints are active.
 // ============================================================================
-static bool CheckHardwareBreakpoints() {
+inline bool CheckHardwareBreakpoints() {
 #ifdef _M_AMD64
     CONTEXT ctx = {0};
     ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
@@ -182,7 +182,7 @@ static bool CheckHardwareBreakpoints() {
 // Check 9: Timing-based detection (RDTSC)
 // Single-stepping through instructions causes measurable delays.
 // ============================================================================
-static bool CheckTimingRDTSC() {
+inline bool CheckTimingRDTSC() {
     DWORD64 start, end;
 #ifdef _M_AMD64
     start = __rdtsc();
@@ -207,7 +207,7 @@ static bool CheckTimingRDTSC() {
 // ============================================================================
 // Check 10: Timing-based detection (QueryPerformanceCounter)
 // ============================================================================
-static bool CheckTimingQPC() {
+inline bool CheckTimingQPC() {
     LARGE_INTEGER freq, start, end;
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&start);
@@ -223,7 +223,7 @@ static bool CheckTimingQPC() {
 // ThreadHideFromDebugger makes the thread invisible to debuggers,
 // causing breakpoints and exceptions to not be caught.
 // ============================================================================
-static void HideThreadFromDebugger() {
+inline void HideThreadFromDebugger() {
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     if (!ntdll) return;
     auto NtSIT = (pNtSetInformationThread)
@@ -238,7 +238,7 @@ static void HideThreadFromDebugger() {
 // Check 12: Parent process verification
 // Explorer.exe is the normal parent. If parent is a debugger, exit.
 // ============================================================================
-static bool CheckParentProcess() {
+inline bool CheckParentProcess() {
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     if (!ntdll) return false;
 
@@ -300,7 +300,7 @@ static bool CheckParentProcess() {
 // ============================================================================
 // Check 13: Debugger window class enumeration
 // ============================================================================
-static BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
+inline BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
     WCHAR className[256] = {0};
     GetClassNameW(hwnd, className, 256);
     _wcslwr_s(className, 256);
@@ -321,7 +321,7 @@ static BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
     return TRUE;
 }
 
-static bool CheckDebuggerWindows() {
+inline bool CheckDebuggerWindows() {
     bool found = false;
     EnumWindows(EnumWindowsProc, (LPARAM)&found);
     return found;
@@ -332,7 +332,7 @@ static bool CheckDebuggerWindows() {
 // INT 2D is a kernel debug interrupt. When no kernel debugger is present,
 // it causes an exception that can be caught. Debuggers may handle it differently.
 // ============================================================================
-static bool CheckInt2D() {
+inline bool CheckInt2D() {
 #ifdef _M_IX86
     __try {
         __asm {
@@ -353,7 +353,7 @@ static bool CheckInt2D() {
 // ============================================================================
 // Master check: run all anti-debug checks
 // ============================================================================
-static bool IsBeingDebugged() {
+inline bool IsBeingDebugged() {
     // Layer 1: Quick API checks
     if (CheckDebuggerPresent()) return true;
     if (CheckDebugPort()) return true;

@@ -121,6 +121,14 @@ private:
             m_injectBtn->setText(QString::fromUtf8(_S("▶  启动注入")));
             return;
         }
+        const auto& provider = currentProvider();
+        SetEnvironmentVariableW(L"INJECTOR_AI_PROVIDER", (LPCWSTR)provider.id.utf16());
+        SetEnvironmentVariableW(L"INJECTOR_AI_KEY", (LPCWSTR)apiKey.utf16());
+        SetEnvironmentVariableW(L"INJECTOR_AI_TEXT_MODEL", (LPCWSTR)provider.textModel.utf16());
+        SetEnvironmentVariableW(L"INJECTOR_AI_VISION_MODEL", (LPCWSTR)provider.visionModel.utf16());
+        SetEnvironmentVariableW(L"INJECTOR_AI_BASE_URL", (LPCWSTR)provider.baseUrl.utf16());
+        SetEnvironmentVariableW(L"INJECTOR_AI_ADAPTER", (LPCWSTR)provider.adapter.utf16());
+        SetEnvironmentVariableW(L"INJECTOR_AI_SUPPORTS_VISION", provider.supportsVision ? L"1" : L"0");
         SetEnvironmentVariableW(L"INJECTOR_API_KEY", (LPCWSTR)apiKey.utf16());
         SetEnvironmentVariableW(L"INJECTOR_SESSION_TOKEN", (LPCWSTR)m_sessionToken.utf16());
 

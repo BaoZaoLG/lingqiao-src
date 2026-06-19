@@ -1,7 +1,7 @@
 package releases
 
 import "time"
-
+// Channel ...
 type Channel string
 
 const (
@@ -9,7 +9,7 @@ const (
 	ChannelBeta   Channel = "beta"
 	ChannelCanary Channel = "canary"
 )
-
+// ReleaseStatus ...
 type ReleaseStatus string
 
 const (
@@ -18,14 +18,14 @@ const (
 	StatusPaused     ReleaseStatus = "paused"
 	StatusRolledBack ReleaseStatus = "rolled_back"
 )
-
+// PackageKind ...
 type PackageKind string
 
 const (
 	PackageKindBundle PackageKind = "bundle"
 	PackageKindMSI    PackageKind = "msi"
 )
-
+// TargetingRules ...
 type TargetingRules struct {
 	AllowCards    []string `json:"allow_cards,omitempty"`
 	DenyCards     []string `json:"deny_cards,omitempty"`
@@ -34,7 +34,7 @@ type TargetingRules struct {
 	AllowAgents   []string `json:"allow_agents,omitempty"`
 	DenyAgents    []string `json:"deny_agents,omitempty"`
 }
-
+// Release ...
 type Release struct {
 	ID             string         `json:"id"`
 	Version        string         `json:"version"`
@@ -51,7 +51,7 @@ type Release struct {
 	RolledBackAt   *time.Time     `json:"rolled_back_at,omitempty"`
 	RolledBackTo   string         `json:"rolled_back_to,omitempty"`
 }
-
+// ReleasePackage ...
 type ReleasePackage struct {
 	ID        string      `json:"id"`
 	ReleaseID string      `json:"release_id"`
@@ -62,7 +62,7 @@ type ReleasePackage struct {
 	SHA256    string      `json:"sha256"`
 	CreatedAt time.Time   `json:"created_at"`
 }
-
+// ClientContext ...
 type ClientContext struct {
 	Version   string  `json:"version"`
 	Channel   Channel `json:"channel"`
@@ -70,12 +70,12 @@ type ClientContext struct {
 	CardCode  string  `json:"card_code"`
 	AgentID   string  `json:"agent_id"`
 }
-
+// SelectedRelease ...
 type SelectedRelease struct {
 	Release Release        `json:"release"`
 	Package ReleasePackage `json:"package"`
 }
-
+// Manifest ...
 type Manifest struct {
 	ReleaseID      string    `json:"release_id"`
 	Version        string    `json:"version"`
@@ -91,12 +91,12 @@ type Manifest struct {
 	RolloutPercent int       `json:"rollout_percent"`
 	CreatedAt      time.Time `json:"created_at"`
 }
-
+// SignedManifest ...
 type SignedManifest struct {
 	Manifest  Manifest `json:"manifest"`
 	Signature string   `json:"signature"`
 }
-
+// EventType ...
 type EventType string
 
 const (
@@ -110,7 +110,7 @@ const (
 	EventRollback        EventType = "rollback"
 	EventDismissed       EventType = "dismissed"
 )
-
+// ReleaseEvent ...
 type ReleaseEvent struct {
 	ID        int64     `json:"id"`
 	ReleaseID string    `json:"release_id"`
@@ -123,7 +123,7 @@ type ReleaseEvent struct {
 	Detail    string    `json:"detail,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
-
+// ReleaseMetrics ...
 type ReleaseMetrics struct {
 	ReleaseID       string `json:"release_id"`
 	Offered         int    `json:"offered"`

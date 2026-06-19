@@ -11,15 +11,17 @@
 // ============================================================================
 #include <windows.h>
 #include <tchar.h>
+
 #include <QString>
-#include "crypto.h"
-#include "http_client.h"
+
 #include "config.h"
+#include "crypto.h"
 #include "hook_safety.h"
+#include "http_client.h"
 #include "strcrypt.h"
 
 // Derive a key for DLL encryption/decryption (separate from HMAC signing key)
-static bool DeriveDllKey(BYTE* dllKey, DWORD dllKeyLen) {
+inline bool DeriveDllKey(BYTE* dllKey, DWORD dllKeyLen) {
     return DeriveKey(g_secretBuf, (DWORD)strlen(g_secretBuf),
                      _S("CefBridge-DLL-Salt-v1"), 21,
                      dllKey, dllKeyLen);
@@ -27,7 +29,7 @@ static bool DeriveDllKey(BYTE* dllKey, DWORD dllKeyLen) {
 
 // AES-256-GCM decrypt with embedded 12-byte IV + 16-byte tag.
 // Server format: [12-byte IV][ciphertext][16-byte GCM tag]
-static bool AesGcmDecryptDll(BYTE* data, DWORD dataLen, const BYTE* key, DWORD keyLen, DWORD* plainLenOut) {
+inline bool AesGcmDecryptDll(BYTE* data, DWORD dataLen, const BYTE* key, DWORD keyLen, DWORD* plainLenOut) {
     DWORD expectedPlainLen = 0;
     if (keyLen < 32 || !DllPlaintextLengthFromEncryptedSize(dataLen, &expectedPlainLen)) return false;
     const BYTE* iv = data;
@@ -44,14 +46,14 @@ static bool AesGcmDecryptDll(BYTE* data, DWORD dataLen, const BYTE* key, DWORD k
     return true;
 }
 
-static TCHAR g_dllPath[MAX_PATH] = {0};
-static TCHAR g_dllDir[MAX_PATH]  = {0};
-static bool   g_dllReady         = false;
+inline TCHAR g_dllPath[MAX_PATH] = {0};
+inline TCHAR g_dllDir[MAX_PATH]  = {0};
+inline bool  g_dllReady         = false;
 
 // Forward declaration
-static void CleanupDll();
+inline void CleanupDll();
 
-static void MakeRandomPath() {
+inline void MakeRandomPath() {
     TCHAR tempPath[MAX_PATH];
     GetTempPath(MAX_PATH, tempPath);
     BYTE randBuf[16];
@@ -63,7 +65,7 @@ static void MakeRandomPath() {
 }
 
 // Validate PE headers: check MZ signature and PE signature
-static bool ValidatePeHeaders(const BYTE* data, DWORD size) {
+inline bool ValidatePeHeaders(const BYTE* data, DWORD size) {
     if (size < 64) return false; // minimum for DOS header
 
     // Check MZ signature
@@ -87,7 +89,7 @@ static bool ValidatePeHeaders(const BYTE* data, DWORD size) {
 
 // Download encrypted DLL from server, XOR-decrypt, validate, write to temp file.
 // Returns empty QString on success, error message on failure.
-static QString DownloadDll(const wchar_t* host, int port, const wchar_t* sessionToken,
+inline QString DownloadDll(const wchar_t* host, int port, const wchar_t* sessionToken,
                            const wchar_t* machineId, const wchar_t* cardCode) {
     const wchar_t* path = L"/api/v1/dll";
 
@@ -148,7 +150,7 @@ static QString DownloadDll(const wchar_t* host, int port, const wchar_t* session
     return QString();
 }
 
-static void CleanupDll() {
+inline void CleanupDll() {
     if (g_dllPath[0]) {
         SetFileAttributes(g_dllPath, FILE_ATTRIBUTE_NORMAL);
         DeleteFile(g_dllPath);

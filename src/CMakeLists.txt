@@ -118,6 +118,7 @@ set(INJECTOR_HEADERS
     ui/impl_network.h
     ui/impl_chat.h
     ui/impl_actions.h
+    ui/ui_resources.qrc
 )
 
 add_executable(Injector WIN32 injector_qt.cpp ${INJECTOR_HEADERS} ${CMAKE_CURRENT_BINARY_DIR}/version.rc)

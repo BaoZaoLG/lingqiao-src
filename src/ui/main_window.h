@@ -13,6 +13,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QComboBox>
+#include <QListView>
 #include <QLabel>
 #include <QFrame>
 #include <QTimer>
@@ -117,28 +118,28 @@ public:
 
         // Load saved settings
         QSettings settings(_S("LingQiao"), _S("Injector"));
-        // API Key: stored as DPAPI-encrypted Base64
-        QString encKey = settings.value(_S("apiKeyEnc")).toString();
-        if (!encKey.isEmpty()) {
-            QByteArray plain = DpapiUnprotect(encKey);
-            if (!plain.isEmpty()) m_apiKeyInput->setText(QString::fromUtf8(plain));
-        } else {
-            // Migration: read legacy plaintext key and re-encrypt
-            QString legacyKey = settings.value(_S("apiKey")).toString();
-            if (!legacyKey.isEmpty()) {
-                m_apiKeyInput->setText(legacyKey);
-                settings.setValue("apiKeyEnc", DpapiProtect(legacyKey.toUtf8()));
-                settings.remove("apiKey");
-            }
-        }
+        m_currentProviderId = settings.value(_S("aiProvider"), _S("deepseek")).toString();
+        setProviderComboById(m_currentProviderId);
+        migrateLegacyApiKey(settings);
+        loadApiKeyForProvider(m_currentProviderId);
+        applyProviderUi();
 
         // Restore saved target path
         QString savedTarget = settings.value(_S("targetPath")).toString();
         if (!savedTarget.isEmpty() && QFileInfo::exists(savedTarget))
             m_targetInput->setText(savedTarget);
-        connect(m_apiKeyInput, &QLineEdit::textChanged, [](const QString& text) {
-            QSettings s(_S("LingQiao"), _S("Injector"));
-            s.setValue("apiKeyEnc", DpapiProtect(text.toUtf8()));
+        connect(m_providerCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+            if (m_switchingProvider) return;
+            saveApiKeyForProvider(m_currentProviderId, m_apiKeyInput->text().trimmed());
+            m_currentProviderId = currentProvider().id;
+            QSettings(_S("LingQiao"), _S("Injector")).setValue("aiProvider", m_currentProviderId);
+            loadApiKeyForProvider(m_currentProviderId);
+            applyProviderUi();
+            fetchBalance();
+        });
+        connect(m_apiKeyInput, &QLineEdit::textChanged, this, [this](const QString& text) {
+            if (m_loadingProviderKey) return;
+            saveApiKeyForProvider(currentProvider().id, text);
         });
 
         // Debounced balance fetch on API key change
@@ -284,6 +285,21 @@ private:
     QString  m_lastChatStatus = QString::fromUtf8(_S("未连接"));
     QString  m_lastServerStatus = QString::fromUtf8(_S("未检查"));
     double   m_uiScale = 0.0;
+    struct AiProviderConfig {
+        QString id;
+        QString displayName;
+        QString apiKeyPlaceholder;
+        QString baseUrl;
+        QString textModel;
+        QString visionModel;
+        QString adapter;
+        bool supportsBalance;
+        bool supportsVision;
+    };
+    QComboBox*    m_providerCombo = nullptr;
+    QString       m_currentProviderId = QStringLiteral("deepseek");
+    bool          m_loadingProviderKey = false;
+    bool          m_switchingProvider = false;
 
     QString  m_sessionToken, m_machineID;
     bool     m_activated        = false;
@@ -291,6 +307,93 @@ private:
     bool     m_heartbeatRunning = false;
     bool     m_heartbeatInProgress = false;
     bool     m_updateDismissed  = false;   // session-level: suppress update banner after "稍后提醒"
+
+    static const std::vector<AiProviderConfig>& aiProviders() {
+        static const std::vector<AiProviderConfig> providers = {
+            { QStringLiteral("openai"), QStringLiteral("OpenAI"), QString::fromUtf8(_S("输入 OpenAI API Key")),
+              QStringLiteral("https://api.openai.com/v1"), QStringLiteral("gpt-5.5"), QStringLiteral("gpt-5.5"),
+              QStringLiteral("openai-chat"), false, true },
+            { QStringLiteral("qwen"), QString::fromUtf8(_S("通义千问/Qwen")), QString::fromUtf8(_S("输入通义千问 API Key")),
+              QStringLiteral("https://dashscope.aliyuncs.com/compatible-mode/v1"), QStringLiteral("qwen3.7-plus"), QStringLiteral("qwen3.7-plus"),
+              QStringLiteral("openai-chat"), false, true },
+            { QStringLiteral("glm"), QString::fromUtf8(_S("智谱 GLM")), QString::fromUtf8(_S("输入智谱 GLM API Key")),
+              QStringLiteral("https://open.bigmodel.cn/api/paas/v4"), QStringLiteral("glm-4.7-flash"), QStringLiteral("glm-4.5v"),
+              QStringLiteral("openai-chat"), false, true },
+            { QStringLiteral("doubao"), QString::fromUtf8(_S("豆包/火山")), QString::fromUtf8(_S("输入豆包/火山 API Key")),
+              QStringLiteral("https://ark.cn-beijing.volces.com/api/v3"), QStringLiteral("doubao-seed-1-6"), QStringLiteral("doubao-seed-1-6-vision"),
+              QStringLiteral("openai-chat"), false, true },
+            { QStringLiteral("deepseek"), QStringLiteral("DeepSeek"), QString::fromUtf8(_S("输入 DeepSeek API Key")),
+              QStringLiteral("https://api.deepseek.com"), QStringLiteral("deepseek-v4-flash"), QStringLiteral("deepseek-v4-flash"),
+              QStringLiteral("openai-chat"), true, false },
+            { QStringLiteral("mimo"), QString::fromUtf8(_S("小米 mimo")), QString::fromUtf8(_S("输入小米 mimo API Key")),
+              QStringLiteral("https://api.xiaomimimo.com/v1"), QStringLiteral("mimo-v2.5"), QStringLiteral("mimo-v2.5"),
+              QStringLiteral("openai-chat"), false, true },
+        };
+        return providers;
+    }
+
+    const AiProviderConfig& providerById(const QString& id) const {
+        const auto& providers = aiProviders();
+        for (const auto& p : providers) {
+            if (p.id == id) return p;
+        }
+        return providers.front();
+    }
+
+    const AiProviderConfig& currentProvider() const {
+        if (m_providerCombo) {
+            QString id = m_providerCombo->currentData().toString();
+            if (!id.isEmpty()) return providerById(id);
+        }
+        return providerById(m_currentProviderId);
+    }
+
+    QString apiKeySettingName(const QString& providerId) const {
+        return QStringLiteral("apiKeyEnc/%1").arg(providerId);
+    }
+
+    void saveApiKeyForProvider(const QString& providerId, const QString& key) {
+        if (providerId.isEmpty()) return;
+        QSettings s(_S("LingQiao"), _S("Injector"));
+        s.setValue(apiKeySettingName(providerId), DpapiProtect(key.toUtf8()));
+    }
+
+    void loadApiKeyForProvider(const QString& providerId) {
+        QSettings s(_S("LingQiao"), _S("Injector"));
+        m_loadingProviderKey = true;
+        QByteArray plain = DpapiUnprotect(s.value(apiKeySettingName(providerId)).toString());
+        m_apiKeyInput->setText(QString::fromUtf8(plain));
+        m_loadingProviderKey = false;
+    }
+
+    void migrateLegacyApiKey(QSettings& settings) {
+        if (settings.contains(_S("apiKeyEnc")) && !settings.contains(apiKeySettingName(QStringLiteral("deepseek")))) {
+            settings.setValue(apiKeySettingName(QStringLiteral("deepseek")), settings.value(_S("apiKeyEnc")).toString());
+            settings.remove(_S("apiKeyEnc"));
+        }
+        QString legacyKey = settings.value(_S("apiKey")).toString();
+        if (!legacyKey.isEmpty() && !settings.contains(apiKeySettingName(QStringLiteral("deepseek")))) {
+            settings.setValue(apiKeySettingName(QStringLiteral("deepseek")), DpapiProtect(legacyKey.toUtf8()));
+            settings.remove(_S("apiKey"));
+        }
+    }
+
+    void setProviderComboById(const QString& providerId) {
+        if (!m_providerCombo) return;
+        m_switchingProvider = true;
+        int idx = m_providerCombo->findData(providerId);
+        m_providerCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+        m_currentProviderId = currentProvider().id;
+        m_switchingProvider = false;
+    }
+
+    void applyProviderUi() {
+        const auto& provider = currentProvider();
+        if (m_apiKeyInput) m_apiKeyInput->setPlaceholderText(provider.apiKeyPlaceholder);
+        if (m_balanceLabel && !provider.supportsBalance) {
+            m_balanceLabel->setVisible(false);
+        }
+    }
 
     // ── Session, Logging, Tray, History ──
     #include "impl_session.h"
@@ -330,6 +433,7 @@ private:
         m_activated = !locked;
         m_targetInput->setEnabled(!locked);
         m_browseBtn->setEnabled(!locked);
+        if (m_providerCombo) m_providerCombo->setEnabled(!locked);
         m_apiKeyInput->setEnabled(!locked);
         m_injectBtn->setEnabled(!locked && g_dllReady && !m_forceUpdateBlocked);
         if (m_chatInput) m_chatInput->setEnabled(!locked);
@@ -471,6 +575,36 @@ private:
         });
     }
 
+    void installThemedComboBox(QComboBox* combo) {
+        if (!combo) return;
+        combo->setView(new QListView(combo));
+        combo->view()->setStyleSheet(
+            "QListView {"
+            " background: rgba(255, 255, 255, 0.98);"
+            " border: 1px solid rgba(200, 200, 210, 0.60);"
+            " color: #1a1a2e;"
+            " outline: none;"
+            " padding: 4px;"
+            " selection-background-color: #4a9eff;"
+            " selection-color: #ffffff;"
+            "}"
+            "QListView::item {"
+            " min-height: 26px;"
+            " padding: 5px 10px;"
+            " color: #1a1a2e;"
+            " background: rgba(255, 255, 255, 0.98);"
+            "}"
+            "QListView::item:hover {"
+            " background: rgba(240, 240, 245, 0.95);"
+            " color: #0f172a;"
+            "}"
+            "QListView::item:selected {"
+            " background: #4a9eff;"
+            " color: #ffffff;"
+            "}"
+        );
+    }
+
     void applyUiScale(bool force = false) {
         double sx = (double)width() / (double)WINDOW_WIDTH;
         double sy = (double)height() / (double)WINDOW_HEIGHT;
@@ -484,9 +618,14 @@ private:
             "QLabel[role=\"heading\"] { font-size: %3px; font-weight: 600; color: #334155; letter-spacing: 0.6px; }"
             "QLabel[role=\"caption\"], QLabel[role=\"success\"], QLabel[role=\"danger\"], QLabel[role=\"warning\"] { font-size: %3px; }"
             "QLineEdit { font-size: %4px; border-radius: %5px; padding: %6px %7px; }"
+            "QComboBox { font-size: %4px; border-radius: %5px; padding: %9px %10px %9px %7px; }"
+            "QComboBox::drop-down { width: %11px; border-top-right-radius: %5px; border-bottom-right-radius: %5px; }"
+            "QComboBox QAbstractItemView::item { min-height: %12px; padding: %13px %14px; }"
             "QPushButton { font-size: %2px; border-radius: %5px; padding: %6px %8px; }")
             .arg(spx(16)).arg(spx(12)).arg(spx(11)).arg(spx(13))
-            .arg(spx(8)).arg(spx(9)).arg(spx(12)).arg(spx(18)));
+            .arg(spx(8)).arg(spx(9)).arg(spx(12)).arg(spx(18))
+            .arg(spx(8)).arg(spx(34)).arg(spx(30)).arg(spx(26))
+            .arg(spx(5)).arg(spx(10)));
 
         if (m_cardInput) {
             m_cardInput->setFixedHeight(spx(38));
@@ -496,6 +635,7 @@ private:
                 .arg(spx(13)).arg(spx(8)));
         }
         if (m_targetInput) m_targetInput->setFixedHeight(spx(38));
+        if (m_providerCombo) m_providerCombo->setFixedHeight(spx(36));
         if (m_apiKeyInput) m_apiKeyInput->setFixedHeight(spx(38));
         if (m_activateBtn) {
             m_activateBtn->setFixedSize(spx(72), spx(38));

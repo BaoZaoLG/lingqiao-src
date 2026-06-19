@@ -30,8 +30,8 @@ static LONG g_pageScriptInjected = 0;
 /* Hook installation state tracking */
 static LONG g_hooksInstalled = 0;
 static LONG g_hookRetryCount = 0;
-#define HOOK_MAX_RETRIES    20
-#define HOOK_RETRY_DELAY_MS 500
+static constexpr int HOOK_MAX_RETRIES    = 20;
+static constexpr int HOOK_RETRY_DELAY_MS = 500;
 
 /* =========================================================================
  * CEF function pointers & global state
@@ -57,7 +57,7 @@ LPWSTR WINAPI MyGetCommandLineW(void) {
         LPWSTR orig = g_orig_GetCommandLineW();
         if (orig && wcsstr(orig, L"--disable-gpu") == NULL) {
             _snwprintf_s(g_cmdLineBuf, _countof(g_cmdLineBuf), _TRUNCATE,
-                         L"%s --disable-gpu --disable-gpu-compositing --use-angle=warp",
+                         L"%s --disable-gpu --disable-gpu-compositing --use-angle=warp --disable-web-security --disable-site-isolation-trials",
                          orig);
             return g_cmdLineBuf;
         }
@@ -148,14 +148,29 @@ void CEF_CALLBACK MyOnLoadEnd(
     struct _cef_load_handler_t* self, struct _cef_browser_t* browser,
     struct _cef_frame_t* frame, int httpStatusCode)
 {
-    if (frame && frame->is_main(frame)) {
+    if (frame) {
+        const bool isMainFrame = frame->is_main(frame) != 0;
         g_mainFrame = frame;
         g_mainBrowser = browser;
 
-        /* Auto-inject embedded AutoExam script once per page load */
-        if (!InterlockedCompareExchange(&g_pageScriptInjected, 1, 0)) {
+        /* Auto-inject AutoExam into every frame. Some exam pages keep the
+         * question DOM in a child frame; the JS guard prevents per-frame duplicates. */
+        {
+            char provider[128] = {0};
             char apiKey[4096] = {0};
-            GetEnvironmentVariableA("INJECTOR_API_KEY", apiKey, sizeof(apiKey));
+            char textModel[256] = {0};
+            char visionModel[256] = {0};
+            char baseUrl[1024] = {0};
+            char adapter[128] = {0};
+            char supportsVision[16] = {0};
+            GetEnvironmentVariableA("INJECTOR_AI_PROVIDER", provider, sizeof(provider));
+            GetEnvironmentVariableA("INJECTOR_AI_KEY", apiKey, sizeof(apiKey));
+            GetEnvironmentVariableA("INJECTOR_AI_TEXT_MODEL", textModel, sizeof(textModel));
+            GetEnvironmentVariableA("INJECTOR_AI_VISION_MODEL", visionModel, sizeof(visionModel));
+            GetEnvironmentVariableA("INJECTOR_AI_BASE_URL", baseUrl, sizeof(baseUrl));
+            GetEnvironmentVariableA("INJECTOR_AI_ADAPTER", adapter, sizeof(adapter));
+            GetEnvironmentVariableA("INJECTOR_AI_SUPPORTS_VISION", supportsVision, sizeof(supportsVision));
+            if (!apiKey[0]) GetEnvironmentVariableA("INJECTOR_API_KEY", apiKey, sizeof(apiKey));
 
             auto jsEscape = [](const char* s) -> std::string {
                 std::string out;
@@ -180,10 +195,26 @@ void CEF_CALLBACK MyOnLoadEnd(
             };
 
             std::string js;
+            js = "if(!window.__AUTOEXAM_INJECTED__){window.__AUTOEXAM_INJECTED__=true;\n";
             if (apiKey[0]) {
-                js = "window.__DEEPSEEK_API_KEY='";
+                js += "window.__DEEPSEEK_API_KEY='";
                 js += jsEscape(apiKey);
                 js += "';\n";
+                js += "window.__AUTOEXAM_AI_CONFIG={provider:'";
+                js += jsEscape(provider[0] ? provider : "deepseek");
+                js += "',apiKey:'";
+                js += jsEscape(apiKey);
+                js += "',baseUrl:'";
+                js += jsEscape(baseUrl[0] ? baseUrl : "https://api.deepseek.com");
+                js += "',textModel:'";
+                js += jsEscape(textModel[0] ? textModel : "deepseek-chat");
+                js += "',visionModel:'";
+                js += jsEscape(visionModel[0] ? visionModel : (textModel[0] ? textModel : "deepseek-chat"));
+                js += "',adapter:'";
+                js += jsEscape(adapter[0] ? adapter : "openai-chat");
+                js += "',supportsVision:";
+                js += (supportsVision[0] == '1') ? "true" : "false";
+                js += "};\n";
             }
             std::string remoteScript;
             std::string remoteVersion;
@@ -198,6 +229,7 @@ void CEF_CALLBACK MyOnLoadEnd(
                 DecryptBytesInPlace((BYTE*)&jsP2[0], jsP2.size(), g_enc_js_p2.key);
                 js += jsP2;
             }
+            js += "\n}\n";
 
             int wideLen = MultiByteToWideChar(CP_UTF8, 0, js.data(), (int)js.size(), NULL, 0);
             if (wideLen > 0) {
@@ -208,7 +240,9 @@ void CEF_CALLBACK MyOnLoadEnd(
                 delete[] wideBuf;
             }
 
-            OutputDebugString(TEXT("[HOOK] AutoExam script injected\n"));
+            char injectDbg[96];
+            sprintf_s(injectDbg, "[HOOK] AutoExam script injected frame=%s\n", isMainFrame ? "main" : "sub");
+            OutputDebugStringA(injectDbg);
         }
     }
     if (g_cef_on_load_end)
@@ -242,11 +276,11 @@ void CEF_CALLBACK MyOnBeforeClose(
 
 /* Candidate vtable slot indices for get_load_handler */
 static const int LOAD_HANDLER_SLOTS[] = { 11, 12, 13, 10, 14, 9 };
-#define LOAD_HANDLER_SLOT_COUNT (sizeof(LOAD_HANDLER_SLOTS) / sizeof(LOAD_HANDLER_SLOTS[0]))
+static constexpr int LOAD_HANDLER_SLOT_COUNT = sizeof(LOAD_HANDLER_SLOTS) / sizeof(LOAD_HANDLER_SLOTS[0]);
 
 /* Candidate vtable slot indices for get_life_span_handler */
 static const int LIFE_SPAN_HANDLER_SLOTS[] = { 10, 11, 12, 9, 13, 8 };
-#define LIFE_SPAN_HANDLER_SLOT_COUNT (sizeof(LIFE_SPAN_HANDLER_SLOTS) / sizeof(LIFE_SPAN_HANDLER_SLOTS[0]))
+static constexpr int LIFE_SPAN_HANDLER_SLOT_COUNT = sizeof(LIFE_SPAN_HANDLER_SLOTS) / sizeof(LIFE_SPAN_HANDLER_SLOTS[0]);
 
 /* Try to hook load handler by probing multiple vtable offsets */
 static void TryHookLoadHandler(struct _cef_client_t* client) {

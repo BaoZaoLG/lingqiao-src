@@ -8,11 +8,13 @@ import (
 	"time"
 )
 
+// Session ...
 type Session struct {
 	ActorID   string
 	ExpiresAt time.Time
 }
 
+// SessionStore ...
 type SessionStore struct {
 	prefix string
 	ttl    time.Duration
@@ -20,6 +22,7 @@ type SessionStore struct {
 	items  map[string]Session
 }
 
+// NewSessionStore ...
 func NewSessionStore(prefix string, ttl time.Duration) *SessionStore {
 	return &SessionStore{
 		prefix: prefix,
@@ -28,6 +31,7 @@ func NewSessionStore(prefix string, ttl time.Duration) *SessionStore {
 	}
 }
 
+// Create ...
 func (s *SessionStore) Create(actorID string) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -42,6 +46,7 @@ func (s *SessionStore) Create(actorID string) (string, error) {
 	return token, nil
 }
 
+// Check ...
 func (s *SessionStore) Check(token string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -53,12 +58,14 @@ func (s *SessionStore) Check(token string) (string, bool) {
 	return session.ActorID, true
 }
 
+// Invalidate ...
 func (s *SessionStore) Invalidate(token string) {
 	s.mu.Lock()
 	delete(s.items, HashToken(token))
 	s.mu.Unlock()
 }
 
+// Cleanup ...
 func (s *SessionStore) Cleanup(now time.Time) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -73,6 +80,7 @@ func (s *SessionStore) Cleanup(now time.Time) int {
 	return removed
 }
 
+// RawTokenStoredForTest ...
 func (s *SessionStore) RawTokenStoredForTest(token string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -81,6 +89,7 @@ func (s *SessionStore) RawTokenStoredForTest(token string) bool {
 	return ok
 }
 
+// HashToken ...
 func HashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])

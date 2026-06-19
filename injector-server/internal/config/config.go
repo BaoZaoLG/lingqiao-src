@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// Config ...
 type Config struct {
 	AdminAddr  string
 	AgentAddr  string
@@ -13,6 +14,7 @@ type Config struct {
 	SessionTTL time.Duration
 }
 
+// Load ...
 func Load() (Config, error) {
 	ttl, err := durationEnv("SESSION_TTL", 4*time.Hour)
 	if err != nil {

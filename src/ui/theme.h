@@ -63,6 +63,60 @@ QLineEdit:focus { border-color: #4a9eff; }
 QLineEdit:disabled { background: rgba(240, 240, 245, 0.50); color: #94a3b8; border-color: rgba(220, 220, 230, 0.40); }
 QLineEdit[readOnly="true"] { background: rgba(245, 245, 250, 0.55); color: #64748b; }
 
+/* QComboBox */
+QComboBox {
+    background: rgba(255, 255, 255, 0.60);
+    border: 1px solid rgba(200, 200, 210, 0.50);
+    border-radius: 8px;
+    padding: 8px 34px 8px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #0f172a;
+    selection-background-color: #4a9eff;
+    selection-color: #ffffff;
+}
+QComboBox:hover { background: rgba(255, 255, 255, 0.72); border-color: rgba(180, 180, 190, 0.65); }
+QComboBox:focus { border-color: #4a9eff; }
+QComboBox:disabled { background: rgba(240, 240, 245, 0.50); color: #94a3b8; border-color: rgba(220, 220, 230, 0.40); }
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 30px;
+    border-left: 1px solid rgba(200, 200, 210, 0.35);
+    border-top-right-radius: 8px;
+    border-bottom-right-radius: 8px;
+    background: rgba(255, 255, 255, 0.18);
+}
+QComboBox::down-arrow {
+    image: url(:/ui/icons/chevron-down.svg);
+    width: 12px;
+    height: 12px;
+    margin: 0;
+}
+QComboBox QAbstractItemView {
+    background: rgba(255, 255, 255, 0.98);
+    border: 1px solid rgba(200, 200, 210, 0.60);
+    color: #1a1a2e;
+    outline: none;
+    padding: 4px;
+    selection-background-color: #4a9eff;
+    selection-color: #ffffff;
+}
+QComboBox QAbstractItemView::item {
+    min-height: 26px;
+    padding: 5px 10px;
+    color: #1a1a2e;
+    background: transparent;
+}
+QComboBox QAbstractItemView::item:hover {
+    background: rgba(240, 240, 245, 0.95);
+    color: #0f172a;
+}
+QComboBox QAbstractItemView::item:selected {
+    background: #4a9eff;
+    color: #ffffff;
+}
+
 /* QPushButton */
 QPushButton {
     background: rgba(255, 255, 255, 0.70);

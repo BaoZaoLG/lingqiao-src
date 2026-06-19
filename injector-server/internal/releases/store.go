@@ -12,10 +12,12 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// SQLiteStore ...
 type SQLiteStore struct {
 	db *sql.DB
 }
 
+// OpenSQLiteStore ...
 func OpenSQLiteStore(path string) (*SQLiteStore, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return nil, err
@@ -32,6 +34,7 @@ func OpenSQLiteStore(path string) (*SQLiteStore, error) {
 	return store, nil
 }
 
+// Close ...
 func (s *SQLiteStore) Close() error {
 	if s == nil || s.db == nil {
 		return nil
@@ -94,6 +97,7 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 	return nil
 }
 
+// SaveRelease ...
 func (s *SQLiteStore) SaveRelease(ctx context.Context, release Release) error {
 	if release.ID == "" || release.Version == "" {
 		return fmt.Errorf("release id and version are required")
@@ -142,6 +146,7 @@ func (s *SQLiteStore) SaveRelease(ctx context.Context, release Release) error {
 	return err
 }
 
+// GetRelease ...
 func (s *SQLiteStore) GetRelease(ctx context.Context, id string) (Release, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, version, channel, status, min_version, force_update,
 		rollout_percent, notes, targeting_json, created_at, published_at, paused_at, rolled_back_at, rolled_back_to
@@ -149,6 +154,7 @@ func (s *SQLiteStore) GetRelease(ctx context.Context, id string) (Release, error
 	return scanRelease(row)
 }
 
+// ListReleases ...
 func (s *SQLiteStore) ListReleases(ctx context.Context) ([]Release, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, version, channel, status, min_version, force_update,
 		rollout_percent, notes, targeting_json, created_at, published_at, paused_at, rolled_back_at, rolled_back_to
@@ -160,6 +166,7 @@ func (s *SQLiteStore) ListReleases(ctx context.Context) ([]Release, error) {
 	return scanReleases(rows)
 }
 
+// ListPublishedReleases ...
 func (s *SQLiteStore) ListPublishedReleases(ctx context.Context, channel Channel) ([]Release, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, version, channel, status, min_version, force_update,
 		rollout_percent, notes, targeting_json, created_at, published_at, paused_at, rolled_back_at, rolled_back_to
@@ -172,6 +179,7 @@ func (s *SQLiteStore) ListPublishedReleases(ctx context.Context, channel Channel
 	return scanReleases(rows)
 }
 
+// SavePackage ...
 func (s *SQLiteStore) SavePackage(ctx context.Context, pkg ReleasePackage) error {
 	if pkg.ID == "" || pkg.ReleaseID == "" || pkg.Filename == "" || pkg.Path == "" {
 		return fmt.Errorf("package id, release id, filename, and path are required")
@@ -197,12 +205,14 @@ func (s *SQLiteStore) SavePackage(ctx context.Context, pkg ReleasePackage) error
 	return err
 }
 
+// GetPackage ...
 func (s *SQLiteStore) GetPackage(ctx context.Context, id string) (ReleasePackage, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, release_id, kind, filename, path, file_size, sha256, created_at
 		FROM release_packages WHERE id = ?`, id)
 	return scanPackage(row)
 }
 
+// ListPackages ...
 func (s *SQLiteStore) ListPackages(ctx context.Context, releaseID string) ([]ReleasePackage, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, release_id, kind, filename, path, file_size, sha256, created_at
 		FROM release_packages WHERE release_id = ? ORDER BY created_at DESC`, releaseID)
@@ -221,6 +231,7 @@ func (s *SQLiteStore) ListPackages(ctx context.Context, releaseID string) ([]Rel
 	return packages, rows.Err()
 }
 
+// RecordEvent ...
 func (s *SQLiteStore) RecordEvent(ctx context.Context, event ReleaseEvent) error {
 	if event.ReleaseID == "" || event.Type == "" {
 		return fmt.Errorf("release id and event type are required")
@@ -236,6 +247,7 @@ func (s *SQLiteStore) RecordEvent(ctx context.Context, event ReleaseEvent) error
 	return err
 }
 
+// ListEvents ...
 func (s *SQLiteStore) ListEvents(ctx context.Context, releaseID string, limit int) ([]ReleaseEvent, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
@@ -261,6 +273,7 @@ func (s *SQLiteStore) ListEvents(ctx context.Context, releaseID string, limit in
 	return events, rows.Err()
 }
 
+// ReleaseMetrics ...
 func (s *SQLiteStore) ReleaseMetrics(ctx context.Context, releaseID string) (ReleaseMetrics, error) {
 	metrics := ReleaseMetrics{ReleaseID: releaseID}
 	rows, err := s.db.QueryContext(ctx, `SELECT type, COUNT(*) FROM release_events WHERE release_id = ? GROUP BY type`, releaseID)
