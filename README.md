@@ -22,7 +22,7 @@
 ```powershell
 cd injector-server
 # 配置本地 Go 编译缓存（可选）
-$env:GOCACHE='C:\Users\Li\Downloads\Lingqiao_src\injector-server\.gocache'
+$env:GOCACHE="$PWD\.gocache"
 
 # 编译管理前端
 cd web
