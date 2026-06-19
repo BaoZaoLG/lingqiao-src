@@ -32,7 +32,7 @@ if(EXISTS "${MINHOOK_DIR}/src/hook.c")
     message(STATUS "MinHook found at ${MINHOOK_DIR}")
 else()
     set(HAS_MINHOOK FALSE)
-    message(WARNING "MinHook not found! Run: powershell -File scripts/download_minhook.ps1")
+    message(WARNING "MinHook not found! Please check vendor/minhook directory.")
 endif()
 
 # ============================================================
