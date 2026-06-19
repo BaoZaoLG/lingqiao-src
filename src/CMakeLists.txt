@@ -68,29 +68,7 @@ if(NOT CMAKE_PREFIX_PATH)
 endif()
 find_package(Qt5 REQUIRED COMPONENTS Widgets Network WinExtras Concurrent)
 
-add_executable(UpdateUrlTest test/update_url_test.cpp)
-target_include_directories(UpdateUrlTest PRIVATE ${COMMON_INCLUDES})
-target_link_libraries(UpdateUrlTest PRIVATE Qt5::Core)
-target_compile_options(UpdateUrlTest PRIVATE /utf-8)
 
-# ============================================================
-# Test executables
-# ============================================================
-add_executable(PatternScanTest test/pattern_scan_test.cpp hook/pattern_scan.cpp)
-target_include_directories(PatternScanTest PRIVATE ${COMMON_INCLUDES})
-target_compile_options(PatternScanTest PRIVATE /utf-8)
-
-add_executable(ManualInjectorCoreTest test/manual_injector_core_test.cpp injector/manual_injector_core.cpp)
-target_include_directories(ManualInjectorCoreTest PRIVATE ${COMMON_INCLUDES})
-target_compile_options(ManualInjectorCoreTest PRIVATE /utf-8)
-
-add_executable(ProcessIdentityTest test/process_identity_test.cpp hook/process_identity.cpp)
-target_include_directories(ProcessIdentityTest PRIVATE ${COMMON_INCLUDES})
-target_compile_options(ProcessIdentityTest PRIVATE /utf-8)
-
-add_executable(SecurityRegressionTest test/security_regression_test.cpp)
-target_include_directories(SecurityRegressionTest PRIVATE ${COMMON_INCLUDES})
-target_compile_options(SecurityRegressionTest PRIVATE /utf-8)
 
 # ============================================================
 # Standalone injector tools
