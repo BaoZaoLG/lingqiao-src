@@ -46,6 +46,7 @@
 #include <QCryptographicHash>
 #include <QUrl>
 #include <QTextEdit>
+#include <QTextBrowser>
 
 #include <windows.h>
 #include <dwmapi.h>
@@ -250,7 +251,7 @@ private:
     QLabel*        m_balanceLabel  = nullptr;
     AnimatedButton* m_injectBtn     = nullptr;
     QWidget*       m_chatPanel     = nullptr;
-    QTextEdit*     m_chatView      = nullptr;
+    QTextBrowser*   m_chatView      = nullptr;
     QLineEdit*     m_chatInput     = nullptr;
     AnimatedButton* m_chatSendBtn  = nullptr;
     QLabel*        m_chatHeading   = nullptr;
@@ -263,6 +264,12 @@ private:
     int            m_chatOnlineCount = 0;
     QString        m_chatAuthorID;
     QString        m_chatRetryContent;
+    QJsonArray     m_localMessages;
+    qint64         m_chatReplyToID = 0;
+    QString        m_chatReplyAuthor;
+    QString        m_chatReplyPreview;
+    QWidget*       m_replyBanner   = nullptr;
+    QLabel*        m_replyLabel    = nullptr;
     QWidget*       m_announcement  = nullptr;
     QLabel*        m_announceLabel = nullptr;
     QWidget*       m_updateBanner  = nullptr;
@@ -409,7 +416,7 @@ private:
         ButtonSuccess
     };
 
-    QString buttonStyle(ButtonTone tone, int fontPx, int radiusPx = 8) const {
+    QString buttonStyle(ButtonTone tone, int fontPx, int radiusPx = 8, int paddingXPx = 14, int paddingYPx = 8) const {
         if (tone == ButtonAccent) {
             return QString(
                 "QPushButton { background: rgba(74,158,255,0.85); "
@@ -422,7 +429,7 @@ private:
                 "border-color: rgba(74,158,255,0.70); }"
                 "QPushButton:disabled { background: rgba(74,158,255,0.40); "
                 "border-color: rgba(74,158,255,0.30); color: rgba(255,255,255,0.55); }")
-                .arg(fontPx).arg(radiusPx).arg(spx(9)).arg(spx(18));
+                .arg(fontPx).arg(radiusPx).arg(spx(paddingYPx)).arg(spx(paddingXPx));
         }
         if (tone == ButtonSuccess) {
             return QString(
@@ -433,7 +440,7 @@ private:
                 "QPushButton:pressed { background: #22c55e; border-color: #22c55e; }"
                 "QPushButton:disabled { background: rgba(52,210,123,0.40); "
                 "border-color: rgba(52,210,123,0.30); color: rgba(255,255,255,0.55); }")
-                .arg(fontPx).arg(radiusPx).arg(spx(9)).arg(spx(18));
+                .arg(fontPx).arg(radiusPx).arg(spx(paddingYPx)).arg(spx(paddingXPx));
         }
         return QString(
             "QPushButton { background: transparent; "
@@ -445,11 +452,11 @@ private:
             "QPushButton:pressed { background: rgba(235,235,242,0.42); }"
             "QPushButton:disabled { background: rgba(255,255,255,0.14); "
             "border-color: rgba(220,220,230,0.26); color: #94a3b8; }")
-            .arg(fontPx).arg(radiusPx).arg(spx(9)).arg(spx(18));
+            .arg(fontPx).arg(radiusPx).arg(spx(paddingYPx)).arg(spx(paddingXPx));
     }
 
-    QString primaryButtonStyle(int fontPx, int radiusPx = 8) const {
-        return buttonStyle(ButtonNeutral, fontPx, radiusPx);
+    QString primaryButtonStyle(int fontPx, int radiusPx = 8, int paddingXPx = 14, int paddingYPx = 8) const {
+        return buttonStyle(ButtonNeutral, fontPx, radiusPx, paddingXPx, paddingYPx);
     }
 
     void installThemedLineEditMenu(QLineEdit* edit) {
@@ -519,44 +526,77 @@ private:
         if (m_updateNowBtn) m_updateNowBtn->setStyleSheet(buttonStyle(ButtonAccent, spx(11), spx(4)));
         if (m_remindLaterBtn) m_remindLaterBtn->setStyleSheet(buttonStyle(ButtonNeutral, spx(11), spx(4)));
         if (m_diagnosticsBtn) {
-            m_diagnosticsBtn->setFixedSize(spx(58), spx(28));
-            m_diagnosticsBtn->setStyleSheet(buttonStyle(ButtonNeutral, spx(11), spx(6)));
+            m_diagnosticsBtn->setFixedSize(spx(64), spx(28));
+            m_diagnosticsBtn->setStyleSheet(buttonStyle(ButtonNeutral, spx(11), spx(6), 8, 4));
         }
-        if (m_homeNavBtn) m_homeNavBtn->setFixedSize(spx(74), spx(30));
-        if (m_communityNavBtn) m_communityNavBtn->setFixedSize(spx(74), spx(30));
+        if (m_homeNavBtn) m_homeNavBtn->setFixedSize(spx(80), spx(30));
+        if (m_communityNavBtn) m_communityNavBtn->setFixedSize(spx(90), spx(30));
         if (m_communityState) {
             m_communityState->setStyleSheet(QString(
-                "font-size: %1px; color: #475569; background: rgba(255,255,255,0.22); "
-                "border: 1px solid rgba(200,200,210,0.30); border-radius: %2px; padding: %3px;")
-                .arg(spx(12)).arg(spx(8)).arg(spx(12)));
+                "font-size: %1px; color: #475569; font-weight: 600;")
+                .arg(spx(12)));
         }
         if (m_chatNicknameInput) {
-            m_chatNicknameInput->setFixedHeight(spx(34));
+            m_chatNicknameInput->setFixedSize(spx(100), spx(26));
             m_chatNicknameInput->setStyleSheet(QString(
-                "QLineEdit { font-size: %1px; border-radius: %2px; padding: %3px %4px; }")
-                .arg(spx(12)).arg(spx(7)).arg(spx(7)).arg(spx(10)));
+                "QLineEdit { font-size: %1px; border-radius: %2px; padding: %3px %4px; "
+                "background: rgba(255, 255, 255, 0.45); border: 1px solid rgba(200, 200, 210, 0.45); color: #0f172a; } "
+                "QLineEdit:focus { border-color: #4a9eff; background: #ffffff; }")
+                .arg(spx(11)).arg(spx(6)).arg(spx(2)).arg(spx(4)));
+            if (QWidget* p = m_chatNicknameInput->parentWidget()) {
+                if (QLabel* nickLabel = p->findChild<QLabel*>("chatNicknameLabel")) {
+                    nickLabel->setStyleSheet(QString("font-size: %1px; color: #64748b; font-weight: 500;").arg(spx(11)));
+                }
+            }
         }
         if (m_chatNicknameSaveBtn) {
-            m_chatNicknameSaveBtn->setFixedSize(spx(72), spx(34));
-            m_chatNicknameSaveBtn->setStyleSheet(buttonStyle(ButtonNeutral, spx(12), spx(8)));
+            m_chatNicknameSaveBtn->setFixedSize(spx(48), spx(26));
+            m_chatNicknameSaveBtn->setStyleSheet(buttonStyle(ButtonNeutral, spx(11), spx(6), 6, 2));
         }
         updatePageNav();
         if (m_chatView) {
-            m_chatView->setFixedHeight(spx(120));
             m_chatView->setStyleSheet(QString(
-                "QTextEdit { background: rgba(255,255,255,0.26); border: 1px solid rgba(200,200,210,0.32); "
-                "border-radius: %1px; padding: %2px; color: #334155; font-size: %3px; }")
-                .arg(spx(8)).arg(spx(8)).arg(spx(12)));
+                "QTextBrowser { background: rgba(255, 255, 255, 0.35); border: 1px solid rgba(200, 200, 210, 0.40); "
+                "border-radius: %1px; padding: %2px; color: #1a1a2e; font-size: %3px; }")
+                .arg(spx(8)).arg(spx(10)).arg(spx(12)));
+            updateChatView(m_localMessages, true);
+        }
+        if (m_replyBanner) {
+            m_replyBanner->setStyleSheet(QString(
+                "QFrame#replyBanner { background: rgba(74, 158, 255, 0.12); border: 1px solid rgba(74, 158, 255, 0.25); "
+                "border-radius: %1px; padding: %2px %3px; }")
+                .arg(spx(6)).arg(spx(4)).arg(spx(8)));
+            if (m_replyLabel) {
+                m_replyLabel->setStyleSheet(QString("font-size: %1px; color: #1e40af; font-weight: 500;").arg(spx(11)));
+            }
+            QPushButton* cancelBtn = m_replyBanner->findChild<QPushButton*>();
+            if (cancelBtn) {
+                cancelBtn->setFixedSize(spx(24), spx(24));
+                cancelBtn->setStyleSheet(QString(
+                    "QPushButton { border: none; background: transparent; color: #1e40af; font-weight: bold; font-size: %1px; margin: 0; padding: 0; } "
+                    "QPushButton:hover { color: #ef4444; }").arg(spx(16)));
+            }
         }
         if (m_chatInput) {
             m_chatInput->setFixedHeight(spx(34));
             m_chatInput->setStyleSheet(QString(
-                "QLineEdit { font-size: %1px; border-radius: %2px; padding: %3px %4px; }")
-                .arg(spx(12)).arg(spx(7)).arg(spx(7)).arg(spx(10)));
+                "QLineEdit { font-size: %1px; border-radius: %2px; padding: %3px %4px; "
+                "background: rgba(255, 255, 255, 0.50); border: 1px solid rgba(200, 200, 210, 0.45); color: #0f172a; } "
+                "QLineEdit:focus { border-color: #4a9eff; background: #ffffff; }")
+                .arg(spx(12)).arg(spx(8)).arg(spx(6)).arg(spx(10)));
+        }
+        if (m_chatHeading) {
+            m_chatHeading->setStyleSheet(QString("font-size: %1px; font-weight: 700; color: #1e293b;").arg(spx(12)));
         }
         if (m_chatSendBtn) {
-            m_chatSendBtn->setFixedSize(spx(72), spx(34));
-            m_chatSendBtn->setStyleSheet(buttonStyle(ButtonNeutral, spx(12), spx(8)));
+            m_chatSendBtn->setFixedSize(spx(64), spx(34));
+            m_chatSendBtn->setStyleSheet(QString(
+                "QPushButton { font-size: %1px; border-radius: %2px; "
+                "background: rgba(74, 158, 255, 0.85); border: 1px solid rgba(74, 158, 255, 0.60); "
+                "color: #ffffff; font-weight: 600; } "
+                "QPushButton:hover { background: rgba(109, 179, 255, 0.90); } "
+                "QPushButton:disabled { background: rgba(74, 158, 255, 0.40); color: rgba(255,255,255,0.5); }")
+                .arg(spx(12)).arg(spx(8)));
         }
         if (m_injectBtn) {
             m_injectBtn->setFixedSize(spx(200), spx(44));

@@ -180,56 +180,61 @@
     }
 
     QWidget* buildCommunityPage() {
-        QScrollArea* scroll = new QScrollArea();
-        scroll->setWidgetResizable(true);
-        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        scroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
-
         QWidget* body = new QWidget();
         body->setStyleSheet("background: transparent;");
         QVBoxLayout* bl = new QVBoxLayout(body);
-        bl->setContentsMargins(24, 18, 24, 20);
-        bl->setSpacing(16);
+        bl->setContentsMargins(24, 12, 24, 16);
+        bl->setSpacing(10);
 
-        QFrame* c = card();
-        QVBoxLayout* o = new QVBoxLayout(c);
-        o->setContentsMargins(18, 16, 18, 16);
-        o->setSpacing(10);
-        o->addWidget(heading(QString::fromUtf8(_S("社区"))));
+        // Header Card (sleek, transparent standard card)
+        QFrame* headerCard = card();
+        QHBoxLayout* hl = new QHBoxLayout(headerCard);
+        hl->setContentsMargins(16, 8, 16, 8);
+        hl->setSpacing(10);
 
-        m_communityState = new QLabel(QString::fromUtf8(_S("激活后可进入社区")));
-        m_communityState->setWordWrap(true);
-        m_communityState->setStyleSheet(
-            "font-size: 12px; color: #475569; background: rgba(255,255,255,0.22); "
-            "border: 1px solid rgba(200,200,210,0.30); border-radius: 8px; padding: 12px;");
-        o->addWidget(m_communityState);
+        // Status indicator
+        m_communityState = new QLabel();
+        m_communityState->setWordWrap(false);
+        m_communityState->setStyleSheet("font-size: 12px; font-weight: 600; color: #475569;");
+        hl->addWidget(m_communityState, 1);
 
-        QHBoxLayout* profileRow = new QHBoxLayout();
-        profileRow->setContentsMargins(0, 0, 0, 0);
-        profileRow->setSpacing(8);
+        // Nickname label
+        QLabel* nickLabel = new QLabel(QString::fromUtf8(_S("昵称:")));
+        nickLabel->setObjectName("chatNicknameLabel");
+        nickLabel->setStyleSheet("font-size: 11px; color: #64748b; font-weight: 500;");
+        hl->addWidget(nickLabel);
+
         m_chatNicknameInput = new QLineEdit();
-        m_chatNicknameInput->setPlaceholderText(QString::fromUtf8(_S("社区昵称，1-16 个字符")));
+        m_chatNicknameInput->setPlaceholderText(QString::fromUtf8(_S("设置昵称")));
         m_chatNicknameInput->setMaxLength(16);
-        m_chatNicknameInput->setFixedHeight(34);
+        m_chatNicknameInput->setFixedSize(100, 26);
         m_chatNicknameInput->setEnabled(false);
+        m_chatNicknameInput->setStyleSheet(
+            "QLineEdit { font-size: 11px; padding: 2px 6px; border-radius: 6px; "
+            "background: rgba(255, 255, 255, 0.45); border: 1px solid rgba(200, 200, 210, 0.45); color: #0f172a; } "
+            "QLineEdit:focus { border-color: #4a9eff; background: #ffffff; }");
         installThemedLineEditMenu(m_chatNicknameInput);
         connect(m_chatNicknameInput, &QLineEdit::returnPressed, this, &MainWindow::saveChatProfile);
-        profileRow->addWidget(m_chatNicknameInput, 1);
+        hl->addWidget(m_chatNicknameInput);
 
         m_chatNicknameSaveBtn = new AnimatedButton(QString::fromUtf8(_S("保存")), AnimatedButton::GhostStyle);
-        m_chatNicknameSaveBtn->setFixedSize(72, 34);
+        m_chatNicknameSaveBtn->setFixedSize(48, 26);
         m_chatNicknameSaveBtn->setEnabled(false);
-        m_chatNicknameSaveBtn->setStyleSheet(buttonStyle(ButtonNeutral, spx(12), spx(8)));
+        m_chatNicknameSaveBtn->setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 2px 6px; border-radius: 6px; "
+            "background: rgba(255, 255, 255, 0.60); border: 1px solid rgba(200, 200, 210, 0.50); color: #334155; font-weight: 600; } "
+            "QPushButton:hover { background: rgba(240, 240, 245, 0.85); border-color: rgba(180, 180, 190, 0.60); }");
         connect(m_chatNicknameSaveBtn, &QPushButton::clicked, this, &MainWindow::saveChatProfile);
-        profileRow->addWidget(m_chatNicknameSaveBtn);
-        o->addLayout(profileRow);
+        hl->addWidget(m_chatNicknameSaveBtn);
 
-        bl->addWidget(c);
-        bl->addWidget(buildChatSection());
-        bl->addStretch();
+        bl->addWidget(headerCard);
 
-        scroll->setWidget(body);
-        return scroll;
+        // Chat section card (stretches to fill remaining space)
+        QWidget* chatSection = buildChatSection();
+        chatSection->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        bl->addWidget(chatSection, 1);
+
+        return body;
     }
 
     void showHomePage() {
@@ -242,6 +247,7 @@
         m_chatUnreadCount = 0;
         if (m_chatHeading) m_chatHeading->setText(QString::fromUtf8(_S("公共聊天")));
         updatePageNav();
+        updateChatView(m_localMessages, true);
     }
 
     void updatePageNav() {
@@ -250,21 +256,28 @@
             ? QString::fromUtf8(_S("社区(%1)")).arg(m_chatUnreadCount)
             : QString::fromUtf8(_S("社区"));
         if (m_communityNavBtn) m_communityNavBtn->setText(communityText);
-        if (m_homeNavBtn) m_homeNavBtn->setStyleSheet(buttonStyle(community ? ButtonNeutral : ButtonAccent, spx(11), spx(6)));
-        if (m_communityNavBtn) m_communityNavBtn->setStyleSheet(buttonStyle(community ? ButtonAccent : ButtonNeutral, spx(11), spx(6)));
+        if (m_homeNavBtn) m_homeNavBtn->setStyleSheet(buttonStyle(community ? ButtonNeutral : ButtonAccent, spx(11), spx(6), 10, 4));
+        if (m_communityNavBtn) m_communityNavBtn->setStyleSheet(buttonStyle(community ? ButtonAccent : ButtonNeutral, spx(11), spx(6), 10, 4));
     }
 
     void updateCommunityStateText() {
         if (!m_communityState) return;
         if (!m_activated) {
-            m_communityState->setText(QString::fromUtf8(_S("激活后可进入社区")));
+            m_communityState->setText(QString::fromUtf8(_S("<span style='color: #ef4444;'>●</span> 未激活")));
             return;
         }
+        
+        QString dotColor = "#22c55e"; // Success green
+        if (m_lastChatStatus != QString::fromUtf8(_S("正常")) && m_lastChatStatus != QString::fromUtf8(_S("已连接")) && m_lastChatStatus != QString::fromUtf8(_S("消息已发送"))) {
+            dotColor = "#f59e0b"; // Warning amber
+        }
+        
         QString online = m_chatOnlineCount > 0
             ? QString::fromUtf8(_S("最近活跃 %1 人")).arg(m_chatOnlineCount)
-            : QString::fromUtf8(_S("正在同步在线人数"));
-        m_communityState->setText(QString::fromUtf8(_S("连接：%1 · %2"))
-            .arg(m_lastChatStatus, online));
+            : QString::fromUtf8(_S("同步中..."));
+            
+        m_communityState->setText(QString::fromUtf8(_S("<span style='color: %1;'>●</span> 连接: %2 · %3"))
+            .arg(dotColor, m_lastChatStatus, online));
     }
 
     QWidget* buildCardSection() {
@@ -297,13 +310,10 @@
     }
 
     QWidget* buildSessionStatusSection() {
-        QFrame* s = new QFrame();
+        QFrame* s = card();
         s->setObjectName("sessionStatus");
-        s->setStyleSheet(
-            "#sessionStatus { background: rgba(255, 255, 255, 0.24); "
-            "border: 1px solid rgba(200, 200, 210, 0.28); border-radius: 8px; }");
         QVBoxLayout* o = new QVBoxLayout(s);
-        o->setContentsMargins(14, 6, 14, 6);
+        o->setContentsMargins(18, 12, 18, 12);
         o->setSpacing(0);
 
         m_cardExpiry = new QLabel();
@@ -313,13 +323,13 @@
 
         QHBoxLayout* row = new QHBoxLayout();
         row->setContentsMargins(0, 0, 0, 0);
-        row->setSpacing(8);
+        row->setSpacing(10);
         m_status = new InlineStatus();
         row->addWidget(m_status, 1);
 
         m_diagnosticsBtn = new AnimatedButton(QString::fromUtf8(_S("诊断")), AnimatedButton::GhostStyle);
-        m_diagnosticsBtn->setFixedSize(58, 28);
-        m_diagnosticsBtn->setStyleSheet(buttonStyle(ButtonNeutral, spx(11), spx(6)));
+        m_diagnosticsBtn->setFixedSize(64, 28);
+        m_diagnosticsBtn->setStyleSheet(buttonStyle(ButtonNeutral, spx(11), spx(6), 8, 4));
         connect(m_diagnosticsBtn, &QPushButton::clicked, this, &MainWindow::showDiagnostics);
         row->addWidget(m_diagnosticsBtn);
         o->addLayout(row);
