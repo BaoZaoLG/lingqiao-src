@@ -7,6 +7,8 @@
 #include "hook_safety.h"
 #include "process_identity.h"
 #include "script_loader.h"
+#include "v8_hooks.h"
+#include "v8_signatures.h"
 #if __has_include("encrypted_data.h")
 #include "encrypted_data.h"
 #else
@@ -408,7 +410,15 @@ BOOL APIENTRY InstallHook() {
 DWORD WINAPI ThreadProc(LPVOID lpThreadParameter) {
     (void)lpThreadParameter;
     Sleep(100);
-    LogCurrentProcessIdentity();
+    ProcessIdentity identity = GetCurrentProcessIdentity();
+    const std::wstring line = FormatProcessIdentityLog(identity);
+    OutputDebugStringW(line.c_str());
+    OutputDebugStringW(L"\n");
+
+    if (identity.cefRole == L"renderer") {
+        RunV8SignatureDiagnostics();
+        AttachV8SignatureHooks();
+    }
 
     /* Initial hook installation */
     DWORD t0 = GetTickCount();
