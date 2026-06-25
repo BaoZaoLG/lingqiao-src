@@ -30,6 +30,17 @@ extern "C" void __cdecl LogV8HookHit(int index) {
     LogLine(msg);
 }
 
+extern "C" void __cdecl LogV8BridgeArgs(int index, void* a1, void* a2, void* a3, void* a4) {
+    if (index < 0 || index >= static_cast<int>(V8_SIGNATURE_COUNT)) return;
+    LONG count = InterlockedIncrement(&g_v8HookHits[index]);
+    if (count > kMaxLoggedHitsPerHook) return;
+
+    char msg[512];
+    sprintf_s(msg, sizeof(msg), "[HOOK] V8Bridge hit name=%s count=%ld a1=0x%p a2=0x%p a3=0x%p a4=0x%p",
+              GetV8SignatureName(static_cast<size_t>(index)), count, a1, a2, a3, a4);
+    LogLine(msg);
+}
+
 extern "C" __declspec(naked) void V8Detour0() {
     __asm {
         pushfd
@@ -60,9 +71,17 @@ extern "C" __declspec(naked) void V8Detour2() {
     __asm {
         pushfd
         pushad
+        mov eax, dword ptr [esp + 52]
+        push eax
+        mov eax, dword ptr [esp + 52]
+        push eax
+        mov eax, dword ptr [esp + 52]
+        push eax
+        mov eax, dword ptr [esp + 52]
+        push eax
         push 2
-        call LogV8HookHit
-        add esp, 4
+        call LogV8BridgeArgs
+        add esp, 20
         popad
         popfd
         jmp dword ptr [g_v8HookTrampolines + 8]
@@ -73,9 +92,17 @@ extern "C" __declspec(naked) void V8Detour3() {
     __asm {
         pushfd
         pushad
+        mov eax, dword ptr [esp + 52]
+        push eax
+        mov eax, dword ptr [esp + 52]
+        push eax
+        mov eax, dword ptr [esp + 52]
+        push eax
+        mov eax, dword ptr [esp + 52]
+        push eax
         push 3
-        call LogV8HookHit
-        add esp, 4
+        call LogV8BridgeArgs
+        add esp, 20
         popad
         popfd
         jmp dword ptr [g_v8HookTrampolines + 12]
@@ -86,9 +113,17 @@ extern "C" __declspec(naked) void V8Detour4() {
     __asm {
         pushfd
         pushad
+        mov eax, dword ptr [esp + 52]
+        push eax
+        mov eax, dword ptr [esp + 52]
+        push eax
+        mov eax, dword ptr [esp + 52]
+        push eax
+        mov eax, dword ptr [esp + 52]
+        push eax
         push 4
-        call LogV8HookHit
-        add esp, 4
+        call LogV8BridgeArgs
+        add esp, 20
         popad
         popfd
         jmp dword ptr [g_v8HookTrampolines + 16]
