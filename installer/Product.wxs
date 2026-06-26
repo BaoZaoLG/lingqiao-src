@@ -18,8 +18,9 @@
 
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
       <Component Id="InjectorExe" Guid="8D86D02E-E543-4537-930C-86EF88980D5C">
-        <File Id="InjectorExeFile" Source="$(var.SourceDir)\Injector.exe" KeyPath="yes" />
+        <File Id="InjectorExeFile" Source="$(var.SourceDir)\CX_LingQiao.exe" KeyPath="yes" />
       </Component>
+      <Files Include="$(var.SourceDir)\**" Exclude="$(var.SourceDir)\CX_LingQiao.exe" />
     </ComponentGroup>
   </Package>
 </Wix>

@@ -104,9 +104,9 @@ $ExeSize = (Get-Item $ExePath).Length
 Write-Host "  编译成功: $ExePath ($([math]::Round($ExeSize/1MB, 1)) MB)" -ForegroundColor DarkGray
 
 if ($BuildInstaller -or $InstallerOnly) {
-    Write-Host "[installer] 构建 WiX/Burn 安装包..." -ForegroundColor Yellow
-    $InstallerScript = Join-Path $ProjectRoot "installer\build_installer.ps1"
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $InstallerScript -Version $Version -SourceDir (Split-Path -Parent $ExePath)
+    Write-Host "[installer] 构建便携安装包..." -ForegroundColor Yellow
+    $InstallerScript = Join-Path $ProjectRoot "installer\build_portable_setup.ps1"
+    & pwsh -NoProfile -ExecutionPolicy Bypass -File $InstallerScript -Version $Version -SourceDir (Split-Path -Parent $ExePath)
     if ($LASTEXITCODE -ne 0) { throw "安装包构建失败" }
     if ($InstallerOnly) {
         Write-Host ""
