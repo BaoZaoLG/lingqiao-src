@@ -25,9 +25,9 @@ if (-not $OutputDir) {
 
 $SourceDir = [System.IO.Path]::GetFullPath($SourceDir)
 $OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
-$InjectorExe = Join-Path $SourceDir "Injector.exe"
+$InjectorExe = Join-Path $SourceDir "CX_LingQiao.exe"
 if (-not (Test-Path -LiteralPath $InjectorExe)) {
-    throw "Injector.exe not found at $InjectorExe. Build the Release client first."
+    throw "CX_LingQiao.exe not found at $InjectorExe. Build the Release client first."
 }
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
