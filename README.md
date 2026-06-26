@@ -8,10 +8,6 @@
 - **`injector-server/`**：Go 后端服务器源码，包含基于 Vite + TypeScript 构建的前端管理面板（`web/`）。
 - **`cef/` & `chromium/`**：客户端依赖的 CEF 和 Chromium 原生头文件与库。
 - **`installer/`**：客户端的 WiX Toolset 安装包打包脚本。
-- **`scripts/`**：自动化打包、构建、测试与加密的实用工具脚本。
-- **`docs/`**：项目开发规划书（Plans）和设计规格书（Specs）。
-- **`assets/`**：项目宣传图及相关资源。
-- **`reasonix.toml`**：智能代理框架配置文件。
 
 ---
 
@@ -24,7 +20,7 @@
 ```powershell
 cd injector-server
 # 配置本地 Go 编译缓存（可选）
-$env:GOCACHE='C:\Users\Li\Downloads\Lingqiao_src\injector-server\.gocache'
+$env:GOCACHE="$PWD\.gocache"
 
 # 编译管理前端
 cd web
@@ -60,10 +56,3 @@ go run .
   # 执行编译
   cmake --build . --config Release
   ```
-
----
-
-## 开发规划与规格文档
-如果您需要了解具体的设计决策或项目历史路线，请参阅以下文档：
-- **设计规格书**：[docs/superpowers/specs/](file:///c:/Users/Li/Downloads/Lingqiao_src/docs/superpowers/specs/)
-- **迭代规划文档**：[docs/superpowers/plans/](file:///c:/Users/Li/Downloads/Lingqiao_src/docs/superpowers/plans/)
