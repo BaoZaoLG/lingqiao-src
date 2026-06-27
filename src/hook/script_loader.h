@@ -14,7 +14,9 @@
 #define NT_SUCCESS(status) ((status) >= 0)
 #endif
 
-static const char* HOOK_CERT_PIN_SHA256 = "9f3435586bdb2528c1b1b460748782a96e2670ff4690b388796c85241b306458";
+// Certificate pin: use the single source of truth from crypto.h
+#include "crypto.h"
+static const char* HOOK_CERT_PIN_SHA256 = LQ_SP(LQ_CERT_PIN_SHA256_LITERAL);
 
 static void HookByteToHex(const BYTE* input, DWORD inputLen, char* output) {
     static const char hex[] = "0123456789abcdef";

@@ -2,6 +2,8 @@
 #include "hook_engine.h"
 #include "v8_hooks.h"
 
+typedef LPWSTR(WINAPI* GetCommandLineW_t)(void);
+
 extern DWORD WINAPI ThreadProc(LPVOID lpThreadParameter);
 
 /* External hook pointers for cleanup on unload */
@@ -11,8 +13,8 @@ extern PVOID g_cef_on_loading_state_change;
 extern PVOID g_cef_on_after_created;
 extern PVOID g_cef_on_before_close;
 
-/* GetCommandLineW is internal static, so we track it separately */
-static PVOID s_pGetCommandLineW = NULL;
+/* GetCommandLineW hook — defined in thread.cpp */
+extern GetCommandLineW_t g_orig_GetCommandLineW;
 extern PVOID g_set_window_display_affinity;
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved) {
@@ -54,6 +56,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, PVOID pvReserved) {
         if (g_set_window_display_affinity) {
             HookDetach(&g_set_window_display_affinity);
             g_set_window_display_affinity = NULL;
+        }
+        if (g_orig_GetCommandLineW) {
+            HookDetach((PVOID*)&g_orig_GetCommandLineW);
+            g_orig_GetCommandLineW = NULL;
         }
         break;
     }

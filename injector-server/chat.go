@@ -423,7 +423,32 @@ func normalizeChatContent(content string) string {
 	if !utf8.ValidString(content) {
 		return ""
 	}
+	// Escape HTML to prevent XSS in rich-text clients
+	content = chatEscapeHTML(content)
 	return content
+}
+
+// chatEscapeHTML escapes HTML special characters to prevent injection.
+func chatEscapeHTML(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '<':
+			b.WriteString("&lt;")
+		case '>':
+			b.WriteString("&gt;")
+		case '&':
+			b.WriteString("&amp;")
+		case '"':
+			b.WriteString("&quot;")
+		case '\'':
+			b.WriteString("&#39;")
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func normalizeChatNickname(nickname string) string {
@@ -561,7 +586,7 @@ func containsString(values []string, target string) bool {
 }
 
 func removeString(values []string, target string) []string {
-	result := values[:0]
+	result := make([]string, 0, len(values))
 	for _, value := range values {
 		if value != target {
 			result = append(result, value)

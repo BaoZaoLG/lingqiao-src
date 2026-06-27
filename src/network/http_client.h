@@ -63,7 +63,8 @@ static HttpResponse HttpPostJson(const wchar_t* host, int port,
     HttpResponse result = {0, QByteArray()};
     // Anti-replay: timestamp + nonce included in HMAC signature
     char tsBuf[32]; _i64toa(GetUnixTimestamp(), tsBuf, 10);
-    char nonceHex[33]; GenerateNonce(nonceHex);
+    char nonceHex[33]; if (!GenerateNonce(nonceHex)) {
+        result.error = QString::fromUtf8(_S("随机数生成失败")); return result; }
     BYTE sig[32]; DWORD sigLen = 0;
     HmacSha256Signed((const char*)HMAC_KEY, 32,
                      tsBuf, nonceHex, body.constData(), (DWORD)body.size(), sig, &sigLen);
@@ -160,7 +161,8 @@ static HttpResponse WinHttpGetSigned(const wchar_t* host, int port, const wchar_
 
     // HMAC sign the path for authenticated GET
     char tsBuf[32]; _i64toa(GetUnixTimestamp(), tsBuf, 10);
-    char nonceHex[33]; GenerateNonce(nonceHex);
+    char nonceHex[33]; if (!GenerateNonce(nonceHex)) {
+        result.error = QString::fromUtf8(_S("随机数生成失败")); return result; }
     BYTE sig[32]; DWORD sigLen = 0;
     int pathUtf8Len = WideCharToMultiByte(CP_UTF8, 0, path, -1, NULL, 0, NULL, NULL);
     QByteArray pathUtf8Buf(pathUtf8Len, 0);
@@ -268,7 +270,8 @@ static QString HttpDownloadFile(const wchar_t* host, int port, const wchar_t* pa
 
     // Add HMAC headers for authentication (sign timestamp+nonce+path for GET requests)
     char tsBuf[32]; _i64toa(GetUnixTimestamp(), tsBuf, 10);
-    char nonceHex[33]; GenerateNonce(nonceHex);
+    char nonceHex[33]; if (!GenerateNonce(nonceHex)) {
+        return QString::fromUtf8(_S("随机数生成失败")); }
     BYTE sig[32]; DWORD sigLen = 0;
     int pathUtf8Len2 = WideCharToMultiByte(CP_UTF8, 0, path, -1, NULL, 0, NULL, NULL);
     QByteArray pathUtf8Buf2(pathUtf8Len2, 0);
@@ -317,11 +320,12 @@ static QString HttpDownloadFile(const wchar_t* host, int port, const wchar_t* pa
         return QString::fromUtf8(_S("服务器返回错误 (HTTP %1)")).arg(statusCode);
     }
 
-    // Get content length
-    qint64 totalBytes = 0;
-    DWORD contentLengthSize = sizeof(totalBytes);
+    // Get content length (WINHTTP_QUERY_FLAG_NUMBER returns a DWORD)
+    DWORD contentLength = 0;
+    DWORD contentLengthSize = sizeof(contentLength);
     WinHttpQueryHeaders(hRequest.get(), WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
-        NULL, &totalBytes, &contentLengthSize, NULL);
+        NULL, &contentLength, &contentLengthSize, NULL);
+    qint64 totalBytes = (qint64)contentLength;
 
     HANDLE hFile = CreateFileW(localPath, GENERIC_WRITE, 0, NULL,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);

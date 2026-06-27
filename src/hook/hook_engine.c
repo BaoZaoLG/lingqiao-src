@@ -36,7 +36,9 @@ static void AddHookMapping(PVOID trampoline, PVOID target) {
 }
 
 static PVOID FindTargetByTrampoline(PVOID trampoline) {
-    for (LONG i = 0; i < g_hookCount; i++) {
+    LONG count = g_hookCount;
+    if (count > MAX_HOOKS) count = MAX_HOOKS;
+    for (LONG i = 0; i < count; i++) {
         if (g_hookMap[i].trampoline == trampoline)
             return g_hookMap[i].target;
     }

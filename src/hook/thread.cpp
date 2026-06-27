@@ -47,11 +47,20 @@ PVOID g_cef_on_before_close = NULL;
 static _cef_frame_t*   g_mainFrame   = NULL;
 static _cef_browser_t* g_mainBrowser = NULL;
 
+/* Thread-safe accessors for global frame/browser pointers.
+ * CEF callbacks may fire from different threads. */
+static inline void SetMainFrame(_cef_frame_t* frame) {
+    InterlockedExchangePointer((volatile PVOID*)&g_mainFrame, frame);
+}
+static inline void SetMainBrowser(_cef_browser_t* browser) {
+    InterlockedExchangePointer((volatile PVOID*)&g_mainBrowser, browser);
+}
+
 /* =========================================================================
  * GPU disable: GetCommandLineW Hook
  * ========================================================================= */
 typedef LPWSTR(WINAPI* GetCommandLineW_t)(void);
-static GetCommandLineW_t g_orig_GetCommandLineW = NULL;
+GetCommandLineW_t g_orig_GetCommandLineW = NULL;
 static wchar_t g_cmdLineBuf[32768] = {0};
 
 LPWSTR WINAPI MyGetCommandLineW(void) {
@@ -137,8 +146,8 @@ void CEF_CALLBACK MyOnLoadingStateChange(
     } else {
         _cef_frame_t* frame = GetMainFrame(browser);
         if (frame) {
-            g_mainFrame = frame;
-            g_mainBrowser = browser;
+            SetMainFrame(frame);
+            SetMainBrowser(browser);
         }
     }
     if (g_cef_on_loading_state_change)
@@ -151,8 +160,8 @@ void CEF_CALLBACK MyOnLoadEnd(
     struct _cef_frame_t* frame, int httpStatusCode)
 {
     if (frame && frame->is_main(frame)) {
-        g_mainFrame = frame;
-        g_mainBrowser = browser;
+        SetMainFrame(frame);
+        SetMainBrowser(browser);
 
         /* Auto-inject embedded AutoExam script once per page load */
         if (!InterlockedCompareExchange(&g_pageScriptInjected, 1, 0)) {
@@ -220,9 +229,9 @@ void CEF_CALLBACK MyOnLoadEnd(
 void CEF_CALLBACK MyOnAfterCreated(
     struct _cef_life_span_handler_t* self, struct _cef_browser_t* browser)
 {
-    g_mainBrowser = browser;
+    SetMainBrowser(browser);
     _cef_frame_t* frame = GetMainFrame(browser);
-    if (frame) g_mainFrame = frame;
+    if (frame) SetMainFrame(frame);
     if (g_cef_on_after_created)
         ((on_after_created_t)g_cef_on_after_created)(self, browser);
 }

@@ -1,3 +1,8 @@
+# -- Qt auto-processing (must be set before any Qt target) ------
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+set(CMAKE_AUTOUIC ON)
+
 # -- Common include paths for all targets --------------------------------
 set(COMMON_INCLUDES
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -91,9 +96,6 @@ add_custom_command(TARGET ManualDllInjectorGui POST_BUILD
 # ============================================================
 # Injector EXE (Qt GUI — main product)
 # ============================================================
-set(CMAKE_AUTOMOC ON)
-set(CMAKE_AUTORCC ON)
-set(CMAKE_AUTOUIC ON)
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.rc.in ${CMAKE_CURRENT_BINARY_DIR}/version.rc @ONLY)
 

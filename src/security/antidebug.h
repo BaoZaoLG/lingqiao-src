@@ -275,7 +275,7 @@ static bool CheckParentProcess() {
         // Extract filename
         WCHAR* fname = wcsrchr(path, L'\\');
         if (fname) fname++; else fname = path;
-        _wcslwr_s(fname, MAX_PATH);
+        _wcslwr_s(fname, wcslen(fname) + 1);
 
         // Check against known debugger names
         const WCHAR* debuggers[] = {

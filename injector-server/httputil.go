@@ -141,7 +141,11 @@ func (rl *rateLimiter) allow(key string) bool {
 		rl.attempts[key] = valid
 		return false
 	}
-	rl.attempts[key] = append(valid, now)
+	if len(valid) == 0 {
+		delete(rl.attempts, key)
+	} else {
+		rl.attempts[key] = append(valid, now)
+	}
 	return true
 }
 
@@ -172,7 +176,7 @@ func setSecurityHeaders(w http.ResponseWriter) {
 func setCSP(w http.ResponseWriter, extraConnectSrc ...string) {
 	connectSrc := "'self'"
 	if len(extraConnectSrc) > 0 {
-		connectSrc = strings.Join(append([]string{"'self"}, extraConnectSrc...), " ")
+		connectSrc = strings.Join(append([]string{"'self'"}, extraConnectSrc...), " ")
 	}
 	w.Header().Set("Content-Security-Policy",
 		fmt.Sprintf("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src %s", connectSrc))

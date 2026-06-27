@@ -48,18 +48,23 @@ static void ByteToHex(const BYTE* input, DWORD inputLen, char* output) {
 }
 
 // Generate a random nonce (16 bytes → 32 hex chars)
-static void GenerateNonce(char* output) {
+// Returns true on success. On failure, output is zeroed and caller should abort.
+static bool GenerateNonce(char* output) {
     BYTE buf[16];
+    bool ok = true;
     if (BCryptGenRandom(NULL, buf, sizeof(buf), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
         HCRYPTPROV hProv = 0;
         if (CryptAcquireContextW(&hProv, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT)) {
             CryptGenRandom(hProv, sizeof(buf), buf);
             CryptReleaseContext(hProv, 0);
         } else {
-            memset(buf, 0, sizeof(buf));
+            // Both RNGs failed — do NOT use a zero nonce
+            memset(output, 0, 33);
+            ok = false;
         }
     }
-    ByteToHex(buf, 16, output);
+    if (ok) ByteToHex(buf, 16, output);
+    return ok;
 }
 
 // Get current Unix timestamp in seconds
@@ -116,7 +121,9 @@ static bool DeriveKey(const char* masterSecret, DWORD secretLen,
 // SHA-256 fingerprint of the server's self-signed TLS certificate.
 // Regenerate when certs/server.crt is renewed:
 //   openssl x509 -in certs/server.crt -outform DER | sha256sum
-static const char* CERT_PIN_SHA256 = LQ_SP("9f3435586bdb2528c1b1b460748782a96e2670ff4690b388796c85241b306458");
+// NOTE: This is the single source of truth. script_loader.h references this.
+#define LQ_CERT_PIN_SHA256_LITERAL "9f3435586bdb2528c1b1b460748782a96e2670ff4690b388796c85241b306458"
+static const char* CERT_PIN_SHA256 = LQ_SP(LQ_CERT_PIN_SHA256_LITERAL);
 
 // ============================================================================
 // AES-256-GCM encryption/decryption (via BCrypt)
