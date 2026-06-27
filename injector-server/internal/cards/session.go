@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// Session ...
 type Session struct {
 	Token         string
 	CardCode      string
@@ -18,6 +19,7 @@ type Session struct {
 	RemoteAddr    string
 }
 
+// ActivationInput ...
 type ActivationInput struct {
 	Card           Card
 	Token          string
@@ -28,6 +30,7 @@ type ActivationInput struct {
 	ActiveSessions []Session
 }
 
+// HeartbeatInput ...
 type HeartbeatInput struct {
 	Session       Session
 	Card          Card
@@ -36,11 +39,13 @@ type HeartbeatInput struct {
 	ClientVersion string
 }
 
+// SessionService ...
 type SessionService struct {
 	now        Clock
 	sessionTTL time.Duration
 }
 
+// NewSessionService ...
 func NewSessionService(now Clock, sessionTTL time.Duration) *SessionService {
 	if now == nil {
 		now = time.Now
@@ -48,6 +53,7 @@ func NewSessionService(now Clock, sessionTTL time.Duration) *SessionService {
 	return &SessionService{now: now, sessionTTL: sessionTTL}
 }
 
+// Activate ...
 func (s *SessionService) Activate(input ActivationInput) (Card, Session, error) {
 	now := s.now()
 	card := input.Card
@@ -100,6 +106,7 @@ func sameCardCode(a, b string) bool {
 	return normalize(a) == normalize(b)
 }
 
+// Heartbeat ...
 func (s *SessionService) Heartbeat(input HeartbeatInput) (Session, error) {
 	now := s.now()
 	session := input.Session

@@ -2,12 +2,13 @@
 // ============================================================================
 // Workers — background threads for server communication
 // ============================================================================
-#include <QObject>
-#include <QJsonObject>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QJsonParseError>
-#include "http_client.h"
+#include <QObject>
+
 #include "config.h"
+#include "http_client.h"
 #include "strcrypt.h"
 
 // ============================================================================

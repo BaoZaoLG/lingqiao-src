@@ -46,7 +46,7 @@ static const BYTE*    HMAC_KEY      = nullptr; // points to g_derivedKey
 #endif
 
 // Read version from PE resource (VS_FIXEDFILEINFO) at runtime
-static QString GetExeVersion() {
+inline QString GetExeVersion() {
     WCHAR path[MAX_PATH] = {0};
     GetModuleFileNameW(NULL, path, MAX_PATH);
     DWORD handle = 0;
@@ -66,11 +66,11 @@ static QString GetExeVersion() {
 }
 
 // Get reported client version: always from PE resource (authoritative)
-static QString GetClientVersion() {
+inline QString GetClientVersion() {
     return GetExeVersion();
 }
 
-static void InitSecrets() {
+inline void InitSecrets() {
     SecBuf<WCHAR> host(g_enc_kHost);
     wcscpy_s(g_hostBuf, host.c_str());
     SERVER_HOST = g_hostBuf;
@@ -100,6 +100,6 @@ static void InitSecrets() {
     wcscpy_s(g_pathAnn, n.c_str());
 }
 
-#define WINDOW_WIDTH   480
-#define WINDOW_HEIGHT  560
-#define TITLE_BAR_H    40
+inline constexpr int WINDOW_WIDTH   = 480;
+inline constexpr int WINDOW_HEIGHT  = 560;
+inline constexpr int TITLE_BAR_H    = 40;

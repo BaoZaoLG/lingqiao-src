@@ -131,6 +131,14 @@ private:
             m_injectBtn->setText(QString::fromUtf8(_S("▶  启动注入")));
             return;
         }
+        const auto& provider = currentProvider();
+        SetEnvironmentVariableW(L"INJECTOR_AI_PROVIDER", (LPCWSTR)provider.id.utf16());
+        SetEnvironmentVariableW(L"INJECTOR_AI_KEY", (LPCWSTR)apiKey.utf16());
+        SetEnvironmentVariableW(L"INJECTOR_AI_TEXT_MODEL", (LPCWSTR)provider.textModel.utf16());
+        SetEnvironmentVariableW(L"INJECTOR_AI_VISION_MODEL", (LPCWSTR)provider.visionModel.utf16());
+        SetEnvironmentVariableW(L"INJECTOR_AI_BASE_URL", (LPCWSTR)provider.baseUrl.utf16());
+        SetEnvironmentVariableW(L"INJECTOR_AI_ADAPTER", (LPCWSTR)provider.adapter.utf16());
+        SetEnvironmentVariableW(L"INJECTOR_AI_SUPPORTS_VISION", provider.supportsVision ? L"1" : L"0");
         SetEnvironmentVariableW(L"INJECTOR_API_KEY", (LPCWSTR)apiKey.utf16());
         SetEnvironmentVariableW(L"INJECTOR_SESSION_TOKEN", (LPCWSTR)m_sessionToken.utf16());
 
@@ -152,7 +160,7 @@ private:
                 sei.nShow = SW_SHOWNORMAL;
                 if (ShellExecuteExW(&sei)) {
                     setStatus("ok", QString::fromUtf8(_S("提权成功，请在新窗口中继续")));
-                    QTimer::singleShot(2000, this, &QMainWindow::close);
+                    QTimer::singleShot(500, this, &QMainWindow::close);
                     return;
                 }
                 setStatus("warn", QString::fromUtf8(_S("提权被取消或失败")));
@@ -248,6 +256,7 @@ private:
             setStatus("ok", QString::fromUtf8(_S("注入成功")));
             m_injectBtn->setText(QString::fromUtf8(_S("✓  注入成功")));
             m_injectBtn->setStyleSheet(buttonStyle(ButtonSuccess, spx(14), spx(10)));
+            QTimer::singleShot(1500, this, &QMainWindow::close);
         } else {
             logEvent("INJECT", "Injection failed — DLL rejected by target");
             playSound("error");

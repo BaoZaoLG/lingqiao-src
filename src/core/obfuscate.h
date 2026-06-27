@@ -74,7 +74,7 @@ constexpr DWORD HashApiName(const char* name) {
 }
 
 // Runtime API hash lookup — finds export by hash instead of name
-static PVOID GetApiByHash(HMODULE hModule, DWORD targetHash) {
+inline PVOID GetApiByHash(HMODULE hModule, DWORD targetHash) {
     if (!hModule) return NULL;
     BYTE* base = (BYTE*)hModule;
     __try {

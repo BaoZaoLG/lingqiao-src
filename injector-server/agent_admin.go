@@ -11,6 +11,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// HandleAdminListAgents ...
 func (h *AdminHandler) HandleAdminListAgents(w http.ResponseWriter, r *http.Request) {
 	summaries := buildAdminAgentSummaries(h.cm.AllAgents(), h.cm.AllCards(), time.Now())
 	if r.URL.Query().Get("export") == "csv" {
@@ -109,6 +110,7 @@ func writeAgentMetricsCSV(w http.ResponseWriter, agents []adminAgentSummary) {
 	writer.Flush()
 }
 
+// HandleAdminUpdateAgent ...
 func (h *AdminHandler) HandleAdminUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
@@ -167,6 +169,7 @@ func (h *AdminHandler) HandleAdminUpdateAgent(w http.ResponseWriter, r *http.Req
 	writeOK(w, nil)
 }
 
+// HandleAdminAgentCards ...
 func (h *AdminHandler) HandleAdminAgentCards(w http.ResponseWriter, r *http.Request) {
 	agentID := r.URL.Query().Get("agent_id")
 	if agentID == "" {

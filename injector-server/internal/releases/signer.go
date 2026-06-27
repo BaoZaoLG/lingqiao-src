@@ -9,11 +9,13 @@ import (
 
 const ManifestSeedSize = ed25519.SeedSize
 
+// ManifestSigner ...
 type ManifestSigner struct {
 	private ed25519.PrivateKey
 	public  ed25519.PublicKey
 }
 
+// NewManifestSigner ...
 func NewManifestSigner(seed []byte) (*ManifestSigner, error) {
 	if len(seed) != ed25519.SeedSize {
 		return nil, fmt.Errorf("manifest signer seed must be %d bytes", ed25519.SeedSize)
@@ -24,10 +26,12 @@ func NewManifestSigner(seed []byte) (*ManifestSigner, error) {
 	return &ManifestSigner{private: private, public: public}, nil
 }
 
+// PublicKeyHex ...
 func (s *ManifestSigner) PublicKeyHex() string {
 	return hex.EncodeToString(s.public)
 }
 
+// Sign ...
 func (s *ManifestSigner) Sign(manifest Manifest) (SignedManifest, error) {
 	data, err := canonicalManifest(manifest)
 	if err != nil {
@@ -40,6 +44,7 @@ func (s *ManifestSigner) Sign(manifest Manifest) (SignedManifest, error) {
 	}, nil
 }
 
+// VerifySignedManifest ...
 func VerifySignedManifest(publicKeyHex string, signed SignedManifest) bool {
 	publicKey, err := hex.DecodeString(publicKeyHex)
 	if err != nil || len(publicKey) != ed25519.PublicKeySize {

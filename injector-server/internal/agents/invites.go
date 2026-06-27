@@ -11,6 +11,7 @@ import (
 	"github.com/lingqiao/server/internal/storage"
 )
 
+// InviteCode ...
 type InviteCode struct {
 	Code      string    `json:"code"`
 	CreatedAt time.Time `json:"created_at"`
@@ -21,27 +22,32 @@ type InviteCode struct {
 	UseCount  int       `json:"use_count"`
 }
 
+// InviteService ...
 type InviteService struct {
 	store storage.Store
 	mu    sync.Mutex
 }
 
+// NewInviteService ...
 func NewInviteService(store storage.Store) *InviteService {
 	return &InviteService{store: store}
 }
 
+// List ...
 func (s *InviteService) List() ([]InviteCode, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.loadLocked()
 }
 
+// Replace ...
 func (s *InviteService) Replace(codes []InviteCode) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.saveLocked(codes)
 }
 
+// Create ...
 func (s *InviteService) Create(maxUses int, createdBy string) (InviteCode, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -67,6 +73,7 @@ func (s *InviteService) Create(maxUses int, createdBy string) (InviteCode, error
 	return invite, nil
 }
 
+// Delete ...
 func (s *InviteService) Delete(code string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -92,6 +99,7 @@ func (s *InviteService) Delete(code string) (bool, error) {
 	return found, nil
 }
 
+// ValidateAndUse ...
 func (s *InviteService) ValidateAndUse(code string, usedBy string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

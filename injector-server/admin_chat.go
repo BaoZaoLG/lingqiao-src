@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// HandleChatMessages ...
 func (h *AdminHandler) HandleChatMessages(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) {
 		return
@@ -16,6 +17,7 @@ func (h *AdminHandler) HandleChatMessages(w http.ResponseWriter, r *http.Request
 	writeOK(w, map[string]interface{}{"messages": h.chat.AdminList()})
 }
 
+// HandleChatDelete ...
 func (h *AdminHandler) HandleChatDelete(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
@@ -42,6 +44,7 @@ func (h *AdminHandler) HandleChatDelete(w http.ResponseWriter, r *http.Request) 
 	writeOK(w, nil)
 }
 
+// HandleChatSystem ...
 func (h *AdminHandler) HandleChatSystem(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
@@ -65,6 +68,7 @@ func (h *AdminHandler) HandleChatSystem(w http.ResponseWriter, r *http.Request) 
 	writeOK(w, map[string]interface{}{"message": msg})
 }
 
+// HandleChatMute ...
 func (h *AdminHandler) HandleChatMute(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return

@@ -8,14 +8,17 @@ import (
 	"strings"
 )
 
+// Selector ...
 type Selector struct {
 	store *SQLiteStore
 }
 
+// NewSelector ...
 func NewSelector(store *SQLiteStore) *Selector {
 	return &Selector{store: store}
 }
 
+// Select ...
 func (s *Selector) Select(ctx context.Context, client ClientContext) (*SelectedRelease, error) {
 	channel := client.Channel
 	if channel == "" {
@@ -110,6 +113,7 @@ func firstNonEmpty(values ...string) string {
 	return "anonymous"
 }
 
+// VersionGreater ...
 func VersionGreater(candidate, current string) bool {
 	c := versionParts(candidate)
 	v := versionParts(current)

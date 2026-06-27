@@ -9,6 +9,7 @@ import (
 	"github.com/lingqiao/server/internal/storage"
 )
 
+// UpdateInfo ...
 type UpdateInfo struct {
 	Version    string    `json:"version"`
 	Filename   string    `json:"filename"`
@@ -17,6 +18,7 @@ type UpdateInfo struct {
 	UploadedAt time.Time `json:"uploaded_at"`
 }
 
+// MetadataStore ...
 type MetadataStore struct {
 	store storage.Store
 	mu    sync.RWMutex
@@ -25,10 +27,12 @@ type MetadataStore struct {
 
 const metadataKey = "info"
 
+// NewMetadataStore ...
 func NewMetadataStore(store storage.Store) *MetadataStore {
 	return &MetadataStore{store: store}
 }
 
+// ValidateVersion ...
 func ValidateVersion(version string) error {
 	if version == "" {
 		return fmt.Errorf("版本号不能为空")
@@ -41,6 +45,7 @@ func ValidateVersion(version string) error {
 	return nil
 }
 
+// SafeFilename ...
 func SafeFilename(version string, ext string) (string, error) {
 	if err := ValidateVersion(version); err != nil {
 		return "", err
@@ -52,6 +57,7 @@ func SafeFilename(version string, ext string) (string, error) {
 	return fmt.Sprintf("Injector_v%s%s", version, ext), nil
 }
 
+// Save ...
 func (s *MetadataStore) Save(info UpdateInfo) error {
 	if err := s.store.Save(metadataKey, info); err != nil {
 		return err
@@ -63,6 +69,7 @@ func (s *MetadataStore) Save(info UpdateInfo) error {
 	return nil
 }
 
+// Load ...
 func (s *MetadataStore) Load() (*UpdateInfo, error) {
 	s.mu.RLock()
 	if s.info != nil {
@@ -86,6 +93,7 @@ func (s *MetadataStore) Load() (*UpdateInfo, error) {
 	return &cp, nil
 }
 
+// SHAForVersion ...
 func (s *MetadataStore) SHAForVersion(version string) string {
 	info, err := s.Load()
 	if err != nil || info == nil {

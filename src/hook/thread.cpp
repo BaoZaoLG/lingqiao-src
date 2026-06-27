@@ -167,6 +167,18 @@ void CEF_CALLBACK MyOnLoadEnd(
         if (!InterlockedCompareExchange(&g_pageScriptInjected, 1, 0)) {
             char apiKey[4096] = {0};
             GetEnvironmentVariableA("INJECTOR_API_KEY", apiKey, sizeof(apiKey));
+            char aiProvider[256] = {0};
+            GetEnvironmentVariableA("INJECTOR_AI_PROVIDER", aiProvider, sizeof(aiProvider));
+            char aiTextModel[256] = {0};
+            GetEnvironmentVariableA("INJECTOR_AI_TEXT_MODEL", aiTextModel, sizeof(aiTextModel));
+            char aiVisionModel[256] = {0};
+            GetEnvironmentVariableA("INJECTOR_AI_VISION_MODEL", aiVisionModel, sizeof(aiVisionModel));
+            char aiBaseUrl[1024] = {0};
+            GetEnvironmentVariableA("INJECTOR_AI_BASE_URL", aiBaseUrl, sizeof(aiBaseUrl));
+            char aiAdapter[128] = {0};
+            GetEnvironmentVariableA("INJECTOR_AI_ADAPTER", aiAdapter, sizeof(aiAdapter));
+            char aiSupportsVision[32] = {0};
+            GetEnvironmentVariableA("INJECTOR_AI_SUPPORTS_VISION", aiSupportsVision, sizeof(aiSupportsVision));
 
             auto jsEscape = [](const char* s) -> std::string {
                 std::string out;
@@ -191,11 +203,23 @@ void CEF_CALLBACK MyOnLoadEnd(
             };
 
             std::string js;
+            js += "if (!window.__AUTOEXAM_INJECTED__) {\n";
+            js += "window.__AUTOEXAM_INJECTED__ = true;\n";
             if (apiKey[0]) {
-                js = "window.__DEEPSEEK_API_KEY='";
+                js += "window.__DEEPSEEK_API_KEY='";
                 js += jsEscape(apiKey);
                 js += "';\n";
             }
+            js += "window.__AUTOEXAM_AI_CONFIG = {\n";
+            js += "  apiKey: '" + jsEscape(apiKey) + "',\n";
+            js += "  provider: '" + jsEscape(aiProvider) + "',\n";
+            js += "  textModel: '" + jsEscape(aiTextModel) + "',\n";
+            js += "  visionModel: '" + jsEscape(aiVisionModel) + "',\n";
+            js += "  baseUrl: '" + jsEscape(aiBaseUrl) + "',\n";
+            js += "  adapter: '" + jsEscape(aiAdapter) + "',\n";
+            js += "  supportsVision: " + std::string(aiSupportsVision[0] == '1' ? "true" : "false") + "\n";
+            js += "};\n";
+
             std::string remoteScript;
             std::string remoteVersion;
             if (FetchVersionedScript(&remoteScript, &remoteVersion)) {
@@ -209,6 +233,7 @@ void CEF_CALLBACK MyOnLoadEnd(
                 DecryptBytesInPlace((BYTE*)&jsP2[0], jsP2.size(), g_enc_js_p2.key);
                 js += jsP2;
             }
+            js += "\n}\n";
 
             int wideLen = MultiByteToWideChar(CP_UTF8, 0, js.data(), (int)js.size(), NULL, 0);
             if (wideLen > 0) {

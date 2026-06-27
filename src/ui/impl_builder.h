@@ -312,8 +312,12 @@
     QWidget* buildSessionStatusSection() {
         QFrame* s = card();
         s->setObjectName("sessionStatus");
+        s->setAttribute(Qt::WA_StyledBackground, true);
+        s->setStyleSheet(
+            "QFrame#sessionStatus { background: rgba(255, 255, 255, 0.35); "
+            "border: 1px solid rgba(200, 200, 210, 0.40); border-radius: 8px; }");
         QVBoxLayout* o = new QVBoxLayout(s);
-        o->setContentsMargins(18, 12, 18, 12);
+        o->setContentsMargins(14, 7, 14, 7);
         o->setSpacing(0);
 
         m_cardExpiry = new QLabel();
@@ -370,11 +374,18 @@
         o->setContentsMargins(18, 16, 18, 16);
         o->setSpacing(12);
         o->addWidget(heading(QString::fromUtf8(_S("API 密钥"))));
+        m_providerCombo = new QComboBox();
+        m_providerCombo->setFixedHeight(36);
+        for (const auto& provider : aiProviders()) {
+            m_providerCombo->addItem(provider.displayName, provider.id);
+        }
+        installThemedComboBox(m_providerCombo);
+        m_providerCombo->setEnabled(false);
+        o->addWidget(m_providerCombo);
 
         QHBoxLayout* keyRow = new QHBoxLayout();
         keyRow->setContentsMargins(0, 0, 0, 0);
         keyRow->setSpacing(8);
-
         m_apiKeyInput = new QLineEdit();
         m_apiKeyInput->setPlaceholderText(QString::fromUtf8(_S("输入 DeepSeek API Key")));
         m_apiKeyInput->setFixedHeight(38);
@@ -384,9 +395,9 @@
         keyRow->addWidget(m_apiKeyInput, 1);
 
         QPushButton* toggleBtn = new QPushButton(QString::fromUtf8(_S("显示")));
-        toggleBtn->setFixedSize(48, 38);
+        toggleBtn->setFixedSize(64, 32);
         toggleBtn->setCursor(Qt::PointingHandCursor);
-        toggleBtn->setStyleSheet("QPushButton { background: transparent; border: none; font-size: 13px; color: #4a9eff; font-weight: 500; } QPushButton:hover { color: #3b82f6; }");
+        toggleBtn->setStyleSheet("QPushButton { background: #4a9eff; border: none; border-radius: 6px; font-size: 13px; color: #ffffff; font-weight: bold; padding: 2px 10px; } QPushButton:hover { background: #3b82f6; }");
         toggleBtn->setCheckable(true);
         connect(toggleBtn, &QPushButton::toggled, this, [this, toggleBtn](bool checked) {
             m_apiKeyInput->setEchoMode(checked ? QLineEdit::Normal : QLineEdit::Password);
