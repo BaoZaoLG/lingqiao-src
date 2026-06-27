@@ -304,10 +304,15 @@
         m_trayMenu->addAction(QString::fromUtf8(_S("显示窗口")), this, [this]() {
             showNormal(); activateWindow(); raise();
         });
+        m_trayMenu->addSeparator();
+        m_trayMenu->addAction(QString::fromUtf8(_S("退出灵桥")), this, [this]() {
+            m_minimizeToTray = false;
+            close();
+        });
         m_trayIcon->setContextMenu(m_trayMenu);
         m_trayIcon->setToolTip(QString::fromUtf8(_S("灵桥 — 未激活")));
         connect(m_trayIcon, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason reason) {
-            if (reason == QSystemTrayIcon::DoubleClick) {
+            if (reason == QSystemTrayIcon::DoubleClick || reason == QSystemTrayIcon::Trigger) {
                 showNormal(); activateWindow(); raise();
             }
         });
@@ -384,9 +389,15 @@
             if (re.match(clip).hasMatch()) {
                 // Check if card input is empty or different
                 if (m_cardInput->text().trimmed() != clip) {
-                    m_cardInput->setText(clip);
-                    playSound("info");
-                    logEvent("CLIPBOARD", "Detected card code: " + maskCard(clip));
+                    if (m_cardInput->text().trimmed().isEmpty()) {
+                        m_cardInput->setText(clip);
+                        playSound("info");
+                        setStatus("info", QString::fromUtf8(_S("已自动填入剪贴板中的卡密")));
+                        logEvent("CLIPBOARD", "Auto-filled empty input with card code: " + maskCard(clip));
+                    } else {
+                        setStatus("info", QString::fromUtf8(_S("剪贴板包含卡密，可手动粘贴")));
+                        logEvent("CLIPBOARD", "Detected card code in clipboard but input not empty: " + maskCard(clip));
+                    }
                 }
             }
         });

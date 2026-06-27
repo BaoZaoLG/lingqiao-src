@@ -248,6 +248,7 @@ static bool VerifyServerCert(HINTERNET hRequest) {
 #include <wincrypt.h>
 #pragma comment(lib, "crypt32.lib")
 
+#ifdef QT_CORE_LIB
 // Encrypt plaintext with DPAPI (user-scoped). Returns Base64 string.
 static QString DpapiProtect(const QByteArray& plaintext) {
     DATA_BLOB in, out;
@@ -272,3 +273,4 @@ static QByteArray DpapiUnprotect(const QString& base64Cipher) {
     LocalFree(out.pbData);
     return plain;
 }
+#endif

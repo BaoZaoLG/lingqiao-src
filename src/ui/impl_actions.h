@@ -8,8 +8,18 @@ public:
 
 private:
     void onActivate() {
-        // If already activated, deactivate and allow re-activation
         if (m_activated) {
+            QMessageBox dlg(this);
+            dlg.setWindowTitle(QString::fromUtf8(_S("确认注销")));
+            dlg.setIcon(QMessageBox::Question);
+            dlg.setText(QString::fromUtf8(_S("确认要注销当前设备吗？\n注销后需要重新激活才能使用。")));
+            dlg.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+            dlg.setDefaultButton(QMessageBox::No);
+            dlg.setWindowFlags(dlg.windowFlags() & ~Qt::WindowContextHelpButtonHint);
+            dlg.setStyleSheet(POPUP_CSS);
+            if (dlg.exec() == QMessageBox::No) {
+                return;
+            }
             m_forceUpdateBlocked = false;
             playSound("warning");
             resetToInactiveState("User deactivated", QString::fromUtf8(_S("已注销，请输入新卡密")),
@@ -133,6 +143,7 @@ private:
                 WCHAR exePath[MAX_PATH] = {0};
                 GetModuleFileNameW(NULL, exePath, MAX_PATH);
                 // Pass target path so elevated process can continue injection
+                setStatus("info", QString::fromUtf8(_S("正在请求管理员权限...")));
                 std::wstring params = std::wstring(L"--reinject --target \"") + (LPCWSTR)targetPath.utf16() + L"\"";
                 SHELLEXECUTEINFOW sei = {sizeof(sei)};
                 sei.lpVerb = L"runas";
@@ -140,9 +151,14 @@ private:
                 sei.lpParameters = params.c_str();
                 sei.nShow = SW_SHOWNORMAL;
                 if (ShellExecuteExW(&sei)) {
-                    QTimer::singleShot(500, this, &QMainWindow::close);
+                    setStatus("ok", QString::fromUtf8(_S("提权成功，请在新窗口中继续")));
+                    QTimer::singleShot(2000, this, &QMainWindow::close);
                     return;
                 }
+                setStatus("warn", QString::fromUtf8(_S("提权被取消或失败")));
+                m_injectBtn->setEnabled(true);
+                m_injectBtn->setText(QString::fromUtf8(_S("▶  启动注入")));
+                return;
             }
             logEvent("INJECT", QString("CreateProcess failed: error %1").arg(err));
             setStatus("error", QString::fromUtf8(_S("无法启动目标程序 (错误: %1)")).arg(err));
@@ -229,10 +245,9 @@ private:
             logEvent("INJECT", "Injection successful");
             playSound("success");
             showTrayMessage(QString::fromUtf8(_S("灵桥")), QString::fromUtf8(_S("注入成功")));
-            setStatus("ok", QString::fromUtf8(_S("注入成功 — 1.5 秒后自动退出")));
+            setStatus("ok", QString::fromUtf8(_S("注入成功")));
             m_injectBtn->setText(QString::fromUtf8(_S("✓  注入成功")));
             m_injectBtn->setStyleSheet(buttonStyle(ButtonSuccess, spx(14), spx(10)));
-            QTimer::singleShot(1500, this, &QMainWindow::close);
         } else {
             logEvent("INJECT", "Injection failed — DLL rejected by target");
             playSound("error");

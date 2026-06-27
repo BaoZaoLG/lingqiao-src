@@ -564,7 +564,7 @@
                     QString msg = QString::fromUtf8(_S("消息发送失败：发送过于频繁，请稍后再试"));
                     safeThis->m_lastChatStatus = msg;
                     safeThis->setStatus("warn", msg);
-                    if (safeThis->m_chatSendBtn) safeThis->m_chatSendBtn->setText(QString::fromUtf8(_S("重试")));
+                    if (safeThis->m_chatSendBtn) safeThis->m_chatSendBtn->setText(QString::fromUtf8(_S("发送")));
                 } else if (resp.statusCode == 401) {
                     safeThis->resetToInactiveState("Chat auth rejected",
                         QString::fromUtf8(_S("会话已失效，请输入新卡密")), true);
@@ -578,7 +578,7 @@
                     }
                     safeThis->m_lastChatStatus = errText;
                     safeThis->setStatus("warn", errText);
-                    if (safeThis->m_chatSendBtn) safeThis->m_chatSendBtn->setText(QString::fromUtf8(_S("重试")));
+                    if (safeThis->m_chatSendBtn) safeThis->m_chatSendBtn->setText(QString::fromUtf8(_S("发送")));
                 } else {
                     QJsonParseError parseError{};
                     QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
@@ -590,7 +590,7 @@
                     }
                     safeThis->m_lastChatStatus = msg;
                     safeThis->setStatus("warn", msg);
-                    if (safeThis->m_chatSendBtn) safeThis->m_chatSendBtn->setText(QString::fromUtf8(_S("重试")));
+                    if (safeThis->m_chatSendBtn) safeThis->m_chatSendBtn->setText(QString::fromUtf8(_S("发送")));
                 }
             }, Qt::QueuedConnection);
         });

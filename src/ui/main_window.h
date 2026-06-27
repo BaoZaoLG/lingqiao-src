@@ -103,6 +103,7 @@ public:
         setAutoFillBackground(false);
         resize(WINDOW_WIDTH, WINDOW_HEIGHT);
         setMinimumSize(WINDOW_WIDTH, WINDOW_HEIGHT);
+        setAcceptDrops(true);
         setStyleSheet(CSS);
         setObjectName("MainWindow");
         setStyleSheet(styleSheet() +
@@ -202,9 +203,12 @@ public:
     }
 
     void closeEvent(QCloseEvent* event) override {
-        // Close button → actually exit
-        m_minimizeToTray = false;
-        event->accept();
+        if (m_minimizeToTray) {
+            event->ignore();
+            hide();
+        } else {
+            event->accept();
+        }
     }
 
     void changeEvent(QEvent* event) override {
@@ -709,15 +713,30 @@ private:
     }
 
     void dragEnterEvent(QDragEnterEvent* e) override {
-        if (e->mimeData()->hasUrls()) e->acceptProposedAction();
+        if (e->mimeData()->hasUrls()) {
+            QString p = e->mimeData()->urls().first().toLocalFile();
+            if (p.endsWith(".exe", Qt::CaseInsensitive)) {
+                e->acceptProposedAction();
+                if (m_targetInput) m_targetInput->setStyleSheet(
+                    "QLineEdit { background: rgba(74, 158, 255, 0.15); border: 2px dashed #4a9eff; border-radius: 8px; padding: 6px 10px; font-size: 12px; color: #1e293b; }"
+                );
+            }
+        }
+    }
+    void dragLeaveEvent(QDragLeaveEvent* e) override {
+        if (m_targetInput) m_targetInput->setStyleSheet("");
     }
     void dropEvent(QDropEvent* e) override {
+        if (m_targetInput) m_targetInput->setStyleSheet("");
         const QMimeData* m = e->mimeData();
         if (m->hasUrls() && !m->urls().isEmpty()) {
             QString p = m->urls().first().toLocalFile();
             if (p.endsWith(".exe", Qt::CaseInsensitive)) {
                 m_targetInput->setText(p);
                 QSettings(_S("LingQiao"), _S("Injector")).setValue("targetPath", p);
+            } else {
+                setStatus("warn", QString::fromUtf8(_S("仅支持拖拽 .exe 文件")));
+                playSound("warning");
             }
         }
     }

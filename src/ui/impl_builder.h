@@ -350,8 +350,7 @@
         m_targetInput = new QLineEdit();
         m_targetInput->setPlaceholderText(QString::fromUtf8(_S("选择或拖拽 .exe 文件")));
         m_targetInput->setFixedHeight(38);
-        m_targetInput->setReadOnly(true);
-        m_targetInput->setAcceptDrops(true);
+        m_targetInput->setAcceptDrops(false);
         installThemedLineEditMenu(m_targetInput);
         row->addWidget(m_targetInput, 1);
 
@@ -372,13 +371,30 @@
         o->setSpacing(12);
         o->addWidget(heading(QString::fromUtf8(_S("API 密钥"))));
 
+        QHBoxLayout* keyRow = new QHBoxLayout();
+        keyRow->setContentsMargins(0, 0, 0, 0);
+        keyRow->setSpacing(8);
+
         m_apiKeyInput = new QLineEdit();
         m_apiKeyInput->setPlaceholderText(QString::fromUtf8(_S("输入 DeepSeek API Key")));
         m_apiKeyInput->setFixedHeight(38);
         m_apiKeyInput->setEchoMode(QLineEdit::Password);
         m_apiKeyInput->setEnabled(false);
         installThemedLineEditMenu(m_apiKeyInput);
-        o->addWidget(m_apiKeyInput);
+        keyRow->addWidget(m_apiKeyInput, 1);
+
+        QPushButton* toggleBtn = new QPushButton(QString::fromUtf8(_S("显示")));
+        toggleBtn->setFixedSize(48, 38);
+        toggleBtn->setCursor(Qt::PointingHandCursor);
+        toggleBtn->setStyleSheet("QPushButton { background: transparent; border: none; font-size: 13px; color: #4a9eff; font-weight: 500; } QPushButton:hover { color: #3b82f6; }");
+        toggleBtn->setCheckable(true);
+        connect(toggleBtn, &QPushButton::toggled, this, [this, toggleBtn](bool checked) {
+            m_apiKeyInput->setEchoMode(checked ? QLineEdit::Normal : QLineEdit::Password);
+            toggleBtn->setText(QString::fromUtf8(checked ? _S("隐藏") : _S("显示")));
+        });
+        keyRow->addWidget(toggleBtn);
+
+        o->addLayout(keyRow);
 
         m_balanceLabel = new QLabel();
         m_balanceLabel->setStyleSheet(
@@ -475,7 +491,7 @@
             dlg.setWindowFlags(dlg.windowFlags() & ~Qt::WindowContextHelpButtonHint);
             dlg.setStyleSheet(POPUP_CSS);
             dlg.exec();
-            close();
+            setStatus("error", QString::fromUtf8(_S("当前版本过低，需要升级才能注入")));
         }
     }
 
