@@ -1,0 +1,167 @@
+openapi: 3.1.0
+info:
+  title: Lingqiao API
+  version: 2.0.0
+  description: >
+    Contract-first API surface for Lingqiao client, admin, and agent APIs.
+    OpenAPI 3.1 is used first for tooling compatibility; the architecture
+    target allows OpenAPI 3.2 once the local toolchain supports it.
+servers:
+  - url: https://127.0.0.1:48901
+    description: Admin and client API
+  - url: https://127.0.0.1:38472
+    description: Agent API
+tags:
+  - name: client-session
+  - name: client-update
+  - name: client-chat
+  - name: admin-auth
+  - name: admin-cards
+  - name: admin-releases
+  - name: agent
+paths:
+  /api/v1/activate:
+    post:
+      tags: [client-session]
+      summary: Activate a card and create a client session.
+      security:
+        - hmacAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActivateRequest'
+      responses:
+        '200':
+          description: Card activated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivateResponse'
+        '400':
+          $ref: '#/components/responses/Problem'
+        '401':
+          $ref: '#/components/responses/Problem'
+        '403':
+          $ref: '#/components/responses/Problem'
+        '429':
+          $ref: '#/components/responses/Problem'
+  /api/v1/heartbeat:
+    post:
+      tags: [client-session]
+      summary: Extend a client session.
+      security:
+        - hmacAuth: []
+      responses:
+        '200':
+          description: Session extended.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeartbeatResponse'
+        '401':
+          $ref: '#/components/responses/Problem'
+  /api/v1/update/check:
+    post:
+      tags: [client-update]
+      summary: Check for a signed release manifest.
+      security:
+        - hmacAuth: []
+      responses:
+        '200':
+          description: Update availability result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateCheckResponse'
+        '401':
+          $ref: '#/components/responses/Problem'
+components:
+  securitySchemes:
+    hmacAuth:
+      type: apiKey
+      in: header
+      name: X-HMAC-Signature
+  responses:
+    Problem:
+      description: RFC 9457 problem detail.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          description: Stable Lingqiao business error code.
+        request_id:
+          type: string
+    ActivateRequest:
+      type: object
+      required: [card, machine_id, fingerprint, client_version]
+      properties:
+        card:
+          type: string
+        machine_id:
+          type: string
+        fingerprint:
+          type: string
+        client_version:
+          type: string
+    ActivateResponse:
+      type: object
+      required: [status, session_token, expires_at, card_expires_at]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        session_token:
+          type: string
+        expires_at:
+          type: integer
+          format: int64
+        card_expires_at:
+          type: integer
+          format: int64
+    HeartbeatResponse:
+      type: object
+      required: [status, card_expires_at]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        card_expires_at:
+          type: integer
+          format: int64
+    UpdateCheckResponse:
+      type: object
+      required: [status, update_available]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        update_available:
+          type: boolean
+        manifest_payload:
+          type: string
+        manifest_hmac:
+          type: string
+        signature:
+          type: string
+        public_key:
+          type: string
