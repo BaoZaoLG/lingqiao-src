@@ -27,10 +27,66 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 	json.NewEncoder(w).Encode(v)
 }
 
+func mapToErrorCode(status int, msg string) string {
+	msgStr := strings.ToLower(msg)
+	switch {
+	case strings.Contains(msgStr, "invalid json"):
+		return "INVALID_JSON"
+	case strings.Contains(msgStr, "method not allowed"):
+		return "METHOD_NOT_ALLOWED"
+	case strings.Contains(msgStr, "hmac"):
+		if strings.Contains(msgStr, "missing") {
+			return "HMAC_MISSING"
+		}
+		return "HMAC_INVALID"
+	case strings.Contains(msgStr, "卡密不存在") || strings.Contains(msgStr, "card not found"):
+		return "CARD_NOT_FOUND"
+	case strings.Contains(msgStr, "黑名单"):
+		return "CARD_BLACKLISTED"
+	case strings.Contains(msgStr, "已被禁用"):
+		return "CARD_DISABLED"
+	case strings.Contains(msgStr, "已过期"):
+		if strings.Contains(msgStr, "会话") {
+			return "SESSION_EXPIRED"
+		}
+		return "CARD_EXPIRED"
+	case strings.Contains(msgStr, "绑定了其他设备") || strings.Contains(msgStr, "machine mismatch"):
+		if status == 401 || status == 403 {
+			return "MACHINE_MISMATCH"
+		}
+		return "CARD_BOUND_TO_OTHER_MACHINE"
+	case strings.Contains(msgStr, "达到最大同时登录数"):
+		return "MAX_SESSIONS_REACHED"
+	case strings.Contains(msgStr, "无效的会话") || strings.Contains(msgStr, "session not found"):
+		return "SESSION_NOT_FOUND"
+	default:
+		if status == 400 {
+			return "BAD_REQUEST"
+		} else if status == 401 {
+			return "UNAUTHORIZED"
+		} else if status == 403 {
+			return "FORBIDDEN"
+		} else if status == 404 {
+			return "NOT_FOUND"
+		} else if status == 500 {
+			return "INTERNAL_ERROR"
+		}
+		return "UNKNOWN_ERROR"
+	}
+}
+
 func writeError(w http.ResponseWriter, status int, msg string) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	code := mapToErrorCode(status, msg)
+	problemType := "https://lingqiao.local/problems/" + strings.ToLower(strings.ReplaceAll(code, "_", "-"))
+	w.Header().Set("Content-Type", "application/problem+json; charset=utf-8")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(errorResponse{Status: "error", Message: msg})
+	_ = json.NewEncoder(w).Encode(problemResponse{
+		Type:     problemType,
+		Title:    http.StatusText(status),
+		Status:   status,
+		Detail:   msg,
+		Code:     code,
+	})
 }
 
 func writeOK(w http.ResponseWriter, data map[string]interface{}) {

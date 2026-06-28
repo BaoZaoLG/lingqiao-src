@@ -187,7 +187,7 @@
                     QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
                     QString errText = QString::fromUtf8(_S("你已被禁言，暂时无法进行表情反应"));
                     if (parseError.error == QJsonParseError::NoError && doc.isObject()) {
-                        QString msg = doc.object()["message"].toString();
+                        QString msg = doc.object().contains("detail") ? doc.object()["detail"].toString() : doc.object()["message"].toString();
                         if (!msg.isEmpty()) errText = msg;
                     }
                     safeThis->setStatus("warn", errText);
@@ -502,7 +502,7 @@
                             errText = QString::fromUtf8(_S("昵称保存失败：你已被禁言，暂时无法修改昵称"));
                         }
                         if (parseError.error == QJsonParseError::NoError && doc.isObject()) {
-                            QString msg = doc.object()["message"].toString();
+                            QString msg = doc.object().contains("detail") ? doc.object()["detail"].toString() : doc.object()["message"].toString();
                             if (!msg.isEmpty()) {
                                 if (resp.statusCode == 403) errText = msg;
                                 else errText = QString::fromUtf8(_S("昵称保存失败：")) + msg;
@@ -573,7 +573,7 @@
                     QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
                     QString errText = QString::fromUtf8(_S("消息发送失败：你已被禁言，暂时无法发送消息"));
                     if (parseError.error == QJsonParseError::NoError && doc.isObject()) {
-                        QString msg = doc.object()["message"].toString();
+                        QString msg = doc.object().contains("detail") ? doc.object()["detail"].toString() : doc.object()["message"].toString();
                         if (!msg.isEmpty()) errText = msg;
                     }
                     safeThis->m_lastChatStatus = errText;
@@ -585,7 +585,7 @@
                     QString detail = resp.statusCode != 0 ? QString("HTTP %1").arg(resp.statusCode) : resp.error;
                     QString msg = safeThis->readableHttpFailure(QString::fromUtf8(_S("消息发送")), detail);
                     if (parseError.error == QJsonParseError::NoError && doc.isObject()) {
-                        QString serverMsg = doc.object()["message"].toString();
+                        QString serverMsg = doc.object().contains("detail") ? doc.object()["detail"].toString() : doc.object()["message"].toString();
                         if (!serverMsg.isEmpty()) msg = QString::fromUtf8(_S("消息发送失败：")) + serverMsg;
                     }
                     safeThis->m_lastChatStatus = msg;

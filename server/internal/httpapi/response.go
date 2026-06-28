@@ -12,11 +12,15 @@ type OKResponse struct {
 	Meta   map[string]any `json:"meta,omitempty"`
 }
 
-// ErrorResponse ...
-type ErrorResponse struct {
-	Status  string `json:"status"`
-	Code    string `json:"code"`
-	Message string `json:"message"`
+// ProblemDetails implements RFC 9457
+type ProblemDetails struct {
+	Type      string `json:"type"`
+	Title     string `json:"title"`
+	Status    int    `json:"status"`
+	Detail    string `json:"detail,omitempty"`
+	Instance  string `json:"instance,omitempty"`
+	Code      string `json:"code,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // WriteJSON ...
@@ -37,9 +41,13 @@ func WriteOK(w http.ResponseWriter, data map[string]any, meta map[string]any) {
 
 // WriteError ...
 func WriteError(w http.ResponseWriter, status int, code string, message string) {
-	WriteJSON(w, status, ErrorResponse{
-		Status:  "error",
-		Code:    code,
-		Message: message,
+	w.Header().Set("Content-Type", "application/problem+json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(ProblemDetails{
+		Type:   "https://lingqiao.local/problems/" + code,
+		Title:  http.StatusText(status),
+		Status: status,
+		Detail: message,
+		Code:   code,
 	})
 }
