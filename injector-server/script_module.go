@@ -103,6 +103,13 @@ func saveScriptModule(version, content, note, name string, active bool) (*Script
 		return nil, fmt.Errorf("version is invalid")
 	}
 
+	scripts, _, _ := ListScriptModules()
+	for _, s := range scripts {
+		if s.Version == version {
+			return nil, fmt.Errorf("script version already exists")
+		}
+	}
+
 	now := time.Now().UTC()
 	sum := sha256.Sum256([]byte(content))
 	id := fmt.Sprintf("%s-%s", version, now.Format("20060102T150405000Z"))
