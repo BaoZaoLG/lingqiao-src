@@ -37,6 +37,9 @@ if (-not $SkipGo) {
 # 3. Build C++ Client
 if (-not $SkipCpp) {
     Write-Host "Building C++ Client..." -ForegroundColor Cyan
+    if (Test-Path "build/CMakeCache.txt") {
+        Remove-Item -Force "build/CMakeCache.txt"
+    }
     cmake -S client -B build -G "Visual Studio 17 2022" -A Win32 -DENABLE_HOOK=ON
     if ($LASTEXITCODE -ne 0) { throw "cmake config failed" }
     
