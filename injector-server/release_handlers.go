@@ -41,7 +41,7 @@ func (h *APIHandler) HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	var req updateCheckRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+		writeProblem(w, r, http.StatusBadRequest, "INVALID_JSON", "Invalid JSON", "请求体不是有效 JSON")
 		return
 	}
 	if req.Channel == "" {
