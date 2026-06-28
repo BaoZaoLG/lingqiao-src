@@ -100,6 +100,7 @@ add_custom_command(TARGET ManualDllInjectorGui POST_BUILD
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.rc.in ${CMAKE_CURRENT_BINARY_DIR}/version.rc @ONLY)
 
 set(INJECTOR_HEADERS
+    services/api_client.h
     security/antidebug.h
     security/machine_fp.h
     security/dll_extractor.h
@@ -123,7 +124,7 @@ set(INJECTOR_HEADERS
     ui/ui_resources.qrc
 )
 
-add_executable(Injector WIN32 injector_qt.cpp ${INJECTOR_HEADERS} ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
+add_executable(Injector WIN32 injector_qt.cpp services/api_client.cpp ${INJECTOR_HEADERS} ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
 set_target_properties(Injector PROPERTIES OUTPUT_NAME "CX_LingQiao")
 target_include_directories(Injector PRIVATE ${COMMON_INCLUDES} ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(Injector PRIVATE Qt5::Widgets Qt5::Network Qt5::WinExtras Qt5::Concurrent
