@@ -41,6 +41,8 @@ server/lingqiao-server*
 # Frontend build
 # ============================================================
 server/web/node_modules/
+server/web-dist/
+dist/
 
 # ============================================================
 # Qt deployment artifacts

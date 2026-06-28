@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestWriteProblemUsesRFC9457Shape(t *testing.T) {
@@ -40,5 +41,33 @@ func TestWriteProblemUsesRFC9457Shape(t *testing.T) {
 	}
 	if body.Code != "CARD_EXPIRED" {
 		t.Fatalf("Code = %q", body.Code)
+	}
+}
+
+func TestRateLimiter(t *testing.T) {
+	rl := newRateLimiter(1*time.Minute, 3)
+	key := "127.0.0.1"
+
+	// First 3 requests should be allowed
+	if !rl.allow(key) {
+		t.Fatal("1st request should be allowed")
+	}
+	if !rl.allow(key) {
+		t.Fatal("2nd request should be allowed")
+	}
+	if !rl.allow(key) {
+		t.Fatal("3rd request should be allowed")
+	}
+
+	// 4th request should be blocked
+	if rl.allow(key) {
+		t.Fatal("4th request should be blocked")
+	}
+
+	// Wait for window to pass? Can't really wait 1 min in test easily without mocking time.
+	// But we can test the `clear` function
+	rl.clear(key)
+	if !rl.allow(key) {
+		t.Fatal("request after clear should be allowed")
 	}
 }

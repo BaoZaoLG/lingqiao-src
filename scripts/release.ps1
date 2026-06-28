@@ -51,7 +51,7 @@ if (-not $SkipCpp) {
 if (-not $SkipWix) {
     Write-Host "Building Installer..." -ForegroundColor Cyan
     Push-Location installer
-    .\build_installer.ps1 -SourceDir "..\$SourceDir"
+    .\build_installer.ps1 -SourceDir "$Root\$SourceDir"
     if ($LASTEXITCODE -ne 0) { throw "wix installer build failed" }
     Pop-Location
 }

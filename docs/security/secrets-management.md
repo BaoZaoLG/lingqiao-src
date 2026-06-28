@@ -4,9 +4,9 @@ Never commit runtime secrets.
 
 Ignored local runtime files include:
 
-- `injector-server/data/admin_password.hash`
-- `injector-server/data/hmac_secret.key`
-- `injector-server/certs/`
+- `server/data/admin_password.hash`
+- `server/data/hmac_secret.key`
+- `server/certs/`
 - generated client secret headers
 
 Transfer rule:

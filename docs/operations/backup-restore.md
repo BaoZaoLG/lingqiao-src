@@ -6,7 +6,7 @@ Stop the server or put it in maintenance mode before backup.
 
 Back up:
 
-- `injector-server/data/`
+- `server/data/`
 - release package files under `DATA_DIR/updates/`
 - release database if present
 - TLS certificates if reused
