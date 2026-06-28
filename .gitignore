@@ -41,7 +41,8 @@ server/lingqiao-server*
 # Frontend build
 # ============================================================
 server/web/node_modules/
-server/web-dist/
+server/web-dist/*
+!server/web-dist/.gitkeep
 dist/
 
 # ============================================================
