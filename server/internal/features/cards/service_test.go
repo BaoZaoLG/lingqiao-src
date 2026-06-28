@@ -36,6 +36,49 @@ func (r *memoryRepo) List(ctx context.Context, filter ListFilter) ([]Card, error
 	return result, nil
 }
 
+func (r *memoryRepo) BatchSave(ctx context.Context, cards []Card) error {
+	for _, c := range cards {
+		r.cards[c.Code] = c
+	}
+	return nil
+}
+
+func (r *memoryRepo) UpdateStatusBulk(ctx context.Context, codes []string, status Status) (int, error) {
+	affected := 0
+	for _, code := range codes {
+		if c, ok := r.cards[code]; ok {
+			c.Status = status
+			r.cards[code] = c
+			affected++
+		}
+	}
+	return affected, nil
+}
+
+func (r *memoryRepo) ExtendBulk(ctx context.Context, codes []string, extendHours int) (int, error) {
+	affected := 0
+	for _, code := range codes {
+		if c, ok := r.cards[code]; ok {
+			c.ExpiresAt = c.ExpiresAt.Add(time.Duration(extendHours) * time.Hour)
+			if c.Status == StatusExpired {
+				c.Status = StatusActive
+			}
+			r.cards[code] = c
+			affected++
+		}
+	}
+	return affected, nil
+}
+
+func (r *memoryRepo) Delete(ctx context.Context, code string) error {
+	delete(r.cards, code)
+	return nil
+}
+
+func (r *memoryRepo) Count(ctx context.Context, filter ListFilter) (int, error) {
+	return len(r.cards), nil
+}
+
 func TestServiceCreateCard(t *testing.T) {
 	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
 	repo := newMemoryRepo()

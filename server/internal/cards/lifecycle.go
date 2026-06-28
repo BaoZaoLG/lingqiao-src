@@ -1,6 +1,7 @@
 package cards
 
 import "time"
+
 // Status ...
 type Status string
 
@@ -9,6 +10,7 @@ const (
 	StatusDisabled Status = "disabled"
 	StatusExpired  Status = "expired"
 )
+
 // Card ...
 type Card struct {
 	Code        string
@@ -21,15 +23,19 @@ type Card struct {
 	Note        string
 	MaxSessions int
 }
+
 // CodeGenerator ...
 type CodeGenerator func() (string, error)
+
 // Clock ...
 type Clock func() time.Time
+
 // LifecycleService ...
 type LifecycleService struct {
 	generateCode CodeGenerator
 	now          Clock
 }
+
 // NewLifecycleService ...
 func NewLifecycleService(generateCode CodeGenerator, now Clock) *LifecycleService {
 	if now == nil {
@@ -37,6 +43,7 @@ func NewLifecycleService(generateCode CodeGenerator, now Clock) *LifecycleServic
 	}
 	return &LifecycleService{generateCode: generateCode, now: now}
 }
+
 // Create ...
 func (s *LifecycleService) Create(duration time.Duration, note string, maxSessions int, agentID string) (Card, error) {
 	code, err := s.generateCode()
@@ -54,11 +61,13 @@ func (s *LifecycleService) Create(duration time.Duration, note string, maxSessio
 		MaxSessions: maxSessions,
 	}, nil
 }
+
 // UpdateStatus ...
 func (s *LifecycleService) UpdateStatus(card Card, status Status) Card {
 	card.Status = status
 	return card
 }
+
 // Extend ...
 func (s *LifecycleService) Extend(card Card, duration time.Duration) Card {
 	card.ExpiresAt = card.ExpiresAt.Add(duration)
@@ -67,6 +76,7 @@ func (s *LifecycleService) Extend(card Card, duration time.Duration) Card {
 	}
 	return card
 }
+
 // UpdateDetails ...
 func (s *LifecycleService) UpdateDetails(card Card, note *string, maxSessions *int) Card {
 	if note != nil {

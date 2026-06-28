@@ -25,7 +25,7 @@ func NewSQLiteCardManager(dbPath string) (CardManager, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	schema := `
 	CREATE TABLE IF NOT EXISTS cards (
 		code TEXT PRIMARY KEY,
@@ -87,6 +87,10 @@ func (cm *SQLiteCardManager) GetStorage() *JSONStorage {
 	return nil
 }
 
+func (cm *SQLiteCardManager) DB() *sql.DB {
+	return cm.db
+}
+
 func (cm *SQLiteCardManager) ValidateBoundSession(token, machineID, cardCode string) (*Session, error) {
 	if token == "" {
 		return nil, fmt.Errorf("session_token is required")
@@ -95,7 +99,7 @@ func (cm *SQLiteCardManager) ValidateBoundSession(token, machineID, cardCode str
 		return nil, fmt.Errorf("machine_id is required")
 	}
 	now := time.Now()
-	
+
 	row := cm.db.QueryRow(`SELECT token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr FROM sessions WHERE token = ?`, token)
 	var session Session
 	if err := row.Scan(&session.Token, &session.CardCode, &session.MachineID, &session.Fingerprint, &session.ClientVersion, &session.CreatedAt, &session.LastSeen, &session.ExpiresAt, &session.RemoteAddr); err != nil {
@@ -110,7 +114,7 @@ func (cm *SQLiteCardManager) ValidateBoundSession(token, machineID, cardCode str
 	if cardCode != "" && normalizeCardCode(session.CardCode) != normalizeCardCode(cardCode) {
 		return nil, fmt.Errorf("session card mismatch")
 	}
-	
+
 	crow := cm.db.QueryRow(`SELECT status, expires_at FROM cards WHERE code = ?`, session.CardCode)
 	var status string
 	var expiresAt time.Time
@@ -138,7 +142,7 @@ func (cm *SQLiteCardManager) RecordAudit(entry AuditEntry) {
 	if err != nil {
 		fmt.Printf("[ERROR] SQLite RecordAudit: %v\n", err)
 	}
-	
+
 	cm.mu.Lock()
 	if cm.recorder != nil {
 		cm.recorder.Append(auditsvc.Event{
@@ -205,7 +209,7 @@ func (cm *SQLiteCardManager) GenerateCard(duration time.Duration, note string, m
 	if err != nil {
 		return nil, err
 	}
-	
+
 	cm.RecordAudit(AuditEntry{
 		Time:    time.Now(),
 		Action:  "card_generated",
@@ -303,7 +307,7 @@ func (cm *SQLiteCardManager) ActivateCard(code, machineID, fingerprint, addr, cl
 		return nil, cardops.ErrCardNotFound
 	}
 	c.ActivatedAt = parseTime(activatedAt)
-	
+
 	// Validate logic again inside tx to avoid race
 	if cm.IsBlacklisted(code) {
 		return nil, cardops.ErrCardBlacklisted
@@ -341,11 +345,11 @@ func (cm *SQLiteCardManager) ActivateCard(code, machineID, fingerprint, addr, cl
 	if err != nil {
 		return nil, err
 	}
-	
+
 	lifecycleSession.CardCode = code
 	applyLifecycleCard(&c, updatedCard)
 	session := sessionFromLifecycleSession(lifecycleSession)
-	
+
 	// Update card
 	_, err = tx.Exec(`UPDATE cards SET machine_id = ?, activated_at = ?, expires_at = ? WHERE code = ?`,
 		c.MachineID, c.ActivatedAt, c.ExpiresAt, c.Code)
@@ -602,12 +606,12 @@ func (cm *SQLiteCardManager) UnbindCard(code string) error {
 	if c == nil {
 		return fmt.Errorf("card not found")
 	}
-	
+
 	if c.ActivatedAt != nil {
 		originalDuration := c.ExpiresAt.Sub(*c.ActivatedAt)
 		c.ExpiresAt = c.CreatedAt.Add(originalDuration)
 	}
-	
+
 	_, err := cm.db.Exec(`UPDATE cards SET machine_id = '', activated_at = NULL, expires_at = ? WHERE code = ?`, c.ExpiresAt, code)
 	if err != nil {
 		return err
@@ -638,13 +642,13 @@ func (cm *SQLiteCardManager) BatchGenerateCards(count int, duration time.Duratio
 		count = 100
 	}
 	cards := make([]*Card, 0, count)
-	
+
 	tx, err := cm.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	
+
 	stmt, err := tx.Prepare(`INSERT INTO cards (code, machine_id, agent_id, created_at, expires_at, status, note, max_sessions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return nil, err
@@ -690,7 +694,7 @@ func (cm *SQLiteCardManager) UpdateCardDetails(code string, note *string, maxSes
 		return fmt.Errorf("card not found")
 	}
 	updated := newCardLifecycleService().UpdateDetails(lifecycleCardFromCard(c), note, maxSessions)
-	
+
 	_, err := cm.db.Exec(`UPDATE cards SET note = ?, max_sessions = ? WHERE code = ?`, updated.Note, updated.MaxSessions, code)
 	if err != nil {
 		return err
@@ -749,7 +753,7 @@ func (cm *SQLiteCardManager) GetUniqueMachines() []MachineInfo {
 	cards := cm.AllCards()
 	sessions := cm.AllSessions()
 	blacklist := cm.AllBlacklist()
-	
+
 	machineMap := make(map[string]*MachineInfo)
 	for _, c := range cards {
 		if c.MachineID == "" {
@@ -777,7 +781,7 @@ func (cm *SQLiteCardManager) GetUniqueMachines() []MachineInfo {
 			}
 		}
 	}
-	
+
 	result := make([]MachineInfo, 0, len(machineMap))
 	for _, info := range machineMap {
 		result = append(result, *info)
@@ -853,7 +857,7 @@ func (cm *SQLiteCardManager) bulkUpdateCardsDetailed(codes []string, action stri
 			Status: cardops.BulkItemUpdated,
 		})
 	}
-	
+
 	if !dryRun && changed {
 		tx.Commit()
 		cm.RecordAudit(AuditEntry{

@@ -48,8 +48,6 @@ type response struct {
 	CardExpiresAt int64  `json:"card_expires_at,omitempty"`
 }
 
-
-
 func (h *APIHandler) readSignedRequest(r *http.Request) (*request, error) {
 	body, err := readBody(r)
 	if err != nil {

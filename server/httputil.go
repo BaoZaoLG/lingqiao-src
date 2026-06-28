@@ -81,11 +81,11 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/problem+json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(problemResponse{
-		Type:     problemType,
-		Title:    http.StatusText(status),
-		Status:   status,
-		Detail:   msg,
-		Code:     code,
+		Type:   problemType,
+		Title:  http.StatusText(status),
+		Status: status,
+		Detail: msg,
+		Code:   code,
 	})
 }
 

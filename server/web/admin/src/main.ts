@@ -1215,6 +1215,8 @@ function actionLabel(action: string): string {
     card_status_changed: '状态变更',
     card_extended: '延期',
     card_unbound: '解绑',
+    cards_batch_generated: '批量生成卡密',
+    cards_bulk_updated: '批量更新卡密',
     cards_import_completed: '导入卡密',
     session_deactivated: '注销会话',
     blacklist_added: '添加黑名单',

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"database/sql"
 	"embed"
 	"flag"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/lingqiao/server/internal/config"
+	"github.com/lingqiao/server/internal/features/cards"
 )
 
 //go:embed web-dist/*
@@ -41,17 +43,17 @@ func main() {
 	})
 
 	storage := NewJSONStorage(cfg.DataDir)
-	
+
 	dbPath := cfg.DataDir + "/lingqiao.db"
 	jsonPath := cfg.DataDir + "/data.json"
-	
+
 	needsMigration := false
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		if _, err := os.Stat(jsonPath); err == nil {
 			needsMigration = true
 		}
 	}
-	
+
 	sqliteCm, err := NewSQLiteCardManager(dbPath)
 	if err != nil {
 		log.Fatalf("[DB] Failed to init sqlite: %v", err)
@@ -87,13 +89,28 @@ func main() {
 	payload := NewPayloadHandler(payloadStore)
 	payload.SetAuditSink(cm.RecordAudit)
 
+	var db *sql.DB
+	if impl, ok := sqliteCm.(*SQLiteCardManager); ok {
+		db = impl.DB()
+	}
+	cardsRepo := cards.NewSQLiteRepository(db)
+	cardsSvc := cards.NewService(cardsRepo, generateCardCode, time.Now)
+	cardsHandler := cards.NewHandler(cardsSvc, cardsRepo)
+	cardsHandler.SetAuditSink(func(action, cardCode, detail string) {
+		cm.RecordAudit(AuditEntry{
+			Action: action,
+			Card:   cardCode,
+			Detail: detail,
+		})
+	})
+
 	printStartupInfo(cm)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go api.SessionCleanupTask(ctx)
 
-	adminServer := buildAdminServer(cfg.AdminAddr, api, admin, payload)
+	adminServer := buildAdminServer(cfg.AdminAddr, api, admin, payload, cardsHandler)
 	agentServer := buildAgentServer(cfg.AgentAddr, agent)
 
 	startServers(adminServer, agentServer)
@@ -132,7 +149,7 @@ func handleCLIGenerate(cm CardManager) bool {
 
 // ── Server Construction ──────────────────────────────────────────────────────
 
-func buildAdminServer(addr string, api *APIHandler, admin *AdminHandler, payload *PayloadHandler) *http.Server {
+func buildAdminServer(addr string, api *APIHandler, admin *AdminHandler, payload *PayloadHandler, cardsHandler *cards.Handler) *http.Server {
 	mux := http.NewServeMux()
 	activateLimiter := newRateLimiter(1*time.Minute, 20)
 
@@ -165,7 +182,7 @@ func buildAdminServer(addr string, api *APIHandler, admin *AdminHandler, payload
 	mux.HandleFunc("/api/health", healthHandler)
 
 	// Admin routes (authenticated)
-	registerAdminRoutes(mux, admin, payload)
+	registerAdminRoutes(mux, admin, payload, cardsHandler)
 
 	// Serve admin panel HTML
 	adminSubFS, _ := fs.Sub(webDistFS, "web-dist/admin")
@@ -231,7 +248,7 @@ func handleChunkAuth(w http.ResponseWriter, r *http.Request, payload *PayloadHan
 	payload.HandleChunkDownload(w, r)
 }
 
-func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *PayloadHandler) {
+func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *PayloadHandler, cardsHandler *cards.Handler) {
 	auth := h.adminAuth
 
 	// Auth & settings
@@ -245,12 +262,12 @@ func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *PayloadHa
 	mux.HandleFunc("/admin/api/modules/overview", auth(h.HandleModulesOverview))
 
 	// Card management
-	mux.HandleFunc("/admin/api/cards", auth(h.HandleListCards))
-	mux.HandleFunc("/admin/api/card/generate", auth(h.HandleGenerateCard))
-	mux.HandleFunc("/admin/api/card/batch-generate", auth(h.HandleBatchGenerateCards))
-	mux.HandleFunc("/admin/api/card/update", auth(h.HandleUpdateCard))
-	mux.HandleFunc("/admin/api/card/update-details", auth(h.HandleUpdateCardDetails))
-	mux.HandleFunc("/admin/api/cards/bulk", auth(h.HandleBulkCards))
+	mux.HandleFunc("/admin/api/cards", auth(cardsHandler.HandleListCards))
+	mux.HandleFunc("/admin/api/card/generate", auth(cardsHandler.HandleGenerateCard))
+	mux.HandleFunc("/admin/api/card/batch-generate", auth(cardsHandler.HandleBatchGenerateCards))
+	mux.HandleFunc("/admin/api/card/update", auth(cardsHandler.HandleUpdateCard))
+	mux.HandleFunc("/admin/api/card/update-details", auth(cardsHandler.HandleUpdateCardDetails))
+	mux.HandleFunc("/admin/api/cards/bulk", auth(cardsHandler.HandleBulkCards))
 	mux.HandleFunc("/admin/api/cards/export", auth(h.HandleExportCards))
 	mux.HandleFunc("/admin/api/cards/import", auth(h.HandleImportCards))
 

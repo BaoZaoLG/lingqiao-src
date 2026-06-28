@@ -1,6 +1,7 @@
 package cards
 
 import "fmt"
+
 // BulkAction ...
 type BulkAction string
 
@@ -11,6 +12,7 @@ const (
 	BulkExtend  BulkAction = "extend"
 	BulkUnbind  BulkAction = "unbind"
 )
+
 // BulkItemStatus ...
 type BulkItemStatus string
 
@@ -19,12 +21,14 @@ const (
 	BulkItemSkipped BulkItemStatus = "skipped"
 	BulkItemFailed  BulkItemStatus = "failed"
 )
+
 // BulkItemResult ...
 type BulkItemResult struct {
 	Code    string         `json:"code"`
 	Status  BulkItemStatus `json:"status"`
 	Message string         `json:"message,omitempty"`
 }
+
 // BulkResult ...
 type BulkResult struct {
 	Updated int              `json:"updated"`
@@ -32,6 +36,7 @@ type BulkResult struct {
 	Failed  int              `json:"failed"`
 	Items   []BulkItemResult `json:"items"`
 }
+
 // ValidateBulkAction ...
 func ValidateBulkAction(action BulkAction) error {
 	switch action {
@@ -41,6 +46,7 @@ func ValidateBulkAction(action BulkAction) error {
 		return fmt.Errorf("unknown action: %s", action)
 	}
 }
+
 // AddItem ...
 func (r *BulkResult) AddItem(item BulkItemResult) {
 	r.Items = append(r.Items, item)
