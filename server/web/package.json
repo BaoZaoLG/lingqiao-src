@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "postbuild": "node -e \"require('fs').writeFileSync('../web-dist/.gitkeep', '')\"",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run build"
   },
