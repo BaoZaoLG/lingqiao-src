@@ -9,7 +9,7 @@ import (
 	cardops "github.com/lingqiao/server/internal/cards"
 )
 
-func (cm *CardManager) BatchGenerateCards(count int, duration time.Duration, note string, maxSessions int, agentID string) ([]*Card, error) {
+func (cm *JSONCardManager) BatchGenerateCards(count int, duration time.Duration, note string, maxSessions int, agentID string) ([]*Card, error) {
 	if count < 1 {
 		count = 1
 	}
@@ -48,7 +48,7 @@ func (cm *CardManager) BatchGenerateCards(count int, duration time.Duration, not
 }
 
 // UpdateCardDetails updates a card's note and/or max_sessions.
-func (cm *CardManager) UpdateCardDetails(code string, note *string, maxSessions *int) error {
+func (cm *JSONCardManager) UpdateCardDetails(code string, note *string, maxSessions *int) error {
 	code = normalizeCardCode(code)
 	cm.mu.Lock()
 	card, exists := cm.cards[code]
@@ -79,7 +79,7 @@ func (cm *CardManager) UpdateCardDetails(code string, note *string, maxSessions 
 // SearchCards returns cards matching the given filters.
 // query matches code prefix or note substring. status filters by CardStatus.
 // machineID filters by bound machine.
-func (cm *CardManager) SearchCards(query, status, machineID string) []*Card {
+func (cm *JSONCardManager) SearchCards(query, status, machineID string) []*Card {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 	query = strings.ToUpper(query)
@@ -104,7 +104,7 @@ func (cm *CardManager) SearchCards(query, status, machineID string) []*Card {
 }
 
 // GetUniqueMachines returns all unique machine IDs with stats.
-func (cm *CardManager) GetUniqueMachines() []MachineInfo {
+func (cm *JSONCardManager) GetUniqueMachines() []MachineInfo {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 	machineMap := make(map[string]*MachineInfo)
@@ -143,21 +143,21 @@ func (cm *CardManager) GetUniqueMachines() []MachineInfo {
 }
 
 // GetCardsByMachine returns all cards bound to a machine.
-func (cm *CardManager) GetCardsByMachine(machineID string) []*Card {
+func (cm *JSONCardManager) GetCardsByMachine(machineID string) []*Card {
 	return cm.SearchCards("", "", machineID)
 }
 
 // BulkUpdateCardsDetailed applies an action to multiple cards and reports per-item results.
-func (cm *CardManager) BulkUpdateCardsDetailed(codes []string, action string, extendHours int) (cardops.BulkResult, error) {
+func (cm *JSONCardManager) BulkUpdateCardsDetailed(codes []string, action string, extendHours int) (cardops.BulkResult, error) {
 	return cm.bulkUpdateCardsDetailed(codes, action, extendHours, false)
 }
 
 // PreviewBulkUpdateCardsDetailed reports bulk operation impact without mutating state.
-func (cm *CardManager) PreviewBulkUpdateCardsDetailed(codes []string, action string, extendHours int) (cardops.BulkResult, error) {
+func (cm *JSONCardManager) PreviewBulkUpdateCardsDetailed(codes []string, action string, extendHours int) (cardops.BulkResult, error) {
 	return cm.bulkUpdateCardsDetailed(codes, action, extendHours, true)
 }
 
-func (cm *CardManager) bulkUpdateCardsDetailed(codes []string, action string, extendHours int, dryRun bool) (cardops.BulkResult, error) {
+func (cm *JSONCardManager) bulkUpdateCardsDetailed(codes []string, action string, extendHours int, dryRun bool) (cardops.BulkResult, error) {
 	var result cardops.BulkResult
 	bulkAction := cardops.BulkAction(action)
 	if err := cardops.ValidateBulkAction(bulkAction); err != nil {
@@ -227,7 +227,7 @@ func (cm *CardManager) bulkUpdateCardsDetailed(codes []string, action string, ex
 }
 
 // BulkUpdateCards preserves the legacy count-only bulk operation API.
-func (cm *CardManager) BulkUpdateCards(codes []string, action string, extendHours int) (int, error) {
+func (cm *JSONCardManager) BulkUpdateCards(codes []string, action string, extendHours int) (int, error) {
 	result, err := cm.BulkUpdateCardsDetailed(codes, action, extendHours)
 	return result.Updated, err
 }
@@ -243,7 +243,7 @@ type MachineInfo struct {
 // ========== Agent CRUD ==========
 
 // CreateAgent creates a new agent account.
-func (cm *CardManager) CreateAgent(username, passwordHash, prefix string) (*Agent, error) {
+func (cm *JSONCardManager) CreateAgent(username, passwordHash, prefix string) (*Agent, error) {
 	cm.mu.Lock()
 	existing := make([]agentsvc.Account, 0, len(cm.agents))
 	for _, a := range cm.agents {
@@ -266,7 +266,7 @@ func (cm *CardManager) CreateAgent(username, passwordHash, prefix string) (*Agen
 	return cloneAgent(agent), nil
 }
 
-func (cm *CardManager) UsernameExists(username string) bool {
+func (cm *JSONCardManager) UsernameExists(username string) bool {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 	for _, a := range cm.agents {
@@ -278,13 +278,13 @@ func (cm *CardManager) UsernameExists(username string) bool {
 }
 
 // GetAgent returns an agent by ID.
-func (cm *CardManager) GetAgent(id string) *Agent {
+func (cm *JSONCardManager) GetAgent(id string) *Agent {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 	return cloneAgent(cm.agents[id])
 }
 
-func (cm *CardManager) UpdateAgentPassword(id, passwordHash string) error {
+func (cm *JSONCardManager) UpdateAgentPassword(id, passwordHash string) error {
 	cm.mu.Lock()
 	agent, exists := cm.agents[id]
 	if !exists {
@@ -308,7 +308,7 @@ func (cm *CardManager) UpdateAgentPassword(id, passwordHash string) error {
 }
 
 // AllAgents returns all agents.
-func (cm *CardManager) AllAgents() []*Agent {
+func (cm *JSONCardManager) AllAgents() []*Agent {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 	result := make([]*Agent, 0, len(cm.agents))
@@ -319,7 +319,7 @@ func (cm *CardManager) AllAgents() []*Agent {
 }
 
 // UpdateAgentStatus enables or disables an agent.
-func (cm *CardManager) UpdateAgentStatus(id string, disabled bool) error {
+func (cm *JSONCardManager) UpdateAgentStatus(id string, disabled bool) error {
 	cm.mu.Lock()
 	agent, exists := cm.agents[id]
 	if !exists {
@@ -339,7 +339,7 @@ func (cm *CardManager) UpdateAgentStatus(id string, disabled bool) error {
 }
 
 // DeleteAgent removes an agent.
-func (cm *CardManager) DeleteAgent(id string) error {
+func (cm *JSONCardManager) DeleteAgent(id string) error {
 	cm.mu.Lock()
 	agent, exists := cm.agents[id]
 	if !exists {
@@ -363,7 +363,7 @@ func (cm *CardManager) DeleteAgent(id string) error {
 }
 
 // AgentCards returns all cards belonging to an agent.
-func (cm *CardManager) AgentCards(agentID string) []*Card {
+func (cm *JSONCardManager) AgentCards(agentID string) []*Card {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 	result := make([]*Card, 0)
@@ -376,7 +376,7 @@ func (cm *CardManager) AgentCards(agentID string) []*Card {
 }
 
 // AgentStats returns stats for an agent.
-func (cm *CardManager) AgentStats(agentID string) (total, active, expired int) {
+func (cm *JSONCardManager) AgentStats(agentID string) (total, active, expired int) {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 	now := time.Now()

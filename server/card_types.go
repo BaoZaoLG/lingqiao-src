@@ -83,7 +83,7 @@ type BlacklistEntry struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-type CardManager struct {
+type JSONCardManager struct {
 	mu        sync.RWMutex
 	cards     map[string]*Card
 	sessions  map[string]*Session
@@ -253,4 +253,48 @@ func applyLifecycleSession(dst *Session, src cardops.Session) {
 	dst.LastSeen = src.LastSeen
 	dst.ExpiresAt = src.ExpiresAt
 	dst.RemoteAddr = src.RemoteAddr
+}
+
+type CardManager interface {
+	GetStorage() *JSONStorage
+	GetSession(token string) *Session
+	ValidateBoundSession(token, machineID, cardCode string) (*Session, error)
+	SetAuditRecorder(recorder *auditsvc.Recorder)
+	RecordAudit(entry AuditEntry)
+	GenerateCard(duration time.Duration, note string, maxSessions int, agentID string) (*Card, error)
+	GenerateCardWithCode(code string, duration time.Duration, note string, maxSessions int, agentID string) (*Card, error)
+	ValidateCard(code string) (*Card, error)
+	ActivateCard(code, machineID, fingerprint, addr, clientVersion string) (*Session, error)
+	Heartbeat(token, machineID, addr, clientVersion string) (*Session, error)
+	DeactivateSession(token string, unbind bool) error
+	GetCard(code string) *Card
+	AllCards() []*Card
+	AllSessions() []*Session
+	AllBlacklist() []*BlacklistEntry
+	AuditLog() []AuditEntry
+	AddBlacklist(typ, value, reason string)
+	RemoveBlacklist(value string)
+	UpdateCardStatus(code string, status CardStatus) error
+	ExtendCard(code string, duration time.Duration) error
+	UnbindCard(code string) error
+	CleanupExpired()
+	IsBlacklisted(value string) bool
+
+	BatchGenerateCards(count int, duration time.Duration, note string, maxSessions int, agentID string) ([]*Card, error)
+	UpdateCardDetails(code string, note *string, maxSessions *int) error
+	SearchCards(query, status, machineID string) []*Card
+	GetUniqueMachines() []MachineInfo
+	GetCardsByMachine(machineID string) []*Card
+	BulkUpdateCardsDetailed(codes []string, action string, extendHours int) (cardops.BulkResult, error)
+	PreviewBulkUpdateCardsDetailed(codes []string, action string, extendHours int) (cardops.BulkResult, error)
+	BulkUpdateCards(codes []string, action string, extendHours int) (int, error)
+	CreateAgent(username, passwordHash, prefix string) (*Agent, error)
+	UsernameExists(username string) bool
+	GetAgent(id string) *Agent
+	UpdateAgentPassword(id, passwordHash string) error
+	AllAgents() []*Agent
+	UpdateAgentStatus(id string, disabled bool) error
+	DeleteAgent(id string) error
+	AgentCards(agentID string) []*Card
+	AgentStats(agentID string) (total, active, expired int)
 }

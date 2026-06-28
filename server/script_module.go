@@ -378,10 +378,8 @@ func (h *APIHandler) HandleScriptDownload(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	h.cm.mu.RLock()
-	session, exists := h.cm.sessions[token]
-	h.cm.mu.RUnlock()
-	if !exists || session.ExpiresAt.Before(time.Now()) {
+	session := h.cm.GetSession(token)
+	if session == nil || session.ExpiresAt.Before(time.Now()) {
 		writeError(w, http.StatusUnauthorized, "invalid or expired session")
 		return
 	}

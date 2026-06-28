@@ -41,7 +41,35 @@ func main() {
 	})
 
 	storage := NewJSONStorage(cfg.DataDir)
-	cm := NewCardManager(storage)
+	
+	dbPath := cfg.DataDir + "/lingqiao.db"
+	jsonPath := cfg.DataDir + "/data.json"
+	
+	needsMigration := false
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		if _, err := os.Stat(jsonPath); err == nil {
+			needsMigration = true
+		}
+	}
+	
+	sqliteCm, err := NewSQLiteCardManager(dbPath)
+	if err != nil {
+		log.Fatalf("[DB] Failed to init sqlite: %v", err)
+	}
+
+	if needsMigration {
+		log.Println("[DB] Migrating from JSON to SQLite...")
+		oldCm := NewJSONCardManager(storage)
+		if sqliteImpl, ok := sqliteCm.(*SQLiteCardManager); ok {
+			if err := sqliteImpl.ImportJSONData(oldCm); err != nil {
+				log.Printf("[DB] Migration warning: %v", err)
+			} else {
+				log.Println("[DB] Migration completed successfully.")
+			}
+		}
+	}
+
+	var cm CardManager = sqliteCm
 	initAnnouncement()
 
 	// CLI mode: generate card and exit
@@ -73,7 +101,7 @@ func main() {
 
 // ── CLI Mode ─────────────────────────────────────────────────────────────────
 
-func handleCLIGenerate(cm *CardManager) bool {
+func handleCLIGenerate(cm CardManager) bool {
 	genCard := flag.Bool("generate-card", false, "Generate a new card for testing")
 	cardDuration := flag.Int("duration", 720, "Card validity duration in hours")
 	cardSessions := flag.Int("max-sessions", 1, "Max concurrent sessions")
@@ -337,7 +365,7 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"ok","time":"` + time.Now().Format(time.RFC3339) + `"}`))
 }
 
-func printStartupInfo(cm *CardManager) {
+func printStartupInfo(cm CardManager) {
 	cards := cm.AllCards()
 	activeCount := 0
 	for _, c := range cards {

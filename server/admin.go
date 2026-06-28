@@ -14,7 +14,7 @@ import (
 
 // AdminHandler handles the web admin panel.
 type AdminHandler struct {
-	cm              *CardManager
+	cm              CardManager
 	chat            *ChatStore
 	adminPassHash   string
 	mu              sync.Mutex
@@ -24,17 +24,17 @@ type AdminHandler struct {
 	pwChangeLimiter *rateLimiter
 }
 
-func NewAdminHandler(cm *CardManager) *AdminHandler {
+func NewAdminHandler(cm CardManager) *AdminHandler {
 	return NewAdminHandlerWithTTL(cm, currentSessionTTL())
 }
 
-func NewAdminHandlerWithTTL(cm *CardManager, sessionTTL time.Duration) *AdminHandler {
+func NewAdminHandlerWithTTL(cm CardManager, sessionTTL time.Duration) *AdminHandler {
 	if sessionTTL <= 0 {
 		sessionTTL = 4 * time.Hour
 	}
 	h := &AdminHandler{
 		cm:              cm,
-		chat:            NewChatStore(cm.storage, time.Now),
+		chat:            NewChatStore(cm.GetStorage(), time.Now),
 		sessions:        make(map[string]time.Time),
 		sessionTTL:      sessionTTL,
 		loginLimiter:    newRateLimiter(15*time.Minute, 5),

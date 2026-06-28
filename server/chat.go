@@ -621,7 +621,7 @@ func (h *APIHandler) HandleChatSend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	session, err := h.validateBoundSession(req.SessionToken, req.MachineID, req.Card)
+	session, err := h.cm.ValidateBoundSession(req.SessionToken, req.MachineID, req.Card)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
@@ -652,7 +652,7 @@ func (h *APIHandler) HandleChatProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	session, err := h.validateBoundSession(req.SessionToken, req.MachineID, req.Card)
+	session, err := h.cm.ValidateBoundSession(req.SessionToken, req.MachineID, req.Card)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
@@ -685,7 +685,7 @@ func (h *APIHandler) HandleChatReact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	session, err := h.validateBoundSession(req.SessionToken, req.MachineID, req.Card)
+	session, err := h.cm.ValidateBoundSession(req.SessionToken, req.MachineID, req.Card)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
@@ -712,7 +712,7 @@ func (h *APIHandler) HandleChatPresence(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	session, err := h.validateBoundSession(req.SessionToken, req.MachineID, req.Card)
+	session, err := h.cm.ValidateBoundSession(req.SessionToken, req.MachineID, req.Card)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
@@ -735,7 +735,7 @@ func (h *APIHandler) HandleChatMessages(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	session, err := h.validateBoundSession(req.SessionToken, req.MachineID, req.Card)
+	session, err := h.cm.ValidateBoundSession(req.SessionToken, req.MachineID, req.Card)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return

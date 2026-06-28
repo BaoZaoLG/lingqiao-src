@@ -50,7 +50,7 @@ func (h *APIHandler) HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	if req.CardCode == "" {
 		req.CardCode = req.Card
 	}
-	if _, err := h.validateBoundSession(req.SessionToken, req.MachineID, req.CardCode); err != nil {
+	if _, err := h.cm.ValidateBoundSession(req.SessionToken, req.MachineID, req.CardCode); err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -176,7 +176,7 @@ func (h *APIHandler) HandleUpdatePackageDownload(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	if _, err := h.validateBoundSession(r.Header.Get("X-Session-Token"), r.Header.Get("X-Machine-ID"), r.Header.Get("X-Card-Code")); err != nil {
+	if _, err := h.cm.ValidateBoundSession(r.Header.Get("X-Session-Token"), r.Header.Get("X-Machine-ID"), r.Header.Get("X-Card-Code")); err != nil {
 		status := http.StatusUnauthorized
 		if r.Header.Get("X-Session-Token") == "" {
 			status = http.StatusBadRequest

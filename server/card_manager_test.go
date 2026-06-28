@@ -8,9 +8,10 @@ import (
 	cardops "github.com/lingqiao/server/internal/cards"
 )
 
-func newTestCardManager(t *testing.T) *CardManager {
+func newTestCardManager(t *testing.T) CardManager {
 	t.Helper()
-	return NewCardManager(NewJSONStorage(t.TempDir()))
+	storage := NewJSONStorage(t.TempDir())
+	return NewJSONCardManager(storage)
 }
 
 func TestCardManagerGenerateActivateHeartbeatDeactivate(t *testing.T) {

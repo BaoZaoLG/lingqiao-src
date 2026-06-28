@@ -19,7 +19,7 @@ import (
 
 // AgentHandler handles the agent panel API, completely isolated from admin.
 type AgentHandler struct {
-	cm           *CardManager
+	cm           CardManager
 	mu           sync.Mutex
 	sessions     map[string]time.Time
 	sessionTTL   time.Duration
@@ -29,11 +29,11 @@ type AgentHandler struct {
 	pwLimiter    *rateLimiter
 }
 
-func NewAgentHandler(cm *CardManager) *AgentHandler {
+func NewAgentHandler(cm CardManager) *AgentHandler {
 	return NewAgentHandlerWithTTL(cm, currentSessionTTL())
 }
 
-func NewAgentHandlerWithTTL(cm *CardManager, sessionTTL time.Duration) *AgentHandler {
+func NewAgentHandlerWithTTL(cm CardManager, sessionTTL time.Duration) *AgentHandler {
 	if sessionTTL <= 0 {
 		sessionTTL = 4 * time.Hour
 	}

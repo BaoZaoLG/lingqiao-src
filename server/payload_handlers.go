@@ -341,7 +341,7 @@ func (h *PayloadHandler) HandleChunkDownload(w http.ResponseWriter, r *http.Requ
 
 // HandleKeyExchange: client sends session_token + machine_id + payload_id,
 // server returns the AES key encrypted with KEK derived from card_code + HWID.
-func (h *PayloadHandler) HandleKeyExchange(w http.ResponseWriter, r *http.Request, cm *CardManager) {
+func (h *PayloadHandler) HandleKeyExchange(w http.ResponseWriter, r *http.Request, cm CardManager) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -377,10 +377,8 @@ func (h *PayloadHandler) HandleKeyExchange(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Verify session
-	cm.mu.RLock()
-	session, exists := cm.sessions[req.SessionToken]
-	cm.mu.RUnlock()
-	if !exists || session.ExpiresAt.Before(time.Now()) {
+	session := cm.GetSession(req.SessionToken)
+	if session == nil || session.ExpiresAt.Before(time.Now()) {
 		writeError(w, http.StatusForbidden, "invalid or expired session")
 		return
 	}

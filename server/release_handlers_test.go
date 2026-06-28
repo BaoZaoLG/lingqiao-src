@@ -8,6 +8,7 @@ import (
 )
 
 func TestManifestFromSelectionMapsReleaseAndPackage(t *testing.T) {
+
 	now := time.Now().UTC()
 	selected := releasesvc.SelectedRelease{
 		Release: releasesvc.Release{

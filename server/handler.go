@@ -17,12 +17,12 @@ import (
 
 // APIHandler handles all HTTP API requests.
 type APIHandler struct {
-	cm   *CardManager
+	cm   CardManager
 	chat *ChatStore
 }
 
-func NewAPIHandler(cm *CardManager) *APIHandler {
-	return &APIHandler{cm: cm, chat: NewChatStore(cm.storage, time.Now)}
+func NewAPIHandler(cm CardManager) *APIHandler {
+	return &APIHandler{cm: cm, chat: NewChatStore(cm.GetStorage(), time.Now)}
 }
 
 type request struct {
@@ -48,39 +48,7 @@ type response struct {
 	CardExpiresAt int64  `json:"card_expires_at,omitempty"`
 }
 
-func (h *APIHandler) validateBoundSession(token, machineID, cardCode string) (*Session, error) {
-	if h == nil || h.cm == nil {
-		return nil, fmt.Errorf("session service unavailable")
-	}
-	if token == "" {
-		return nil, fmt.Errorf("session_token is required")
-	}
-	if machineID == "" {
-		return nil, fmt.Errorf("machine_id is required")
-	}
-	now := time.Now()
-	h.cm.mu.RLock()
-	session, exists := h.cm.sessions[token]
-	var card *Card
-	if exists {
-		card = h.cm.cards[session.CardCode]
-	}
-	h.cm.mu.RUnlock()
 
-	if !exists || session == nil || session.ExpiresAt.Before(now) {
-		return nil, fmt.Errorf("invalid or expired session")
-	}
-	if session.MachineID != machineID {
-		return nil, fmt.Errorf("session machine mismatch")
-	}
-	if cardCode != "" && normalizeCardCode(session.CardCode) != normalizeCardCode(cardCode) {
-		return nil, fmt.Errorf("session card mismatch")
-	}
-	if card == nil || card.Status == CardDisabled || card.Status == CardExpired || now.After(card.ExpiresAt) {
-		return nil, fmt.Errorf("card no longer valid")
-	}
-	return session, nil
-}
 
 func (h *APIHandler) readSignedRequest(r *http.Request) (*request, error) {
 	body, err := readBody(r)
@@ -277,7 +245,7 @@ func (h *APIHandler) HandleDllDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.validateBoundSession(token, r.Header.Get("X-Machine-ID"), r.Header.Get("X-Card-Code"))
+	session, err := h.cm.ValidateBoundSession(token, r.Header.Get("X-Machine-ID"), r.Header.Get("X-Card-Code"))
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return

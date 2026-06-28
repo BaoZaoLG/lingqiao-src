@@ -319,7 +319,7 @@ func scriptsModuleOverview() moduleOverviewItem {
 }
 
 func (h *AdminHandler) payloadsModuleOverview() moduleOverviewItem {
-	storage := h.cm.storage
+	storage := h.cm.GetStorage()
 	if storage == nil {
 		storage = NewJSONStorage(dataDir())
 	}
