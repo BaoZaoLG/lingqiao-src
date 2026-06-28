@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 if (-not $Version) {
-    $cmake = Get-Content -LiteralPath (Join-Path $Root "CMakeLists.txt") -Raw
+    $cmake = Get-Content -LiteralPath (Join-Path $Root "client\CMakeLists.txt") -Raw
     if ($cmake -match 'set\(APP_VERSION "([^"]+)"\)') {
         $Version = $Matches[1]
     } else {

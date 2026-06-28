@@ -21,8 +21,8 @@ if(MSVC)
 endif()
 
 add_definitions(-DUNICODE -D_UNICODE)
-include_directories(${CMAKE_SOURCE_DIR}/cef)
-include_directories(${CMAKE_SOURCE_DIR}/chromium)
+include_directories(${CMAKE_SOURCE_DIR}/../cef)
+include_directories(${CMAKE_SOURCE_DIR}/../chromium)
 
 # ============================================================
 # Security hardening flags (applied to all targets)

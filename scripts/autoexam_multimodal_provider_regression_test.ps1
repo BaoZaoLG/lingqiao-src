@@ -1,8 +1,8 @@
 param(
     [string]$ScriptPath = (Join-Path $PSScriptRoot "..\AutoExam.js"),
-    [string]$ThreadPath = (Join-Path $PSScriptRoot "..\src\hook\thread.cpp"),
-    [string]$UiHeaderPath = (Join-Path $PSScriptRoot "..\src\ui\main_window.h"),
-    [string]$UiActionsPath = (Join-Path $PSScriptRoot "..\src\ui\impl_actions.h")
+    [string]$ThreadPath = (Join-Path $PSScriptRoot "..\client\src\hook\thread.cpp"),
+    [string]$UiHeaderPath = (Join-Path $PSScriptRoot "..\client\src\ui\main_window.h"),
+    [string]$UiActionsPath = (Join-Path $PSScriptRoot "..\client\src\ui\impl_actions.h")
 )
 
 $autoExam = Get-Content -Path $ScriptPath -Raw -Encoding UTF8

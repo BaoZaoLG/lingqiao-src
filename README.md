@@ -4,8 +4,8 @@
 
 ## 目录结构 (Directory Layout)
 
-- **`src/`**：客户端 C++ 源代码（基于 Qt 构建的 UI 界面、CEF Hook 引擎、注入器模块等）。
-- **`injector-server/`**：Go 后端服务器源码，包含基于 Vite + TypeScript 构建的前端管理面板（`web/`）。
+- **`client/src/`**：客户端 C++ 源代码（基于 Qt 构建的 UI 界面、CEF Hook 引擎、注入器模块等）。
+- **`server/`**：Go 后端服务器源码，包含基于 Vite + TypeScript 构建的前端管理面板（`web/`）。
 - **`cef/` & `chromium/`**：客户端依赖的 CEF 和 Chromium 原生头文件与库。
 - **`installer/`**：客户端的 WiX Toolset 安装包打包脚本。
 
@@ -16,9 +16,9 @@
 ### 1. Go 后端开发 (Server Development)
 
 #### 环境准备
-在 `injector-server` 目录下配置缓存并安装前端依赖：
+在 `server` 目录下配置缓存并安装前端依赖：
 ```powershell
-cd injector-server
+cd server
 # 配置本地 Go 编译缓存（可选）
 $env:GOCACHE="$PWD\.gocache"
 

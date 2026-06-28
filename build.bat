@@ -28,7 +28,7 @@ if errorlevel 1 (
     exit /b 1
 )
 echo [1/3] CMake configure...
-cmake -S . -B "%BUILD_DIR%" -G "%CMAKE_GENERATOR%" -A "%CMAKE_PLATFORM%" -DCMAKE_PREFIX_PATH="%QT_PREFIX_PATH%"
+cmake -S client -B "%BUILD_DIR%" -G "%CMAKE_GENERATOR%" -A "%CMAKE_PLATFORM%" -DCMAKE_PREFIX_PATH="%QT_PREFIX_PATH%"
 if errorlevel 1 (
     echo ERROR: CMake configure failed
     exit /b 1
