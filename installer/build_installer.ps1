@@ -17,7 +17,7 @@ if (-not $Version) {
     }
 }
 if (-not $SourceDir) {
-    $SourceDir = Join-Path $Root "build-hook-log\src\Release"
+    $SourceDir = Join-Path $Root "build\src\Release"
 }
 if (-not $OutputDir) {
     $OutputDir = Join-Path $Root "dist\installer"

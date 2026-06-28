@@ -48,11 +48,11 @@ go run .
 - **库依赖**：Qt 5.15+ / CMake 3.20+
 - **构建命令**：
   ```powershell
-  # 创建并进入构建目录
+  # 推荐直接使用根目录的批处理脚本进行一键构建：
+  .\build.bat
+  
+  # 或手动执行（需在根目录）：
   mkdir build
-  cd build
-  # 使用 CMake 生成 VS 解决方案
-  cmake .. -DCMAKE_BUILD_TYPE=Release
-  # 执行编译
-  cmake --build . --config Release
+  cmake -S client -B build -G "Visual Studio 17 2022" -A Win32
+  cmake --build build --config Release
   ```
