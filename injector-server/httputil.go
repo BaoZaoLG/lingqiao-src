@@ -162,6 +162,33 @@ type errorResponse struct {
 	Message string `json:"message"`
 }
 
+type problemResponse struct {
+	Type      string `json:"type"`
+	Title     string `json:"title"`
+	Status    int    `json:"status"`
+	Detail    string `json:"detail,omitempty"`
+	Instance  string `json:"instance,omitempty"`
+	Code      string `json:"code,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
+}
+
+func writeProblem(w http.ResponseWriter, r *http.Request, status int, code, title, detail string) {
+	if title == "" {
+		title = http.StatusText(status)
+	}
+	problemType := "https://lingqiao.local/problems/" + strings.ToLower(strings.ReplaceAll(code, "_", "-"))
+	w.Header().Set("Content-Type", "application/problem+json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(problemResponse{
+		Type:     problemType,
+		Title:    title,
+		Status:   status,
+		Detail:   detail,
+		Instance: r.URL.Path,
+		Code:     code,
+	})
+}
+
 // ── Security Headers ─────────────────────────────────────────────────────────
 
 func setSecurityHeaders(w http.ResponseWriter) {
