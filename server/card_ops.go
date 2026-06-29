@@ -543,30 +543,6 @@ func (cm *JSONCardManager) ExtendCard(code string, duration time.Duration) error
 	return nil
 }
 
-func (cm *JSONCardManager) UnbindCard(code string) error {
-	code = normalizeCardCode(code)
-	cm.mu.Lock()
-	card, exists := cm.cards[code]
-	if !exists {
-		cm.mu.Unlock()
-		return fmt.Errorf("card not found")
-	}
-	if card.ActivatedAt != nil {
-		originalDuration := card.ExpiresAt.Sub(*card.ActivatedAt)
-		card.ExpiresAt = card.CreatedAt.Add(originalDuration)
-	}
-	card.MachineID = ""
-	card.ActivatedAt = nil
-	cm.appendAuditLocked(AuditEntry{
-		Time:   time.Now(),
-		Action: "card_unbound",
-		Card:   code,
-	})
-	cm.mu.Unlock()
-	cm.save()
-	return nil
-}
-
 // CleanupExpired removes expired sessions.
 func (cm *JSONCardManager) CleanupExpired() {
 	cm.mu.Lock()

@@ -121,3 +121,64 @@ func TestServiceCreateRejectsInvalidInputs(t *testing.T) {
 		t.Fatalf("session error = %v", err)
 	}
 }
+
+func TestServiceUnbind(t *testing.T) {
+	repo := newMemoryRepo()
+	service := NewService(repo, nil, time.Now)
+
+	now := time.Now()
+	activated := now.Add(-2 * time.Hour) // Activated 2 hours ago
+	expires := now.Add(22 * time.Hour)   // 24 total hours
+
+	card := Card{
+		Code:        "BIND-CARD",
+		MachineID:   "machine-1",
+		CreatedAt:   now.Add(-4 * time.Hour), // created 4 hours ago
+		ActivatedAt: &activated,
+		ExpiresAt:   expires,
+	}
+	repo.Save(context.Background(), card)
+
+	err := service.Unbind(context.Background(), "BIND-CARD")
+	if err != nil {
+		t.Fatalf("Unbind failed: %v", err)
+	}
+
+	updated, _ := repo.Get(context.Background(), "BIND-CARD")
+	if updated.MachineID != "" {
+		t.Errorf("MachineID not cleared: %s", updated.MachineID)
+	}
+	if updated.ActivatedAt != nil {
+		t.Error("ActivatedAt not cleared")
+	}
+	expectedExpires := card.CreatedAt.Add(expires.Sub(activated))
+	if !updated.ExpiresAt.Equal(expectedExpires) {
+		t.Errorf("Expected expires %s, got %s", expectedExpires, updated.ExpiresAt)
+	}
+}
+
+func TestServiceBulkUpdateDetailedDryRun(t *testing.T) {
+	repo := newMemoryRepo()
+	service := NewService(repo, nil, time.Now)
+
+	now := time.Now()
+	repo.Save(context.Background(), Card{Code: "C1", Status: StatusActive, ExpiresAt: now.Add(24 * time.Hour)})
+	repo.Save(context.Background(), Card{Code: "C2", Status: StatusExpired, ExpiresAt: now.Add(-time.Hour)})
+
+	// Test dry_run = true
+	res, err := service.BulkUpdateCardsDetailed(context.Background(), []string{"C1", "C2", "C3"}, "expire", 0, true)
+	if err != nil {
+		t.Fatalf("Dry run failed: %v", err)
+	}
+	if res.Updated != 1 {
+		t.Errorf("Expected 1 updated, got %d", res.Updated)
+	}
+	if res.Skipped != 2 {
+		t.Errorf("Expected 2 skipped, got %d", res.Skipped)
+	}
+
+	c1, _ := repo.Get(context.Background(), "C1")
+	if c1.Status != StatusActive {
+		t.Errorf("Dry run altered DB: C1 status is %s", c1.Status)
+	}
+}

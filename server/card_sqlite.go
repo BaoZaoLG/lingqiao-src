@@ -600,30 +600,6 @@ func (cm *SQLiteCardManager) ExtendCard(code string, duration time.Duration) err
 	return nil
 }
 
-func (cm *SQLiteCardManager) UnbindCard(code string) error {
-	code = normalizeCardCode(code)
-	c := cm.GetCard(code)
-	if c == nil {
-		return fmt.Errorf("card not found")
-	}
-
-	if c.ActivatedAt != nil {
-		originalDuration := c.ExpiresAt.Sub(*c.ActivatedAt)
-		c.ExpiresAt = c.CreatedAt.Add(originalDuration)
-	}
-
-	_, err := cm.db.Exec(`UPDATE cards SET machine_id = '', activated_at = NULL, expires_at = ? WHERE code = ?`, c.ExpiresAt, code)
-	if err != nil {
-		return err
-	}
-	cm.RecordAudit(AuditEntry{
-		Time:   time.Now(),
-		Action: "card_unbound",
-		Card:   code,
-	})
-	return nil
-}
-
 func (cm *SQLiteCardManager) CleanupExpired() {
 	cm.db.Exec(`DELETE FROM sessions WHERE expires_at < ?`, time.Now())
 }
@@ -791,95 +767,6 @@ func (cm *SQLiteCardManager) GetUniqueMachines() []MachineInfo {
 
 func (cm *SQLiteCardManager) GetCardsByMachine(machineID string) []*Card {
 	return cm.SearchCards("", "", machineID)
-}
-
-func (cm *SQLiteCardManager) bulkUpdateCardsDetailed(codes []string, action string, extendHours int, dryRun bool) (cardops.BulkResult, error) {
-	var result cardops.BulkResult
-	bulkAction := cardops.BulkAction(action)
-	if err := cardops.ValidateBulkAction(bulkAction); err != nil {
-		for _, code := range codes {
-			result.AddItem(cardops.BulkItemResult{
-				Code:    code,
-				Status:  cardops.BulkItemFailed,
-				Message: err.Error(),
-			})
-		}
-		return result, err
-	}
-
-	tx, err := cm.db.Begin()
-	if err != nil && !dryRun {
-		return result, err
-	}
-	if !dryRun {
-		defer tx.Rollback()
-	}
-
-	changed := false
-	for _, code := range codes {
-		normalized := normalizeCardCode(code)
-		c := cm.GetCard(normalized)
-		if c == nil {
-			result.AddItem(cardops.BulkItemResult{
-				Code:    code,
-				Status:  cardops.BulkItemSkipped,
-				Message: "card not found",
-			})
-			continue
-		}
-		if !dryRun {
-			switch bulkAction {
-			case cardops.BulkDisable:
-				tx.Exec(`UPDATE cards SET status = ? WHERE code = ?`, CardDisabled, normalized)
-			case cardops.BulkEnable:
-				tx.Exec(`UPDATE cards SET status = ? WHERE code = ?`, CardActive, normalized)
-			case cardops.BulkExpire:
-				tx.Exec(`UPDATE cards SET status = ? WHERE code = ?`, CardExpired, normalized)
-			case cardops.BulkExtend:
-				expiresAt := c.ExpiresAt.Add(time.Duration(extendHours) * time.Hour)
-				status := c.Status
-				if status == CardExpired {
-					status = CardActive
-				}
-				tx.Exec(`UPDATE cards SET expires_at = ?, status = ? WHERE code = ?`, expiresAt, status, normalized)
-			case cardops.BulkUnbind:
-				expiresAt := c.ExpiresAt
-				if c.ActivatedAt != nil {
-					originalDuration := c.ExpiresAt.Sub(*c.ActivatedAt)
-					expiresAt = c.CreatedAt.Add(originalDuration)
-				}
-				tx.Exec(`UPDATE cards SET machine_id = '', activated_at = NULL, expires_at = ? WHERE code = ?`, expiresAt, normalized)
-			}
-			changed = true
-		}
-		result.AddItem(cardops.BulkItemResult{
-			Code:   code,
-			Status: cardops.BulkItemUpdated,
-		})
-	}
-
-	if !dryRun && changed {
-		tx.Commit()
-		cm.RecordAudit(AuditEntry{
-			Time:   time.Now(),
-			Action: "bulk_" + action,
-			Detail: fmt.Sprintf("updated=%d skipped=%d failed=%d cards=%s", result.Updated, result.Skipped, result.Failed, strings.Join(codes, ",")),
-		})
-	}
-	return result, nil
-}
-
-func (cm *SQLiteCardManager) BulkUpdateCardsDetailed(codes []string, action string, extendHours int) (cardops.BulkResult, error) {
-	return cm.bulkUpdateCardsDetailed(codes, action, extendHours, false)
-}
-
-func (cm *SQLiteCardManager) PreviewBulkUpdateCardsDetailed(codes []string, action string, extendHours int) (cardops.BulkResult, error) {
-	return cm.bulkUpdateCardsDetailed(codes, action, extendHours, true)
-}
-
-func (cm *SQLiteCardManager) BulkUpdateCards(codes []string, action string, extendHours int) (int, error) {
-	result, err := cm.BulkUpdateCardsDetailed(codes, action, extendHours)
-	return result.Updated, err
 }
 
 func (cm *SQLiteCardManager) CreateAgent(username, passwordHash, prefix string) (*Agent, error) {

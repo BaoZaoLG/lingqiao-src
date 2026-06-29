@@ -6,7 +6,6 @@ import (
 	"time"
 
 	agentsvc "github.com/lingqiao/server/internal/agents"
-	cardops "github.com/lingqiao/server/internal/cards"
 )
 
 func (cm *JSONCardManager) BatchGenerateCards(count int, duration time.Duration, note string, maxSessions int, agentID string) ([]*Card, error) {
@@ -145,91 +144,6 @@ func (cm *JSONCardManager) GetUniqueMachines() []MachineInfo {
 // GetCardsByMachine returns all cards bound to a machine.
 func (cm *JSONCardManager) GetCardsByMachine(machineID string) []*Card {
 	return cm.SearchCards("", "", machineID)
-}
-
-// BulkUpdateCardsDetailed applies an action to multiple cards and reports per-item results.
-func (cm *JSONCardManager) BulkUpdateCardsDetailed(codes []string, action string, extendHours int) (cardops.BulkResult, error) {
-	return cm.bulkUpdateCardsDetailed(codes, action, extendHours, false)
-}
-
-// PreviewBulkUpdateCardsDetailed reports bulk operation impact without mutating state.
-func (cm *JSONCardManager) PreviewBulkUpdateCardsDetailed(codes []string, action string, extendHours int) (cardops.BulkResult, error) {
-	return cm.bulkUpdateCardsDetailed(codes, action, extendHours, true)
-}
-
-func (cm *JSONCardManager) bulkUpdateCardsDetailed(codes []string, action string, extendHours int, dryRun bool) (cardops.BulkResult, error) {
-	var result cardops.BulkResult
-	bulkAction := cardops.BulkAction(action)
-	if err := cardops.ValidateBulkAction(bulkAction); err != nil {
-		for _, code := range codes {
-			result.AddItem(cardops.BulkItemResult{
-				Code:    code,
-				Status:  cardops.BulkItemFailed,
-				Message: err.Error(),
-			})
-		}
-		return result, err
-	}
-
-	cm.mu.Lock()
-	changed := false
-	for _, code := range codes {
-		normalized := normalizeCardCode(code)
-		card, exists := cm.cards[normalized]
-		if !exists {
-			result.AddItem(cardops.BulkItemResult{
-				Code:    code,
-				Status:  cardops.BulkItemSkipped,
-				Message: "card not found",
-			})
-			continue
-		}
-		if !dryRun {
-			switch bulkAction {
-			case cardops.BulkDisable:
-				card.Status = CardDisabled
-			case cardops.BulkEnable:
-				card.Status = CardActive
-			case cardops.BulkExpire:
-				card.Status = CardExpired
-			case cardops.BulkExtend:
-				card.ExpiresAt = card.ExpiresAt.Add(time.Duration(extendHours) * time.Hour)
-				if card.Status == CardExpired {
-					card.Status = CardActive
-				}
-			case cardops.BulkUnbind:
-				if card.ActivatedAt != nil {
-					originalDuration := card.ExpiresAt.Sub(*card.ActivatedAt)
-					card.ExpiresAt = card.CreatedAt.Add(originalDuration)
-				}
-				card.MachineID = ""
-				card.ActivatedAt = nil
-			}
-			changed = true
-		}
-		result.AddItem(cardops.BulkItemResult{
-			Code:   code,
-			Status: cardops.BulkItemUpdated,
-		})
-	}
-	if !dryRun && changed {
-		cm.appendAuditLocked(AuditEntry{
-			Time:   time.Now(),
-			Action: "bulk_" + action,
-			Detail: fmt.Sprintf("updated=%d skipped=%d failed=%d cards=%s", result.Updated, result.Skipped, result.Failed, strings.Join(codes, ",")),
-		})
-	}
-	cm.mu.Unlock()
-	if !dryRun && changed {
-		cm.save()
-	}
-	return result, nil
-}
-
-// BulkUpdateCards preserves the legacy count-only bulk operation API.
-func (cm *JSONCardManager) BulkUpdateCards(codes []string, action string, extendHours int) (int, error) {
-	result, err := cm.BulkUpdateCardsDetailed(codes, action, extendHours)
-	return result.Updated, err
 }
 
 // MachineInfo holds aggregated info about a machine.

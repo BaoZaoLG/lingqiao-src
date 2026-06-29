@@ -2,6 +2,7 @@ package cards
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -290,7 +291,11 @@ func (h *Handler) HandleUpdateCardDetails(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := h.svc.UpdateDetails(r.Context(), req.Code, notePtr, maxSessPtr); err != nil {
-		httpapi.WriteError(w, http.StatusNotFound, "NOT_FOUND", err.Error())
+		if errors.Is(err, ErrInvalidSessions) {
+			httpapi.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		} else {
+			httpapi.WriteError(w, http.StatusNotFound, "NOT_FOUND", err.Error())
+		}
 		return
 	}
 	log.Printf("[ADMIN] Updated card details: %s", req.Code)
@@ -311,6 +316,10 @@ func (h *Handler) HandleBulkCards(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := readJSON(r, &req); err != nil {
 		httpapi.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+	if len(req.Codes) == 0 {
+		httpapi.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "codes is required")
 		return
 	}
 

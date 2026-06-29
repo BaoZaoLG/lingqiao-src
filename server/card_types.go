@@ -276,7 +276,7 @@ type CardManager interface {
 	RemoveBlacklist(value string)
 	UpdateCardStatus(code string, status CardStatus) error
 	ExtendCard(code string, duration time.Duration) error
-	UnbindCard(code string) error
+
 	CleanupExpired()
 	IsBlacklisted(value string) bool
 
@@ -285,9 +285,6 @@ type CardManager interface {
 	SearchCards(query, status, machineID string) []*Card
 	GetUniqueMachines() []MachineInfo
 	GetCardsByMachine(machineID string) []*Card
-	BulkUpdateCardsDetailed(codes []string, action string, extendHours int) (cardops.BulkResult, error)
-	PreviewBulkUpdateCardsDetailed(codes []string, action string, extendHours int) (cardops.BulkResult, error)
-	BulkUpdateCards(codes []string, action string, extendHours int) (int, error)
 	CreateAgent(username, passwordHash, prefix string) (*Agent, error)
 	UsernameExists(username string) bool
 	GetAgent(id string) *Agent
