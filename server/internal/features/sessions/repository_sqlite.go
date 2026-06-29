@@ -99,14 +99,17 @@ func (t *sqliteTx) GetCard(ctx context.Context, code string) (CardSnapshot, erro
 	row := t.tx.QueryRowContext(ctx, "SELECT code, machine_id, agent_id, created_at, activated_at, expires_at, status, note, max_sessions FROM cards WHERE code = ?", code)
 	
 	var c CardSnapshot
-	var createdStr, expiresStr, activatedStr sql.NullString
-	err := row.Scan(&c.Code, &c.MachineID, &c.AgentID, &createdStr, &activatedStr, &expiresStr, &c.Status, &c.Note, &c.MaxSessions)
+	var createdStr, expiresStr, activatedStr, machineID, agentID, note sql.NullString
+	err := row.Scan(&c.Code, &machineID, &agentID, &createdStr, &activatedStr, &expiresStr, &c.Status, &note, &c.MaxSessions)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return CardSnapshot{}, ErrCardNotFound
 		}
 		return CardSnapshot{}, err
 	}
+	c.MachineID = machineID.String
+	c.AgentID = agentID.String
+	c.Note = note.String
 	c.CreatedAt, _ = time.Parse(time.RFC3339, createdStr.String)
 	c.ExpiresAt, _ = time.Parse(time.RFC3339, expiresStr.String)
 	if activatedStr.Valid && activatedStr.String != "" {
@@ -202,14 +205,18 @@ type scanner interface {
 
 func scanSession(row scanner) (Session, error) {
 	var s Session
-	var createdStr, lastSeenStr, expiresStr sql.NullString
-	err := row.Scan(&s.Token, &s.CardCode, &s.MachineID, &s.Fingerprint, &s.ClientVersion, &createdStr, &lastSeenStr, &expiresStr, &s.RemoteAddr)
+	var createdStr, lastSeenStr, expiresStr, machineID, fingerprint, clientVersion, remoteAddr sql.NullString
+	err := row.Scan(&s.Token, &s.CardCode, &machineID, &fingerprint, &clientVersion, &createdStr, &lastSeenStr, &expiresStr, &remoteAddr)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return Session{}, ErrSessionNotFound
 		}
 		return Session{}, err
 	}
+	s.MachineID = machineID.String
+	s.Fingerprint = fingerprint.String
+	s.ClientVersion = clientVersion.String
+	s.RemoteAddr = remoteAddr.String
 	s.CreatedAt, _ = time.Parse(time.RFC3339, createdStr.String)
 	s.LastSeen, _ = time.Parse(time.RFC3339, lastSeenStr.String)
 	s.ExpiresAt, _ = time.Parse(time.RFC3339, expiresStr.String)
