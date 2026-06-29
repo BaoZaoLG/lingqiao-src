@@ -129,18 +129,20 @@ func (h *APIHandler) HandleActivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.cm.ActivateCard(req.Card, req.MachineID, req.Fingerprint, getClientIP(r), req.ClientVersion)
+	session, card, err := h.sessionsSvc.Activate(r.Context(), sessions.ActivationInput{
+		CardCode:      req.Card,
+		MachineID:     req.MachineID,
+		Fingerprint:   req.Fingerprint,
+		RemoteAddr:    getClientIP(r),
+		ClientVersion: req.ClientVersion,
+	})
 	if err != nil {
 		log.Printf("[ACTIVATE] Failed: card=%s machine=%s error=%v", req.Card, req.MachineID, err)
 		writeError(w, http.StatusForbidden, translateCardError(err))
 		return
 	}
 
-	card := h.cm.GetCard(req.Card)
-	var cardExp int64
-	if card != nil {
-		cardExp = card.ExpiresAt.Unix()
-	}
+	cardExp := card.ExpiresAt.Unix()
 
 	log.Printf("[ACTIVATE] OK: card=%s machine=%s token=%s", req.Card, req.MachineID, short(session.Token, 8)+"...")
 
@@ -176,18 +178,19 @@ func (h *APIHandler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.cm.Heartbeat(req.SessionToken, req.MachineID, getClientIP(r), req.ClientVersion)
+	session, card, err := h.sessionsSvc.Heartbeat(r.Context(), sessions.HeartbeatInput{
+		SessionToken:  req.SessionToken,
+		MachineID:     req.MachineID,
+		RemoteAddr:    getClientIP(r),
+		ClientVersion: req.ClientVersion,
+	})
 	if err != nil {
 		log.Printf("[HEARTBEAT] Failed: token=%s error=%v", short(req.SessionToken, 8)+"...", err)
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
 
-	card := h.cm.GetCard(session.CardCode)
-	var cardExp int64
-	if card != nil {
-		cardExp = card.ExpiresAt.Unix()
-	}
+	cardExp := card.ExpiresAt.Unix()
 
 	_, updateInfo := h.checkVersion(w, req.ClientVersion)
 	resp := map[string]interface{}{
@@ -212,7 +215,10 @@ func (h *APIHandler) HandleDeactivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.cm.DeactivateSession(req.SessionToken, false); err != nil {
+	if err := h.sessionsSvc.Deactivate(r.Context(), sessions.DeactivateInput{
+		SessionToken: req.SessionToken,
+		Unbind:       false,
+	}); err != nil {
 		writeJSON(w, response{Status: "ok", Message: "会话不存在或已过期"})
 		return
 	}
