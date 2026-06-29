@@ -6,32 +6,30 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"time"
+
+	"github.com/lingqiao/server/internal/features/sessions"
 )
 
 // ── Session Management ───────────────────────────────────────────────────────
 
 func (h *AdminHandler) HandleListSessions(w http.ResponseWriter, r *http.Request) {
-	sessions := h.cm.AllSessions()
-	now := time.Now()
-	active := make([]*Session, 0)
-	for _, s := range sessions {
-		if s.ExpiresAt.After(now) {
-			active = append(active, s)
-		}
-	}
-	sort.Slice(active, func(i, j int) bool {
-		return active[i].LastSeen.After(active[j].LastSeen)
-	})
-
 	page, perPage := parsePagination(r)
-	start, end := paginate(len(active), page, perPage)
+
+	res, err := h.sessionsSvc.List(r.Context(), sessions.ListFilter{
+		ActiveOnly: true,
+		Page:       page,
+		PerPage:    perPage,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	writeOK(w, map[string]interface{}{
-		"sessions": active[start:end],
-		"total":    len(active),
-		"page":     page,
-		"per_page": perPage,
+		"sessions": res.Sessions,
+		"total":    res.Total,
+		"page":     res.Page,
+		"per_page": res.PerPage,
 	})
 }
 
@@ -48,11 +46,14 @@ func (h *AdminHandler) HandleForceLogout(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := h.cm.DeactivateSession(req.SessionToken, false); err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+	if err := h.sessionsSvc.Deactivate(r.Context(), sessions.DeactivateInput{
+		SessionToken: req.SessionToken,
+		Unbind:       false,
+	}); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeOK(w, nil)
+	writeOK(w, map[string]interface{}{"message": "已强制下线"})
 }
 
 // ── Blacklist ────────────────────────────────────────────────────────────────

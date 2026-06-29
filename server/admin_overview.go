@@ -1,20 +1,22 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"sort"
 	"time"
+
+	"github.com/lingqiao/server/internal/features/sessions"
 )
 
 // ── Dashboard & Stats ────────────────────────────────────────────────────────
 
 func (h *AdminHandler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	cards := h.cm.AllCards()
-	sessions := h.cm.AllSessions()
 
 	now := time.Now()
-	var activeCards, expiredCards, activeSessions int
+	var activeCards, expiredCards int
 	for _, c := range cards {
 		if c.Status == CardActive && now.Before(c.ExpiresAt) {
 			activeCards++
@@ -23,10 +25,10 @@ func (h *AdminHandler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 			expiredCards++
 		}
 	}
-	for _, s := range sessions {
-		if s.ExpiresAt.After(now) {
-			activeSessions++
-		}
+
+	activeSessions := 0
+	if res, err := h.sessionsSvc.List(r.Context(), sessions.ListFilter{ActiveOnly: true}); err == nil {
+		activeSessions = res.Total
 	}
 
 	writeOK(w, map[string]interface{}{
@@ -38,14 +40,11 @@ func (h *AdminHandler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminHandler) HandleServerStats(w http.ResponseWriter, r *http.Request) {
-	sessions := h.cm.AllSessions()
-	now := time.Now()
 	activeCount := 0
-	for _, s := range sessions {
-		if s.ExpiresAt.After(now) {
-			activeCount++
-		}
+	if res, err := h.sessionsSvc.List(r.Context(), sessions.ListFilter{ActiveOnly: true}); err == nil {
+		activeCount = res.Total
 	}
+
 	writeOK(w, map[string]interface{}{
 		"uptime_seconds":  int(time.Since(serverStart).Seconds()),
 		"total_cards":     len(h.cm.AllCards()),
@@ -58,7 +57,6 @@ func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request)
 	now := time.Now()
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	cards := h.cm.AllCards()
-	sessions := h.cm.AllSessions()
 	audit := h.cm.AuditLog()
 
 	var todayActivations int
@@ -90,10 +88,8 @@ func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request)
 	}
 
 	activeSessions := 0
-	for _, session := range sessions {
-		if session.ExpiresAt.After(now) {
-			activeSessions++
-		}
+	if res, err := h.sessionsSvc.List(r.Context(), sessions.ListFilter{ActiveOnly: true}); err == nil {
+		activeSessions = res.Total
 	}
 
 	riskyMachines := make([]MachineInfo, 0)
@@ -153,7 +149,6 @@ func (h *AdminHandler) HandleModulesOverview(w http.ResponseWriter, r *http.Requ
 func (h *AdminHandler) cardsModuleOverview() moduleOverviewItem {
 	now := time.Now()
 	cards := h.cm.AllCards()
-	sessions := h.cm.AllSessions()
 	activeCards := 0
 	expiredCards := 0
 	activeSessions := 0
@@ -161,14 +156,12 @@ func (h *AdminHandler) cardsModuleOverview() moduleOverviewItem {
 		if card.Status == CardActive && card.ExpiresAt.After(now) {
 			activeCards++
 		}
-		if card.Status == CardExpired || card.ExpiresAt.Before(now) {
+		if now.After(card.ExpiresAt) || card.Status == CardExpired {
 			expiredCards++
 		}
 	}
-	for _, session := range sessions {
-		if session.ExpiresAt.After(now) {
-			activeSessions++
-		}
+	if res, err := h.sessionsSvc.List(context.Background(), sessions.ListFilter{ActiveOnly: true}); err == nil {
+		activeSessions = res.Total
 	}
 	status := "warning"
 	if len(cards) > 0 {
