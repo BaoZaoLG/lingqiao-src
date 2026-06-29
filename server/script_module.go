@@ -378,8 +378,11 @@ func (h *APIHandler) HandleScriptDownload(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	session := h.cm.GetSession(token)
-	if session == nil || session.ExpiresAt.Before(time.Now()) {
+	machineID := r.Header.Get("X-Machine-ID")
+	cardCode := r.Header.Get("X-Card-Code")
+
+	_, err := h.sessionsSvc.ValidateBound(r.Context(), token, machineID, cardCode)
+	if err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid or expired session")
 		return
 	}

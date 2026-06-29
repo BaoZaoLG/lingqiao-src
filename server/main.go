@@ -236,7 +236,7 @@ func buildAgentServer(addr string, agent *AgentHandler) *http.Server {
 
 func registerPayloadRoutes(mux *http.ServeMux, api *APIHandler, payload *PayloadHandler) {
 	mux.HandleFunc("/api/v1/key-exchange", func(w http.ResponseWriter, r *http.Request) {
-		payload.HandleKeyExchange(w, r, api.cm)
+		payload.HandleKeyExchange(w, r)
 	})
 	mux.HandleFunc("/api/v1/payload/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path

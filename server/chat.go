@@ -3,13 +3,34 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	
 	"fmt"
+	
 	"net/http"
+	
+	
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/lingqiao/server/internal/features/sessions"
 )
+
+// toLegacySession converts the domain Session to the legacy Session type
+func toLegacySession(s sessions.Session) *Session {
+	return &Session{
+		Token:         s.Token,
+		CardCode:      s.CardCode,
+		MachineID:     s.MachineID,
+		Fingerprint:   s.Fingerprint,
+		ClientVersion: s.ClientVersion,
+		CreatedAt:     s.CreatedAt,
+		LastSeen:      s.LastSeen,
+		ExpiresAt:     s.ExpiresAt,
+		RemoteAddr:    s.RemoteAddr,
+	}
+}
 
 const (
 	chatMaxMessages  = 200
@@ -621,7 +642,12 @@ func (h *APIHandler) HandleChatSend(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	session, err := h.cm.ValidateBoundSession(req.SessionToken, req.MachineID, req.Card)
+	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	session := toLegacySession(domainSession)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
@@ -652,7 +678,12 @@ func (h *APIHandler) HandleChatProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	session, err := h.cm.ValidateBoundSession(req.SessionToken, req.MachineID, req.Card)
+	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	session := toLegacySession(domainSession)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
@@ -685,7 +716,12 @@ func (h *APIHandler) HandleChatReact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	session, err := h.cm.ValidateBoundSession(req.SessionToken, req.MachineID, req.Card)
+	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	session := toLegacySession(domainSession)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
@@ -712,7 +748,12 @@ func (h *APIHandler) HandleChatPresence(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	session, err := h.cm.ValidateBoundSession(req.SessionToken, req.MachineID, req.Card)
+	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	session := toLegacySession(domainSession)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
@@ -735,7 +776,12 @@ func (h *APIHandler) HandleChatMessages(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	session, err := h.cm.ValidateBoundSession(req.SessionToken, req.MachineID, req.Card)
+	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	session := toLegacySession(domainSession)
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
