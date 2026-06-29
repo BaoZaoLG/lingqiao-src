@@ -18,15 +18,17 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"github.com/lingqiao/server/internal/features/sessions"
 )
 
 type PayloadHandler struct {
-	store     *PayloadStore
-	uploadKey string
-	audit     func(AuditEntry)
+	store       *PayloadStore
+	sessionsSvc *sessions.Service
+	uploadKey   string
+	audit       func(AuditEntry)
 }
 
-func NewPayloadHandler(store *PayloadStore) *PayloadHandler {
+func NewPayloadHandler(store *PayloadStore, sessionsSvc *sessions.Service) *PayloadHandler {
 	key := os.Getenv("UPLOAD_KEY")
 	if key == "" {
 		// Try to load persisted key, or generate a new one

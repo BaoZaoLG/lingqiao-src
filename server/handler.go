@@ -13,16 +13,18 @@ import (
 	"time"
 
 	cardops "github.com/lingqiao/server/internal/cards"
+	"github.com/lingqiao/server/internal/features/sessions"
 )
 
 // APIHandler handles all HTTP API requests.
 type APIHandler struct {
-	cm   CardManager
-	chat *ChatStore
+	cm          CardManager
+	sessionsSvc *sessions.Service
+	chat        *ChatStore
 }
 
-func NewAPIHandler(cm CardManager) *APIHandler {
-	return &APIHandler{cm: cm, chat: NewChatStore(cm.GetStorage(), time.Now)}
+func NewAPIHandler(cm CardManager, sessionsSvc *sessions.Service) *APIHandler {
+	return &APIHandler{cm: cm, sessionsSvc: sessionsSvc, chat: NewChatStore(cm.GetStorage(), time.Now)}
 }
 
 type request struct {

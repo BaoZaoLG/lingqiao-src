@@ -10,11 +10,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lingqiao/server/internal/features/sessions"
 )
 
 // AdminHandler handles the web admin panel.
 type AdminHandler struct {
 	cm              CardManager
+	sessionsSvc     *sessions.Service
 	chat            *ChatStore
 	adminPassHash   string
 	mu              sync.Mutex
@@ -24,21 +27,22 @@ type AdminHandler struct {
 	pwChangeLimiter *rateLimiter
 }
 
-func NewAdminHandler(cm CardManager) *AdminHandler {
-	return NewAdminHandlerWithTTL(cm, currentSessionTTL())
+func NewAdminHandler(cm CardManager, sessionsSvc *sessions.Service) *AdminHandler {
+	return NewAdminHandlerWithTTL(cm, sessionsSvc, currentSessionTTL())
 }
 
-func NewAdminHandlerWithTTL(cm CardManager, sessionTTL time.Duration) *AdminHandler {
+func NewAdminHandlerWithTTL(cm CardManager, sessionsSvc *sessions.Service, sessionTTL time.Duration) *AdminHandler {
 	if sessionTTL <= 0 {
 		sessionTTL = 4 * time.Hour
 	}
 	h := &AdminHandler{
 		cm:              cm,
+		sessionsSvc:     sessionsSvc,
 		chat:            NewChatStore(cm.GetStorage(), time.Now),
 		sessions:        make(map[string]time.Time),
 		sessionTTL:      sessionTTL,
 		loginLimiter:    newRateLimiter(15*time.Minute, 5),
-		pwChangeLimiter: newRateLimiter(1*time.Hour, 5),
+		pwChangeLimiter: newRateLimiter(60*time.Minute, 10),
 	}
 
 	// Load persisted password hash

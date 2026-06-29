@@ -19,6 +19,7 @@ import (
 
 	"github.com/lingqiao/server/internal/config"
 	"github.com/lingqiao/server/internal/features/cards"
+	"github.com/lingqiao/server/internal/features/sessions"
 )
 
 //go:embed web-dist/*
@@ -81,14 +82,6 @@ func main() {
 
 	log.Println("[SERVER] Starting DLL Injector Auth Server...")
 
-	api := NewAPIHandler(cm)
-	admin := NewAdminHandler(cm)
-	admin.chat = api.chat
-	agent := NewAgentHandler(cm)
-	payloadStore := NewPayloadStore(storage)
-	payload := NewPayloadHandler(payloadStore)
-	payload.SetAuditSink(cm.RecordAudit)
-
 	var db *sql.DB
 	if impl, ok := sqliteCm.(*SQLiteCardManager); ok {
 		db = impl.DB()
@@ -103,6 +96,24 @@ func main() {
 			Detail: detail,
 		})
 	})
+
+	sessionsRepo := sessions.NewSQLiteRepository(db)
+	sessionsSvc := sessions.NewService(sessionsRepo, 30*time.Minute, nil, time.Now)
+	sessionsSvc.SetAuditSink(func(action, cardCode, machineID, remoteAddr string) {
+		cm.RecordAudit(AuditEntry{
+			Action: action,
+			Card:   cardCode,
+			Detail: fmt.Sprintf("Machine: %s, IP: %s", machineID, remoteAddr),
+		})
+	})
+
+	api := NewAPIHandler(cm, sessionsSvc)
+	admin := NewAdminHandler(cm, sessionsSvc)
+	admin.chat = api.chat
+	agent := NewAgentHandler(cm)
+	payloadStore := NewPayloadStore(storage)
+	payload := NewPayloadHandler(payloadStore, sessionsSvc)
+	payload.SetAuditSink(cm.RecordAudit)
 
 	printStartupInfo(cm)
 
