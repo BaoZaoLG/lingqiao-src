@@ -37,8 +37,9 @@ func fakeClientIP(r *http.Request) string {
 
 func setupHandlerTest() (*sessions.Handler, sessions.Store, *fakeReader, *fakeVersionCheck) {
 	repo := &fakeStore{
-		cards:    make(map[string]sessions.CardSnapshot),
-		sessions: make(map[string]sessions.Session),
+		cards:       make(map[string]sessions.CardSnapshot),
+		sessions:    make(map[string]sessions.Session),
+		blacklisted: make(map[string]bool),
 	}
 	svc := sessions.NewService(repo, time.Hour, func() string { return "test-token" }, nil)
 	reader := &fakeReader{}
@@ -49,8 +50,9 @@ func setupHandlerTest() (*sessions.Handler, sessions.Store, *fakeReader, *fakeVe
 
 // fakeStore implements sessions.Store
 type fakeStore struct {
-	cards    map[string]sessions.CardSnapshot
-	sessions map[string]sessions.Session
+	cards       map[string]sessions.CardSnapshot
+	sessions    map[string]sessions.Session
+	blacklisted map[string]bool
 }
 
 func (f *fakeStore) RunInTx(ctx context.Context, fn func(sessions.Tx) error) error {
@@ -97,7 +99,7 @@ func (tx *fakeTx) GetCard(ctx context.Context, code string) (sessions.CardSnapsh
 }
 
 func (tx *fakeTx) IsCardBlacklisted(ctx context.Context, code string) (bool, error) {
-	return false, nil
+	return tx.store.blacklisted[code], nil
 }
 
 func (tx *fakeTx) ListSessionsByCard(ctx context.Context, code string) ([]sessions.Session, error) {
@@ -180,5 +182,66 @@ func TestHandler_BadMethod(t *testing.T) {
 	handler.HandleActivate(rr, req)
 	if rr.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", rr.Code)
+	}
+}
+
+func TestHandler_Activate_MaxSessions(t *testing.T) {
+	handler, repo, reader, _ := setupHandlerTest()
+	fs := repo.(*fakeStore)
+	fs.cards["TESTCARD"] = sessions.CardSnapshot{
+		Code:        "TESTCARD",
+		Status:      "active",
+		ExpiresAt:   time.Now().Add(24 * time.Hour),
+		MaxSessions: 1,
+	}
+	fs.sessions["tok_existing"] = sessions.Session{
+		Token:     "tok_existing",
+		CardCode:  "TESTCARD",
+		MachineID: "mac1",
+		ExpiresAt: time.Now().Add(1 * time.Hour),
+	}
+
+	reader.req = sessions.ClientRequest{
+		Card:          "TESTCARD",
+		MachineID:     "mac2",
+		Fingerprint:   "fp1",
+		ClientVersion: "1.0",
+	}
+
+	req := httptest.NewRequest("POST", "/api/v1/activate", nil)
+	rr := httptest.NewRecorder()
+
+	handler.HandleActivate(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected 403 Forbidden for bound to other machine / max sessions, got %d. body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestHandler_Activate_Blacklisted(t *testing.T) {
+	handler, repo, reader, _ := setupHandlerTest()
+	fs := repo.(*fakeStore)
+	fs.cards["TESTCARD"] = sessions.CardSnapshot{
+		Code:        "TESTCARD",
+		Status:      "active",
+		ExpiresAt:   time.Now().Add(24 * time.Hour),
+		MaxSessions: 1,
+	}
+	fs.blacklisted["TESTCARD"] = true
+
+	reader.req = sessions.ClientRequest{
+		Card:          "TESTCARD",
+		MachineID:     "mac1",
+		Fingerprint:   "fp1",
+		ClientVersion: "1.0",
+	}
+
+	req := httptest.NewRequest("POST", "/api/v1/activate", nil)
+	rr := httptest.NewRecorder()
+
+	handler.HandleActivate(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected 403 Forbidden for blacklisted card, got %d. body: %s", rr.Code, rr.Body.String())
 	}
 }
