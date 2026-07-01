@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/lingqiao/server/internal/features/sessions"
+	"github.com/lingqiao/server/internal/httpapi"
+
 	"io"
 	"log"
 	"net/http"
@@ -54,19 +56,19 @@ func (h *PayloadHandler) SetAuditSink(audit func(AuditEntry)) {
 // HandleUpload receives encrypted payload chunks from the pack script.
 func (h *PayloadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httpapi.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	uploadKey := r.Header.Get("X-Upload-Key")
 	if uploadKey != h.uploadKey {
-		writeError(w, http.StatusUnauthorized, "invalid upload key")
+		httpapi.WriteError(w, http.StatusUnauthorized, "invalid upload key")
 		return
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 100<<20))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "failed to read body")
+		httpapi.WriteError(w, http.StatusBadRequest, "failed to read body")
 		return
 	}
 
@@ -82,39 +84,39 @@ func (h *PayloadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		Chunks     []string `json:"chunks"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
 
 	if req.PayloadID == "" || req.AesKey == "" || len(req.Chunks) == 0 {
-		writeError(w, http.StatusBadRequest, "missing required fields")
+		httpapi.WriteError(w, http.StatusBadRequest, "missing required fields")
 		return
 	}
 
 	// Sanitize payload ID — reject path traversal
 	if strings.ContainsAny(req.PayloadID, "/\\..") || len(req.PayloadID) > 64 {
-		writeError(w, http.StatusBadRequest, "invalid payload_id")
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid payload_id")
 		return
 	}
 
 	if _, _, _, err := decodePayloadKeyMaterial(req.AesKey, req.HmacKey, req.IV); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if _, err := decodeFixedHex("exe_hash", req.ExeHash, 32); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.ChunkCount != len(req.Chunks) {
-		writeError(w, http.StatusBadRequest, "chunk_count does not match chunks length")
+		httpapi.WriteError(w, http.StatusBadRequest, "chunk_count does not match chunks length")
 		return
 	}
 	if req.ChunkSize <= 0 {
-		writeError(w, http.StatusBadRequest, "chunk_size must be positive")
+		httpapi.WriteError(w, http.StatusBadRequest, "chunk_size must be positive")
 		return
 	}
 	if req.TotalSize <= 0 {
-		writeError(w, http.StatusBadRequest, "total_size must be positive")
+		httpapi.WriteError(w, http.StatusBadRequest, "total_size must be positive")
 		return
 	}
 
@@ -123,26 +125,26 @@ func (h *PayloadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	for i, chunkB64 := range req.Chunks {
 		chunkData, err := base64.StdEncoding.DecodeString(chunkB64)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid chunk %d: %v", i, err))
+			httpapi.WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid chunk %d: %v", i, err))
 			return
 		}
 		if len(chunkData) == 0 {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("chunk %d is empty", i))
+			httpapi.WriteError(w, http.StatusBadRequest, fmt.Sprintf("chunk %d is empty", i))
 			return
 		}
 		if len(chunkData) > req.ChunkSize {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("chunk %d exceeds chunk_size", i))
+			httpapi.WriteError(w, http.StatusBadRequest, fmt.Sprintf("chunk %d exceeds chunk_size", i))
 			return
 		}
 		if i < len(req.Chunks)-1 && len(chunkData) != req.ChunkSize {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("chunk %d size does not match chunk_size", i))
+			httpapi.WriteError(w, http.StatusBadRequest, fmt.Sprintf("chunk %d size does not match chunk_size", i))
 			return
 		}
 		decodedChunks[i] = chunkData
 		actualTotal += len(chunkData)
 	}
 	if actualTotal != req.TotalSize {
-		writeError(w, http.StatusBadRequest, "total_size does not match decoded chunks")
+		httpapi.WriteError(w, http.StatusBadRequest, "total_size does not match decoded chunks")
 		return
 	}
 
@@ -152,7 +154,7 @@ func (h *PayloadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	for i, chunkData := range decodedChunks {
 		chunkPath := filepath.Join(chunkDir, fmt.Sprintf("chunk_%04d.bin", i))
 		if err := os.WriteFile(chunkPath, chunkData, 0600); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to save chunk")
+			httpapi.WriteError(w, http.StatusInternalServerError, "failed to save chunk")
 			return
 		}
 	}
@@ -172,7 +174,7 @@ func (h *PayloadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	h.recordPayloadAudit("payload_uploaded", info, "")
 
 	log.Printf("[PAYLOAD] Uploaded: id=%s chunks=%d size=%d", req.PayloadID, len(decodedChunks), actualTotal)
-	writeJSON(w, map[string]interface{}{
+	httpapi.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"status":      "ok",
 		"payload_id":  req.PayloadID,
 		"chunk_count": len(decodedChunks),
@@ -180,7 +182,7 @@ func (h *PayloadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *PayloadHandler) HandleAdminList(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
 	payloads := h.store.List()
@@ -189,7 +191,7 @@ func (h *PayloadHandler) HandleAdminList(w http.ResponseWriter, r *http.Request)
 		latest = &payloads[0]
 	}
 	active := payloadSummaryFromInfo(h.store.Active())
-	writeOK(w, map[string]interface{}{
+	httpapi.WriteOK(w, map[string]interface{}{
 		"payloads": payloads,
 		"latest":   latest,
 		"active":   active,
@@ -204,59 +206,59 @@ func (h *PayloadHandler) HandleAdminList(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *PayloadHandler) HandleAdminManage(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var req struct {
 		Action    string `json:"action"`
 		PayloadID string `json:"payload_id"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := httpapi.ReadJSON(r, &req); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	switch req.Action {
 	case "activate":
 		if err := h.store.SetActive(req.PayloadID); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		info := h.store.Get(req.PayloadID)
 		h.recordPayloadAudit("payload_activated", info, "")
-		writeOK(w, map[string]interface{}{"payload": payloadSummaryFromInfo(info)})
+		httpapi.WriteOK(w, map[string]interface{}{"payload": payloadSummaryFromInfo(info)})
 	case "delete":
 		info := h.store.Get(req.PayloadID)
 		if err := h.store.Delete(req.PayloadID); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		_ = os.RemoveAll(dataPath("payloads", req.PayloadID))
 		h.recordPayloadAudit("payload_deleted", info, "")
-		writeOK(w, nil)
+		httpapi.WriteOK(w, nil)
 	default:
-		writeError(w, http.StatusBadRequest, "unknown action")
+		httpapi.WriteError(w, http.StatusBadRequest, "unknown action")
 	}
 }
 
 // HandlePayloadInfo returns metadata about a payload (requires HMAC auth).
 func (h *PayloadHandler) HandlePayloadInfo(w http.ResponseWriter, r *http.Request) {
 	if err := verifyRequestHMAC(r, r.URL.Path); err != nil {
-		writeError(w, http.StatusUnauthorized, "missing auth")
+		httpapi.WriteError(w, http.StatusUnauthorized, "missing auth")
 		return
 	}
 	payloadID := extractPathParam(r.URL.Path, "/api/v1/payload/", "/info")
 	if payloadID == "" {
-		writeError(w, http.StatusBadRequest, "missing payload_id")
+		httpapi.WriteError(w, http.StatusBadRequest, "missing payload_id")
 		return
 	}
 
 	info := h.store.Get(payloadID)
 	if info == nil {
-		writeError(w, http.StatusNotFound, "payload not found")
+		httpapi.WriteError(w, http.StatusNotFound, "payload not found")
 		return
 	}
 
-	writeJSON(w, map[string]interface{}{
+	httpapi.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"status":      "ok",
 		"payload_id":  info.PayloadID,
 		"chunk_count": info.ChunkCount,
@@ -300,7 +302,7 @@ func payloadSummaryFromInfo(info *PayloadInfo) *PayloadSummary {
 func (h *PayloadHandler) HandleChunkDownload(w http.ResponseWriter, r *http.Request) {
 	parts := splitPayloadPath(r.URL.Path)
 	if len(parts) < 2 {
-		writeError(w, http.StatusBadRequest, "invalid path")
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
 	payloadID := parts[0]
@@ -308,31 +310,31 @@ func (h *PayloadHandler) HandleChunkDownload(w http.ResponseWriter, r *http.Requ
 
 	// Sanitize payload ID — reject path traversal
 	if strings.ContainsAny(payloadID, "/\\..") || len(payloadID) > 64 {
-		writeError(w, http.StatusBadRequest, "invalid payload_id")
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid payload_id")
 		return
 	}
 
 	chunkIdx, err := strconv.Atoi(chunkIdxStr)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid chunk index")
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid chunk index")
 		return
 	}
 
 	info := h.store.Get(payloadID)
 	if info == nil {
-		writeError(w, http.StatusNotFound, "payload not found")
+		httpapi.WriteError(w, http.StatusNotFound, "payload not found")
 		return
 	}
 
 	if chunkIdx < 0 || chunkIdx >= info.ChunkCount {
-		writeError(w, http.StatusBadRequest, "chunk index out of range")
+		httpapi.WriteError(w, http.StatusBadRequest, "chunk index out of range")
 		return
 	}
 
 	chunkPath := dataPath("payloads", payloadID, fmt.Sprintf("chunk_%04d.bin", chunkIdx))
 	data, err := os.ReadFile(chunkPath)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "chunk file not found")
+		httpapi.WriteError(w, http.StatusNotFound, "chunk file not found")
 		return
 	}
 
@@ -344,13 +346,13 @@ func (h *PayloadHandler) HandleChunkDownload(w http.ResponseWriter, r *http.Requ
 // HandleKeyExchange: client sends session_token + machine_id + payload_id,
 // server returns the AES key encrypted with KEK derived from card_code + HWID.
 func (h *PayloadHandler) HandleKeyExchange(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 4096))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "failed to read body")
+		httpapi.WriteError(w, http.StatusBadRequest, "failed to read body")
 		return
 	}
 
@@ -359,11 +361,11 @@ func (h *PayloadHandler) HandleKeyExchange(w http.ResponseWriter, r *http.Reques
 	timestamp := r.Header.Get("X-Timestamp")
 	nonce := r.Header.Get("X-Nonce")
 	if sig == "" || clientID == "" || timestamp == "" || nonce == "" {
-		writeError(w, http.StatusUnauthorized, "missing auth headers")
+		httpapi.WriteError(w, http.StatusUnauthorized, "missing auth headers")
 		return
 	}
 	if err := VerifyHMAC(clientID, string(body), sig, timestamp, nonce); err != nil {
-		writeError(w, http.StatusUnauthorized, "HMAC verification failed")
+		httpapi.WriteError(w, http.StatusUnauthorized, "HMAC verification failed")
 		return
 	}
 
@@ -373,20 +375,20 @@ func (h *PayloadHandler) HandleKeyExchange(w http.ResponseWriter, r *http.Reques
 		PayloadID    string `json:"payload_id"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
 	// Verify session
 	session, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, "")
 	if err != nil {
-		writeError(w, http.StatusForbidden, "invalid or expired session")
+		httpapi.WriteError(w, http.StatusForbidden, "invalid or expired session")
 		return
 	}
 
 	info := h.store.Get(req.PayloadID)
 	if info == nil {
-		writeError(w, http.StatusNotFound, "payload not found")
+		httpapi.WriteError(w, http.StatusNotFound, "payload not found")
 		return
 	}
 
@@ -400,7 +402,7 @@ func (h *PayloadHandler) HandleKeyExchange(w http.ResponseWriter, r *http.Reques
 	aesKeyBytes, hmacKeyBytes, ivBytes, err := decodePayloadKeyMaterial(info.AesKey, info.HmacKey, info.IV)
 	if err != nil {
 		log.Printf("[KEY-EXCHANGE] Invalid payload key material: payload=%s error=%v", req.PayloadID, err)
-		writeError(w, http.StatusInternalServerError, "invalid payload key material")
+		httpapi.WriteError(w, http.StatusInternalServerError, "invalid payload key material")
 		return
 	}
 
@@ -415,7 +417,7 @@ func (h *PayloadHandler) HandleKeyExchange(w http.ResponseWriter, r *http.Reques
 
 	block, err := aes.NewCipher(kek)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "key derivation error")
+		httpapi.WriteError(w, http.StatusInternalServerError, "key derivation error")
 		return
 	}
 	padded := pkcs7Pad(combined, aes.BlockSize)
@@ -431,7 +433,7 @@ func (h *PayloadHandler) HandleKeyExchange(w http.ResponseWriter, r *http.Reques
 	log.Printf("[KEY-EXCHANGE] OK: card=%s machine=%s payload=%s",
 		short(session.CardCode, 8)+"...", short(req.MachineID, 8)+"...", req.PayloadID)
 
-	writeJSON(w, map[string]interface{}{
+	httpapi.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"status":         "ok",
 		"encrypted_key":  hex.EncodeToString(encrypted),
 		"encrypted_iv":   hex.EncodeToString(encIV),

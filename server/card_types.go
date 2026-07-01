@@ -4,7 +4,6 @@ import (
 	"sync"
 	"time"
 
-	agentsvc "github.com/lingqiao/server/internal/agents"
 	auditsvc "github.com/lingqiao/server/internal/audit"
 	cardops "github.com/lingqiao/server/internal/cards"
 )
@@ -130,37 +129,6 @@ func cloneBlacklistEntry(e *BlacklistEntry) *BlacklistEntry {
 	return &cp
 }
 
-func newAccountService() *agentsvc.AccountService {
-	return agentsvc.NewAccountService(func() (string, error) {
-		return generateShortID(), nil
-	})
-}
-
-func accountFromAgent(agent *Agent) agentsvc.Account {
-	if agent == nil {
-		return agentsvc.Account{}
-	}
-	return agentsvc.Account{
-		ID:        agent.ID,
-		Username:  agent.Username,
-		Password:  agent.Password,
-		Prefix:    agent.Prefix,
-		CreatedAt: agent.CreatedAt,
-		Disabled:  agent.Disabled,
-	}
-}
-
-func agentFromAccount(account agentsvc.Account) *Agent {
-	return &Agent{
-		ID:        account.ID,
-		Username:  account.Username,
-		Password:  account.Password,
-		Prefix:    account.Prefix,
-		CreatedAt: account.CreatedAt,
-		Disabled:  account.Disabled,
-	}
-}
-
 func newCardLifecycleService() *cardops.LifecycleService {
 	return cardops.NewLifecycleService(generateCardCode, time.Now)
 }
@@ -278,13 +246,6 @@ type CardManager interface {
 	SearchCards(query, status, machineID string) []*Card
 	GetUniqueMachines() []MachineInfo
 	GetCardsByMachine(machineID string) []*Card
-	CreateAgent(username, passwordHash, prefix string) (*Agent, error)
-	UsernameExists(username string) bool
-	GetAgent(id string) *Agent
-	UpdateAgentPassword(id, passwordHash string) error
-	AllAgents() []*Agent
-	UpdateAgentStatus(id string, disabled bool) error
-	DeleteAgent(id string) error
 	AgentCards(agentID string) []*Card
 	AgentStats(agentID string) (total, active, expired int)
 }

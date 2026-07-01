@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	agentsvc "github.com/lingqiao/server/internal/agents"
 )
 
 func (cm *JSONCardManager) BatchGenerateCards(count int, duration time.Duration, note string, maxSessions int, agentID string) ([]*Card, error) {
@@ -154,73 +152,9 @@ type MachineInfo struct {
 	IsBlacklisted bool       `json:"is_blacklisted"`
 }
 
-// ========== Agent CRUD ==========
+// ========== Legacy JSONCardManager Agent CRUD (Migration / Read-Only Compatibility Only) ==========
 
 // CreateAgent creates a new agent account.
-func (cm *JSONCardManager) CreateAgent(username, passwordHash, prefix string) (*Agent, error) {
-	cm.mu.Lock()
-	existing := make([]agentsvc.Account, 0, len(cm.agents))
-	for _, a := range cm.agents {
-		existing = append(existing, accountFromAgent(a))
-	}
-	account, err := newAccountService().Create(existing, username, passwordHash, prefix)
-	if err != nil {
-		cm.mu.Unlock()
-		return nil, err
-	}
-	agent := agentFromAccount(account)
-	cm.agents[agent.ID] = agent
-	cm.appendAuditLocked(AuditEntry{
-		Time:   time.Now(),
-		Action: "agent_created",
-		Detail: fmt.Sprintf("agent_id=%s username=%s", agent.ID, username),
-	})
-	cm.mu.Unlock()
-	cm.save()
-	return cloneAgent(agent), nil
-}
-
-func (cm *JSONCardManager) UsernameExists(username string) bool {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	for _, a := range cm.agents {
-		if a.Username == username {
-			return true
-		}
-	}
-	return false
-}
-
-// GetAgent returns an agent by ID.
-func (cm *JSONCardManager) GetAgent(id string) *Agent {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	return cloneAgent(cm.agents[id])
-}
-
-func (cm *JSONCardManager) UpdateAgentPassword(id, passwordHash string) error {
-	cm.mu.Lock()
-	agent, exists := cm.agents[id]
-	if !exists {
-		cm.mu.Unlock()
-		return fmt.Errorf("agent not found")
-	}
-	account, err := newAccountService().UpdatePassword(accountFromAgent(agent), passwordHash)
-	if err != nil {
-		cm.mu.Unlock()
-		return err
-	}
-	agent.Password = account.Password
-	cm.appendAuditLocked(AuditEntry{
-		Time:    time.Now(),
-		Action:  "agent_password_updated",
-		AgentID: id,
-	})
-	cm.mu.Unlock()
-	cm.save()
-	return nil
-}
-
 // AllAgents returns all agents.
 func (cm *JSONCardManager) AllAgents() []*Agent {
 	cm.mu.RLock()
@@ -230,50 +164,6 @@ func (cm *JSONCardManager) AllAgents() []*Agent {
 		result = append(result, cloneAgent(a))
 	}
 	return result
-}
-
-// UpdateAgentStatus enables or disables an agent.
-func (cm *JSONCardManager) UpdateAgentStatus(id string, disabled bool) error {
-	cm.mu.Lock()
-	agent, exists := cm.agents[id]
-	if !exists {
-		cm.mu.Unlock()
-		return fmt.Errorf("agent not found")
-	}
-	account := newAccountService().UpdateStatus(accountFromAgent(agent), disabled)
-	agent.Disabled = account.Disabled
-	cm.appendAuditLocked(AuditEntry{
-		Time:   time.Now(),
-		Action: "agent_status_changed",
-		Detail: fmt.Sprintf("agent_id=%s disabled=%v", id, disabled),
-	})
-	cm.mu.Unlock()
-	cm.save()
-	return nil
-}
-
-// DeleteAgent removes an agent.
-func (cm *JSONCardManager) DeleteAgent(id string) error {
-	cm.mu.Lock()
-	agent, exists := cm.agents[id]
-	if !exists {
-		cm.mu.Unlock()
-		return fmt.Errorf("agent not found")
-	}
-	account := accountFromAgent(agent)
-	if err := newAccountService().EnsureCanDelete(&account); err != nil {
-		cm.mu.Unlock()
-		return err
-	}
-	delete(cm.agents, id)
-	cm.appendAuditLocked(AuditEntry{
-		Time:   time.Now(),
-		Action: "agent_deleted",
-		Detail: fmt.Sprintf("agent_id=%s", id),
-	})
-	cm.mu.Unlock()
-	cm.save()
-	return nil
 }
 
 // AgentCards returns all cards belonging to an agent.

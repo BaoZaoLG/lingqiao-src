@@ -8,19 +8,13 @@ import (
 	"time"
 )
 
-// Announcement represents a public announcement with optional legacy version push.
 type Announcement struct {
-	ID            string     `json:"id,omitempty"`
-	Content       string     `json:"content"`
-	UpdatedAt     time.Time  `json:"updated_at"`
-	LatestVersion string     `json:"latest_version"`
-	MinVersion    string     `json:"min_version"`
-	ForceUpdate   bool       `json:"force_update"`
-	DownloadURL   string     `json:"download_url,omitempty"`
-	SHA256        string     `json:"sha256,omitempty"`
-	Status        string     `json:"status,omitempty"`
-	CreatedAt     time.Time  `json:"created_at,omitempty"`
-	PublishedAt   *time.Time `json:"published_at,omitempty"`
+	ID          string     `json:"id,omitempty"`
+	Content     string     `json:"content"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	Status      string     `json:"status,omitempty"`
+	CreatedAt   time.Time  `json:"created_at,omitempty"`
+	PublishedAt *time.Time `json:"published_at,omitempty"`
 }
 
 var announcement Announcement
@@ -44,27 +38,24 @@ func announcementIndexPath() string { return dataPath("announcements", "index.js
 
 func GetAnnouncement() *Announcement {
 	annMu.RLock()
-	if announcement.Content == "" && announcement.LatestVersion == "" {
+	if announcement.Content == "" {
 		annMu.RUnlock()
 		return nil
 	}
 	a := announcement
 	annMu.RUnlock()
-	if a.SHA256 == "" && a.LatestVersion != "" {
-		a.SHA256 = getUpdateSHA256(a.LatestVersion)
-	}
 	return &a
 }
 
-func SetAnnouncement(content, latestVersion, minVersion string, forceUpdate bool) {
-	a, err := SaveAnnouncementRevision(content, latestVersion, minVersion, forceUpdate, true)
+func SetAnnouncement(content string) {
+	a, err := SaveAnnouncementRevision(content, true)
 	if err != nil {
 		return
 	}
 	setActiveAnnouncement(*a)
 }
 
-func SaveAnnouncementRevision(content, latestVersion, minVersion string, forceUpdate, publish bool) (*Announcement, error) {
+func SaveAnnouncementRevision(content string, publish bool) (*Announcement, error) {
 	if len([]byte(content)) > maxAnnouncementBytes {
 		return nil, fmt.Errorf("content exceeds %d bytes", maxAnnouncementBytes)
 	}
@@ -75,21 +66,13 @@ func SaveAnnouncementRevision(content, latestVersion, minVersion string, forceUp
 		status = announcementStatusPublished
 		publishedAt = &now
 	}
-	dlURL := ""
-	if latestVersion != "" {
-		dlURL = "/admin/api/update/download"
-	}
 	a := Announcement{
-		ID:            newAnnouncementID(now),
-		Content:       content,
-		UpdatedAt:     now,
-		LatestVersion: latestVersion,
-		MinVersion:    minVersion,
-		ForceUpdate:   forceUpdate,
-		DownloadURL:   dlURL,
-		Status:        status,
-		CreatedAt:     now,
-		PublishedAt:   publishedAt,
+		ID:          newAnnouncementID(now),
+		Content:     content,
+		UpdatedAt:   now,
+		Status:      status,
+		CreatedAt:   now,
+		PublishedAt: publishedAt,
 	}
 	idx, err := readAnnouncementIndex()
 	if err != nil {
@@ -171,9 +154,6 @@ func ListAnnouncementRevisions() ([]Announcement, string, error) {
 
 func setActiveAnnouncement(a Announcement) {
 	annMu.Lock()
-	if a.LatestVersion != "" && a.DownloadURL == "" {
-		a.DownloadURL = "/admin/api/update/download"
-	}
 	announcement = a
 	annMu.Unlock()
 	data, _ := json.Marshal(announcement)
@@ -200,9 +180,6 @@ func initAnnouncement() {
 	var a Announcement
 	if err := json.Unmarshal(data, &a); err != nil {
 		return
-	}
-	if a.LatestVersion != "" && a.DownloadURL == "" {
-		a.DownloadURL = "/admin/api/update/download"
 	}
 	annMu.Lock()
 	announcement = a
@@ -249,11 +226,13 @@ func migrateLegacyAnnouncement() error {
 		}
 		return err
 	}
+	// Preserve for releasesvc migration
+	_ = os.WriteFile(dataPath("announcement.legacy.json"), data, 0600)
 	var a Announcement
 	if err := json.Unmarshal(data, &a); err != nil {
 		return err
 	}
-	if a.Content == "" && a.LatestVersion == "" {
+	if a.Content == "" {
 		return nil
 	}
 	now := a.UpdatedAt

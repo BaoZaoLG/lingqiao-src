@@ -27,7 +27,7 @@ type fakeVersionCheck struct {
 	data    map[string]interface{}
 }
 
-func (f *fakeVersionCheck) CheckVersion(w http.ResponseWriter, clientVersion string) (bool, map[string]interface{}) {
+func (f *fakeVersionCheck) CheckVersion(w http.ResponseWriter, req sessions.ClientRequest) (bool, map[string]interface{}) {
 	return f.blocked, f.data
 }
 

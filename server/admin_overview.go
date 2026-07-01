@@ -1,27 +1,34 @@
 package main
 
 import (
+	"github.com/lingqiao/server/internal/httpapi"
+
 	"context"
 	"fmt"
 	"net/http"
 	"sort"
 	"time"
 
+	"github.com/lingqiao/server/internal/features/cards"
 	"github.com/lingqiao/server/internal/features/sessions"
 )
 
 // ── Dashboard & Stats ────────────────────────────────────────────────────────
 
 func (h *AdminHandler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
-	cards := h.cm.AllCards()
+	cardsList, err := h.cardsSvc.AllCards(r.Context())
+	if err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards: "+err.Error())
+		return
+	}
 
 	now := time.Now()
 	var activeCards, expiredCards int
-	for _, c := range cards {
-		if c.Status == CardActive && now.Before(c.ExpiresAt) {
+	for _, c := range cardsList {
+		if c.Status == cards.StatusActive && now.Before(c.ExpiresAt) {
 			activeCards++
 		}
-		if now.After(c.ExpiresAt) || c.Status == CardExpired {
+		if now.After(c.ExpiresAt) || c.Status == cards.StatusExpired {
 			expiredCards++
 		}
 	}
@@ -31,8 +38,8 @@ func (h *AdminHandler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 		activeSessions = res.Total
 	}
 
-	writeOK(w, map[string]interface{}{
-		"total_cards":     len(cards),
+	httpapi.WriteOK(w, map[string]interface{}{
+		"total_cards":     len(cardsList),
 		"active_cards":    activeCards,
 		"expired_cards":   expiredCards,
 		"active_sessions": activeSessions,
@@ -45,9 +52,15 @@ func (h *AdminHandler) HandleServerStats(w http.ResponseWriter, r *http.Request)
 		activeCount = res.Total
 	}
 
-	writeOK(w, map[string]interface{}{
+	cardsList, err := h.cardsSvc.AllCards(r.Context())
+	if err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards: "+err.Error())
+		return
+	}
+
+	httpapi.WriteOK(w, map[string]interface{}{
 		"uptime_seconds":  int(time.Since(serverStart).Seconds()),
-		"total_cards":     len(h.cm.AllCards()),
+		"total_cards":     len(cardsList),
 		"active_sessions": activeCount,
 		"request_count":   requestCount.Load(),
 	})
@@ -56,7 +69,11 @@ func (h *AdminHandler) HandleServerStats(w http.ResponseWriter, r *http.Request)
 func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	cards := h.cm.AllCards()
+	cardsList, err := h.cardsSvc.AllCards(r.Context())
+	if err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards: "+err.Error())
+		return
+	}
 	audit := h.cm.AuditLog()
 
 	var todayActivations int
@@ -75,10 +92,10 @@ func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request)
 		recentAudit = append(recentAudit, audit[i])
 	}
 
-	expiring := make([]*Card, 0)
+	expiring := make([]cards.Card, 0)
 	expiringBefore := now.Add(7 * 24 * time.Hour)
-	for _, card := range cards {
-		if card.Status == CardActive && card.ExpiresAt.After(now) && card.ExpiresAt.Before(expiringBefore) {
+	for _, card := range cardsList {
+		if card.Status == cards.StatusActive && card.ExpiresAt.After(now) && card.ExpiresAt.Before(expiringBefore) {
 			expiring = append(expiring, card)
 		}
 	}
@@ -108,8 +125,13 @@ func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request)
 		riskyMachines = riskyMachines[:10]
 	}
 
-	agentStats := buildAgentLeaderboard(cards, h.cm.AllAgents(), now)
-	writeOK(w, map[string]interface{}{
+	accs, err := h.agentsSvc.AllAgents(r.Context())
+	if err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load agents: "+err.Error())
+		return
+	}
+	agentStats := buildAgentLeaderboard(cardsList, accs, now)
+	httpapi.WriteOK(w, map[string]interface{}{
 		"today_activations":  todayActivations,
 		"today_new_machines": len(newMachines),
 		"active_sessions":    activeSessions,
@@ -132,15 +154,15 @@ type moduleOverviewItem struct {
 func (h *AdminHandler) HandleModulesOverview(w http.ResponseWriter, r *http.Request) {
 	modules := []moduleOverviewItem{
 		h.cardsModuleOverview(),
-		h.agentsModuleOverview(),
-		invitesModuleOverview(),
+		h.agentsModuleOverview(r.Context()),
+		h.invitesModuleOverview(),
 		releasesModuleOverview(r),
 		scriptsModuleOverview(),
 		h.payloadsModuleOverview(),
 		announcementModuleOverview(),
 		h.auditModuleOverview(),
 	}
-	writeOK(w, map[string]interface{}{
+	httpapi.WriteOK(w, map[string]interface{}{
 		"generated_at": time.Now().UTC(),
 		"modules":      modules,
 	})
@@ -148,15 +170,23 @@ func (h *AdminHandler) HandleModulesOverview(w http.ResponseWriter, r *http.Requ
 
 func (h *AdminHandler) cardsModuleOverview() moduleOverviewItem {
 	now := time.Now()
-	cards := h.cm.AllCards()
+	cardsList, err := h.cardsSvc.AllCards(context.Background())
+	if err != nil {
+		return moduleOverviewItem{
+			Key:     "cards",
+			Name:    "卡密授权",
+			Status:  "error",
+			Summary: "failed to load cards: " + err.Error(),
+		}
+	}
 	activeCards := 0
 	expiredCards := 0
 	activeSessions := 0
-	for _, card := range cards {
-		if card.Status == CardActive && card.ExpiresAt.After(now) {
+	for _, card := range cardsList {
+		if card.Status == cards.StatusActive && card.ExpiresAt.After(now) {
 			activeCards++
 		}
-		if now.After(card.ExpiresAt) || card.Status == CardExpired {
+		if now.After(card.ExpiresAt) || card.Status == cards.StatusExpired {
 			expiredCards++
 		}
 	}
@@ -164,16 +194,16 @@ func (h *AdminHandler) cardsModuleOverview() moduleOverviewItem {
 		activeSessions = res.Total
 	}
 	status := "warning"
-	if len(cards) > 0 {
+	if len(cardsList) > 0 {
 		status = "ready"
 	}
 	return moduleOverviewItem{
 		Key:     "cards",
 		Name:    "卡密授权",
 		Status:  status,
-		Summary: fmt.Sprintf("%d total, %d active", len(cards), activeCards),
+		Summary: fmt.Sprintf("%d total, %d active", len(cardsList), activeCards),
 		Metrics: map[string]interface{}{
-			"total_cards":     len(cards),
+			"total_cards":     len(cardsList),
 			"active_cards":    activeCards,
 			"expired_cards":   expiredCards,
 			"active_sessions": activeSessions,
@@ -181,35 +211,64 @@ func (h *AdminHandler) cardsModuleOverview() moduleOverviewItem {
 	}
 }
 
-func (h *AdminHandler) agentsModuleOverview() moduleOverviewItem {
-	agents := buildAdminAgentSummaries(h.cm.AllAgents(), h.cm.AllCards(), time.Now())
+func (h *AdminHandler) agentsModuleOverview(ctx context.Context) moduleOverviewItem {
+	accs, err := h.agentsSvc.AllAgents(ctx)
+	if err != nil {
+		return moduleOverviewItem{
+			Key:     "agents",
+			Name:    "代理渠道",
+			Status:  "error",
+			Summary: "failed to load agents: " + err.Error(),
+		}
+	}
 	disabled := 0
-	totalCards := 0
-	for _, agent := range agents {
+	for _, agent := range accs {
 		if agent.Disabled {
 			disabled++
 		}
-		totalCards += agent.TotalCards
+	}
+	totalCards := 0
+	cardsList, err := h.cardsSvc.AllCards(ctx)
+	if err != nil {
+		return moduleOverviewItem{
+			Key:     "agents",
+			Name:    "代理渠道",
+			Status:  "error",
+			Summary: "failed to load cards: " + err.Error(),
+		}
+	}
+	for _, card := range cardsList {
+		if card.AgentID != "" {
+			totalCards++
+		}
 	}
 	status := "warning"
-	if len(agents) > 0 {
+	if len(accs) > 0 {
 		status = "ready"
 	}
 	return moduleOverviewItem{
 		Key:     "agents",
 		Name:    "代理渠道",
 		Status:  status,
-		Summary: fmt.Sprintf("%d agents, %d cards", len(agents), totalCards),
+		Summary: fmt.Sprintf("%d agents, %d cards", len(accs), totalCards),
 		Metrics: map[string]interface{}{
-			"total_agents":    len(agents),
+			"total_agents":    len(accs),
 			"disabled_agents": disabled,
 			"agent_cards":     totalCards,
 		},
 	}
 }
 
-func invitesModuleOverview() moduleOverviewItem {
-	invites := LoadInviteCodes()
+func (h *AdminHandler) invitesModuleOverview() moduleOverviewItem {
+	invites, err := h.inviteSvc.List()
+	if err != nil {
+		return moduleOverviewItem{
+			Key:     "invites",
+			Name:    "邀请码",
+			Status:  "error",
+			Summary: "failed to load invites: " + err.Error(),
+		}
+	}
 	available := 0
 	for _, invite := range invites {
 		if invite.MaxUses == 0 || invite.UseCount < invite.MaxUses {

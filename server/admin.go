@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/lingqiao/server/internal/httpapi"
+
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -11,40 +13,48 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lingqiao/server/internal/features/agents"
+	"github.com/lingqiao/server/internal/features/cards"
 	"github.com/lingqiao/server/internal/features/sessions"
 )
 
 // AdminHandler handles the web admin panel.
 type AdminHandler struct {
 	cm              CardManager
+	cardsSvc        *cards.Service
 	sessionsSvc     *sessions.Service
 	sessionHandler  *sessions.Handler
+	agentsSvc       *agents.Service
+	inviteSvc       *agents.InviteService
 	chat            *ChatStore
 	adminPassHash   string
 	mu              sync.Mutex
 	sessions        map[string]time.Time
 	sessionTTL      time.Duration
-	loginLimiter    *rateLimiter
-	pwChangeLimiter *rateLimiter
+	loginLimiter    *httpapi.RateLimiter
+	pwChangeLimiter *httpapi.RateLimiter
 }
 
-func NewAdminHandler(cm CardManager, sessionsSvc *sessions.Service) *AdminHandler {
-	return NewAdminHandlerWithTTL(cm, sessionsSvc, currentSessionTTL())
+func NewAdminHandler(cm CardManager, cardsSvc *cards.Service, sessionsSvc *sessions.Service, agentsSvc *agents.Service, inviteSvc *agents.InviteService) *AdminHandler {
+	return NewAdminHandlerWithTTL(cm, cardsSvc, sessionsSvc, agentsSvc, inviteSvc, currentSessionTTL())
 }
 
-func NewAdminHandlerWithTTL(cm CardManager, sessionsSvc *sessions.Service, sessionTTL time.Duration) *AdminHandler {
+func NewAdminHandlerWithTTL(cm CardManager, cardsSvc *cards.Service, sessionsSvc *sessions.Service, agentsSvc *agents.Service, inviteSvc *agents.InviteService, sessionTTL time.Duration) *AdminHandler {
 	if sessionTTL <= 0 {
 		sessionTTL = 4 * time.Hour
 	}
 	h := &AdminHandler{
 		cm:              cm,
+		cardsSvc:        cardsSvc,
 		sessionsSvc:     sessionsSvc,
 		sessionHandler:  sessions.NewHandler(sessionsSvc, nil, nil, nil),
+		agentsSvc:       agentsSvc,
+		inviteSvc:       inviteSvc,
 		chat:            NewChatStore(cm.GetStorage(), time.Now),
 		sessions:        make(map[string]time.Time),
 		sessionTTL:      sessionTTL,
-		loginLimiter:    newRateLimiter(15*time.Minute, 5),
-		pwChangeLimiter: newRateLimiter(60*time.Minute, 10),
+		loginLimiter:    httpapi.NewRateLimiter(15*time.Minute, 5),
+		pwChangeLimiter: httpapi.NewRateLimiter(60*time.Minute, 10),
 	}
 
 	// Load persisted password hash
@@ -129,7 +139,7 @@ func (h *AdminHandler) adminAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if !h.checkSession(r) {
-			writeError(w, http.StatusUnauthorized, "unauthorized")
+			httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		next(w, r)
@@ -139,27 +149,27 @@ func (h *AdminHandler) adminAuth(next http.HandlerFunc) http.HandlerFunc {
 // ── Auth Handlers ────────────────────────────────────────────────────────────
 
 func (h *AdminHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
-	ip := getClientIP(r)
-	if !h.loginLimiter.allow(ip) {
-		writeError(w, http.StatusTooManyRequests, "登录尝试过于频繁，请15分钟后再试")
+	ip := httpapi.GetClientIP(r)
+	if !h.loginLimiter.Allow(ip) {
+		httpapi.WriteError(w, http.StatusTooManyRequests, "登录尝试过于频繁，请15分钟后再试")
 		return
 	}
 
 	var req struct {
 		Password string `json:"password"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := httpapi.ReadJSON(r, &req); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	match, newHash := verifyPassword(req.Password, h.adminPassHash)
 	if !match {
-		writeError(w, http.StatusUnauthorized, "wrong password")
+		httpapi.WriteError(w, http.StatusUnauthorized, "wrong password")
 		return
 	}
 	// Auto-migrate legacy SHA-256 hash to bcrypt on successful login
@@ -170,7 +180,7 @@ func (h *AdminHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[ADMIN] Password hash migrated from SHA-256 to bcrypt")
 	}
 
-	h.loginLimiter.clear(ip)
+	h.loginLimiter.Clear(ip)
 
 	token := h.createSession()
 	http.SetCookie(w, &http.Cookie{
@@ -183,17 +193,17 @@ func (h *AdminHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   int(h.sessionTTL.Seconds()),
 	})
 
-	writeJSON(w, map[string]string{"status": "ok", "token": token})
+	httpapi.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok", "token": token})
 }
 
 func (h *AdminHandler) HandlePasswordChange(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
-	ip := getClientIP(r)
-	if !h.pwChangeLimiter.allow("pwchg_" + ip) {
-		writeError(w, http.StatusTooManyRequests, "密码修改过于频繁，请稍后再试")
+	ip := httpapi.GetClientIP(r)
+	if !h.pwChangeLimiter.Allow("pwchg_" + ip) {
+		httpapi.WriteError(w, http.StatusTooManyRequests, "密码修改过于频繁，请稍后再试")
 		return
 	}
 
@@ -201,22 +211,22 @@ func (h *AdminHandler) HandlePasswordChange(w http.ResponseWriter, r *http.Reque
 		OldPassword string `json:"old_password"`
 		NewPassword string `json:"new_password"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := httpapi.ReadJSON(r, &req); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if len(req.NewPassword) < 6 {
-		writeError(w, http.StatusBadRequest, "新密码长度不能少于6位")
+		httpapi.WriteError(w, http.StatusBadRequest, "新密码长度不能少于6位")
 		return
 	}
 	if len(req.NewPassword) > 128 {
-		writeError(w, http.StatusBadRequest, "密码长度不能超过128位")
+		httpapi.WriteError(w, http.StatusBadRequest, "密码长度不能超过128位")
 		return
 	}
 	match, _ := verifyPassword(req.OldPassword, h.adminPassHash)
 	if !match {
-		writeError(w, http.StatusUnauthorized, "旧密码错误")
+		httpapi.WriteError(w, http.StatusUnauthorized, "旧密码错误")
 		return
 	}
 
@@ -224,5 +234,5 @@ func (h *AdminHandler) HandlePasswordChange(w http.ResponseWriter, r *http.Reque
 	os.MkdirAll(dataDir(), 0755)
 	os.WriteFile(dataPath("admin_password.hash"), []byte(h.adminPassHash), 0600)
 	log.Printf("[ADMIN] Admin password changed and persisted")
-	writeOK(w, map[string]interface{}{"message": "密码修改成功"})
+	httpapi.WriteOK(w, map[string]interface{}{"message": "密码修改成功"})
 }

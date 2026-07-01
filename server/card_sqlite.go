@@ -2,15 +2,15 @@ package main
 
 import (
 	"database/sql"
-
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
 
-	agentsvc "github.com/lingqiao/server/internal/agents"
 	auditsvc "github.com/lingqiao/server/internal/audit"
 	cardops "github.com/lingqiao/server/internal/cards"
+	"github.com/lingqiao/server/internal/features/agents"
 	_ "modernc.org/sqlite"
 )
 
@@ -57,6 +57,15 @@ func NewSQLiteCardManager(dbPath string) (CardManager, error) {
 		created_at DATETIME,
 		disabled BOOLEAN
 	);
+	CREATE TABLE IF NOT EXISTS invites (
+		code TEXT PRIMARY KEY,
+		created_at DATETIME,
+		created_by TEXT,
+		used_by TEXT,
+		used_at DATETIME,
+		max_uses INTEGER,
+		use_count INTEGER
+	);
 	CREATE TABLE IF NOT EXISTS blacklist (
 		value TEXT PRIMARY KEY,
 		type TEXT,
@@ -76,6 +85,54 @@ func NewSQLiteCardManager(dbPath string) (CardManager, error) {
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("failed to init schema: %w", err)
+	}
+
+	// Clean up duplicate agent usernames if any (keep oldest, rename others to ensure unique index succeeds)
+	rows, err := db.Query(`SELECT username FROM agents GROUP BY username HAVING COUNT(*) > 1`)
+	if err == nil {
+		var dups []string
+		for rows.Next() {
+			var u string
+			if err := rows.Scan(&u); err == nil {
+				dups = append(dups, u)
+			}
+		}
+		rows.Close()
+		for _, u := range dups {
+			agentRows, err := db.Query(`SELECT id FROM agents WHERE username = ? ORDER BY created_at ASC`, u)
+			if err == nil {
+				var ids []string
+				for agentRows.Next() {
+					var id string
+					if err := agentRows.Scan(&id); err == nil {
+						ids = append(ids, id)
+					}
+				}
+				agentRows.Close()
+				for i := 1; i < len(ids); i++ {
+					suffix := i
+					var newUsername string
+					for {
+						newUsername = fmt.Sprintf("%s_dup_%d", u, suffix)
+						var exists int
+						err := db.QueryRow(`SELECT 1 FROM agents WHERE username = ?`, newUsername).Scan(&exists)
+						if err == sql.ErrNoRows {
+							break
+						}
+						suffix++
+					}
+					if _, err := db.Exec(`UPDATE agents SET username = ? WHERE id = ?`, newUsername, ids[i]); err != nil {
+						return nil, fmt.Errorf("failed to deduplicate agent username: %w", err)
+					}
+					log.Printf("[DB] Auto-deduplicated agent: renamed username %q to %q for ID %s", u, newUsername, ids[i])
+				}
+			}
+		}
+	}
+
+	// Create unique index (must succeed to guarantee database-level username uniqueness constraints)
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_username ON agents(username)`); err != nil {
+		return nil, fmt.Errorf("failed to create unique index on agents(username): %w", err)
 	}
 
 	return &SQLiteCardManager{
@@ -161,6 +218,25 @@ func (cm *SQLiteCardManager) ValidateCard(code string) (*Card, error) {
 }
 
 func (cm *SQLiteCardManager) GenerateCard(duration time.Duration, note string, maxSessions int, agentID string) (*Card, error) {
+	tx, err := cm.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	if agentID != "" {
+		var disabled int
+		err := tx.QueryRow(`SELECT disabled FROM agents WHERE id = ?`, agentID).Scan(&disabled)
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("agent not found")
+		} else if err != nil {
+			return nil, err
+		}
+		if disabled == 1 {
+			return nil, fmt.Errorf("agent is disabled")
+		}
+	}
+
 	lifecycleCard, err := newCardLifecycleService().Create(duration, note, maxSessions, agentID)
 	if err != nil {
 		return nil, err
@@ -168,9 +244,13 @@ func (cm *SQLiteCardManager) GenerateCard(duration time.Duration, note string, m
 	card := cardFromLifecycleCard(lifecycleCard)
 	card.Code = normalizeCardCode(card.Code)
 
-	_, err = cm.db.Exec(`INSERT INTO cards (code, machine_id, agent_id, created_at, expires_at, status, note, max_sessions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err = tx.Exec(`INSERT INTO cards (code, machine_id, agent_id, created_at, expires_at, status, note, max_sessions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		card.Code, card.MachineID, card.AgentID, card.CreatedAt, card.ExpiresAt, card.Status, card.Note, card.MaxSessions)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 
@@ -384,6 +464,19 @@ func (cm *SQLiteCardManager) BatchGenerateCards(count int, duration time.Duratio
 	}
 	defer tx.Rollback()
 
+	if agentID != "" {
+		var disabled int
+		err := tx.QueryRow(`SELECT disabled FROM agents WHERE id = ?`, agentID).Scan(&disabled)
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("agent not found")
+		} else if err != nil {
+			return nil, err
+		}
+		if disabled == 1 {
+			return nil, fmt.Errorf("agent is disabled")
+		}
+	}
+
 	stmt, err := tx.Prepare(`INSERT INTO cards (code, machine_id, agent_id, created_at, expires_at, status, note, max_sessions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return nil, err
@@ -411,7 +504,9 @@ func (cm *SQLiteCardManager) BatchGenerateCards(count int, duration time.Duratio
 		}
 		cards = append(cards, card)
 	}
-	tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 
 	cm.RecordAudit(AuditEntry{
 		Time:    now,
@@ -537,122 +632,6 @@ func (cm *SQLiteCardManager) GetCardsByMachine(machineID string) []*Card {
 	return cm.SearchCards("", "", machineID)
 }
 
-func (cm *SQLiteCardManager) CreateAgent(username, passwordHash, prefix string) (*Agent, error) {
-	agents := cm.AllAgents()
-	existing := make([]agentsvc.Account, 0, len(agents))
-	for _, a := range agents {
-		existing = append(existing, accountFromAgent(a))
-	}
-	account, err := newAccountService().Create(existing, username, passwordHash, prefix)
-	if err != nil {
-		return nil, err
-	}
-	agent := agentFromAccount(account)
-	_, err = cm.db.Exec(`INSERT INTO agents (id, username, password, prefix, created_at, disabled) VALUES (?, ?, ?, ?, ?, ?)`,
-		agent.ID, agent.Username, agent.Password, agent.Prefix, agent.CreatedAt, agent.Disabled)
-	if err != nil {
-		return nil, err
-	}
-	cm.RecordAudit(AuditEntry{
-		Time:   time.Now(),
-		Action: "agent_created",
-		Detail: fmt.Sprintf("agent_id=%s username=%s", agent.ID, username),
-	})
-	return agent, nil
-}
-
-func (cm *SQLiteCardManager) UsernameExists(username string) bool {
-	var u string
-	err := cm.db.QueryRow(`SELECT username FROM agents WHERE username = ?`, username).Scan(&u)
-	return err == nil
-}
-
-func (cm *SQLiteCardManager) GetAgent(id string) *Agent {
-	var a Agent
-	err := cm.db.QueryRow(`SELECT id, username, password, prefix, created_at, disabled FROM agents WHERE id = ?`, id).
-		Scan(&a.ID, &a.Username, &a.Password, &a.Prefix, &a.CreatedAt, &a.Disabled)
-	if err != nil {
-		return nil
-	}
-	return &a
-}
-
-func (cm *SQLiteCardManager) UpdateAgentPassword(id, passwordHash string) error {
-	agent := cm.GetAgent(id)
-	if agent == nil {
-		return fmt.Errorf("agent not found")
-	}
-	account, err := newAccountService().UpdatePassword(accountFromAgent(agent), passwordHash)
-	if err != nil {
-		return err
-	}
-	_, err = cm.db.Exec(`UPDATE agents SET password = ? WHERE id = ?`, account.Password, id)
-	if err != nil {
-		return err
-	}
-	cm.RecordAudit(AuditEntry{
-		Time:    time.Now(),
-		Action:  "agent_password_updated",
-		AgentID: id,
-	})
-	return nil
-}
-
-func (cm *SQLiteCardManager) AllAgents() []*Agent {
-	rows, err := cm.db.Query(`SELECT id, username, password, prefix, created_at, disabled FROM agents`)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	var res []*Agent
-	for rows.Next() {
-		var a Agent
-		if err := rows.Scan(&a.ID, &a.Username, &a.Password, &a.Prefix, &a.CreatedAt, &a.Disabled); err == nil {
-			res = append(res, &a)
-		}
-	}
-	return res
-}
-
-func (cm *SQLiteCardManager) UpdateAgentStatus(id string, disabled bool) error {
-	agent := cm.GetAgent(id)
-	if agent == nil {
-		return fmt.Errorf("agent not found")
-	}
-	account := newAccountService().UpdateStatus(accountFromAgent(agent), disabled)
-	_, err := cm.db.Exec(`UPDATE agents SET disabled = ? WHERE id = ?`, account.Disabled, id)
-	if err != nil {
-		return err
-	}
-	cm.RecordAudit(AuditEntry{
-		Time:   time.Now(),
-		Action: "agent_status_changed",
-		Detail: fmt.Sprintf("agent_id=%s disabled=%v", id, disabled),
-	})
-	return nil
-}
-
-func (cm *SQLiteCardManager) DeleteAgent(id string) error {
-	agent := cm.GetAgent(id)
-	if agent == nil {
-		return fmt.Errorf("agent not found")
-	}
-	account := accountFromAgent(agent)
-	if err := newAccountService().EnsureCanDelete(&account); err != nil {
-		return err
-	}
-	_, err := cm.db.Exec(`DELETE FROM agents WHERE id = ?`, id)
-	if err != nil {
-		return err
-	}
-	cm.RecordAudit(AuditEntry{
-		Time:   time.Now(),
-		Action: "agent_deleted",
-		Detail: fmt.Sprintf("agent_id=%s", id),
-	})
-	return nil
-}
-
 func (cm *SQLiteCardManager) AgentCards(agentID string) []*Card {
 	rows, err := cm.db.Query(`SELECT code, machine_id, agent_id, created_at, activated_at, expires_at, status, note, max_sessions FROM cards WHERE agent_id = ?`, agentID)
 	if err != nil {
@@ -716,10 +695,46 @@ func (cm *SQLiteCardManager) ImportJSONData(old *JSONCardManager) error {
 		}
 	}
 	for _, a := range old.AllAgents() {
-		_, err := tx.Exec(`INSERT OR IGNORE INTO agents (id, username, password, prefix, created_at, disabled) VALUES (?, ?, ?, ?, ?, ?)`,
-			a.ID, a.Username, a.Password, a.Prefix, a.CreatedAt, a.Disabled)
-		if err != nil {
+		username := a.Username
+		var err error
+		for {
+			_, err = tx.Exec(`INSERT INTO agents (id, username, password, prefix, created_at, disabled) VALUES (?, ?, ?, ?, ?, ?)`,
+				a.ID, username, a.Password, a.Prefix, a.CreatedAt, a.Disabled)
+			if err == nil {
+				if username != a.Username {
+					log.Printf("[DB] Migration: resolved duplicate username during import; renamed %q to %q for ID %s", a.Username, username, a.ID)
+				}
+				break
+			}
+			if strings.Contains(err.Error(), "UNIQUE constraint failed") && strings.Contains(err.Error(), "agents.username") {
+				suffix := 1
+				for {
+					candidate := fmt.Sprintf("%s_dup_%d", a.Username, suffix)
+					var exists int
+					errCheck := tx.QueryRow(`SELECT 1 FROM agents WHERE username = ?`, candidate).Scan(&exists)
+					if errCheck == sql.ErrNoRows {
+						username = candidate
+						break
+					}
+					suffix++
+				}
+				continue
+			}
 			return err
+		}
+	}
+	var jsonInvites []agents.InviteCode
+	if err := old.GetStorage().Load("invites", &jsonInvites); err == nil && len(jsonInvites) > 0 {
+		for _, iv := range jsonInvites {
+			var usedAt *time.Time
+			if !iv.UsedAt.IsZero() {
+				usedAt = &iv.UsedAt
+			}
+			_, err := tx.Exec(`INSERT OR IGNORE INTO invites (code, created_at, created_by, used_by, used_at, max_uses, use_count) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				iv.Code, iv.CreatedAt, iv.CreatedBy, iv.UsedBy, usedAt, iv.MaxUses, iv.UseCount)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	for _, b := range old.AllBlacklist() {

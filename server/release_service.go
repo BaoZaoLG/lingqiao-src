@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -118,11 +119,51 @@ func migrateLegacyUpdatePackages(ctx context.Context, svc *releaseService) error
 	if len(existing) > 0 {
 		return nil
 	}
-	packages, _, err := ListUpdatePackages()
+	type updatePackage struct {
+		Version    string    `json:"version"`
+		Filename   string    `json:"filename"`
+		FileSize   int64     `json:"file_size"`
+		SHA256     string    `json:"sha256"`
+		UploadedAt time.Time `json:"uploaded_at"`
+		Active     bool      `json:"active"`
+	}
+	type updateIndex struct {
+		Packages []updatePackage `json:"packages"`
+	}
+
+	indexPath := filepath.Join(svc.dataDir, "updates", "index.json")
+	data, err := os.ReadFile(indexPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return err
 	}
+	var idx updateIndex
+	if err := json.Unmarshal(data, &idx); err != nil {
+		return err
+	}
+	packages := idx.Packages
+
+	type legacyAnnouncement struct {
+		LatestVersion string `json:"latest_version"`
+		MinVersion    string `json:"min_version"`
+		ForceUpdate   bool   `json:"force_update"`
+	}
+	var legacyAnn legacyAnnouncement
+	if annData, err := os.ReadFile(filepath.Join(svc.dataDir, "announcement.legacy.json")); err == nil {
+		json.Unmarshal(annData, &legacyAnn)
+	} else if annData, err := os.ReadFile(filepath.Join(svc.dataDir, "announcement.json")); err == nil {
+		json.Unmarshal(annData, &legacyAnn)
+	}
+
 	for _, pkg := range packages {
+		minVersion := ""
+		forceUpdate := false
+		if pkg.Active && legacyAnn.LatestVersion == pkg.Version {
+			minVersion = legacyAnn.MinVersion
+			forceUpdate = legacyAnn.ForceUpdate
+		}
 		releaseID := legacyReleaseID(pkg.Version)
 		status := releasesvc.StatusDraft
 		var publishedAt *time.Time
@@ -143,6 +184,8 @@ func migrateLegacyUpdatePackages(ctx context.Context, svc *releaseService) error
 			Version:        pkg.Version,
 			Channel:        releasesvc.ChannelStable,
 			Status:         status,
+			MinVersion:     minVersion,
+			ForceUpdate:    forceUpdate,
 			RolloutPercent: 100,
 			Notes:          "Migrated from legacy update package index",
 			CreatedAt:      createdAt,

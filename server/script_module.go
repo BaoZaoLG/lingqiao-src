@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/lingqiao/server/internal/httpapi"
+
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -359,12 +361,12 @@ func sanitizeScriptVersion(version string) string {
 
 // HandleScriptDownload ...
 func (h *APIHandler) HandleScriptDownload(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
 	if r.Header.Get("X-HMAC-Signature") != "" {
 		if err := verifyRequestHMAC(r, r.URL.Path); err != nil {
-			writeError(w, http.StatusUnauthorized, "signature verification failed")
+			httpapi.WriteError(w, http.StatusUnauthorized, "signature verification failed")
 			return
 		}
 	}
@@ -374,7 +376,7 @@ func (h *APIHandler) HandleScriptDownload(w http.ResponseWriter, r *http.Request
 		token = r.URL.Query().Get("token")
 	}
 	if token == "" {
-		writeError(w, http.StatusBadRequest, "token is required")
+		httpapi.WriteError(w, http.StatusBadRequest, "token is required")
 		return
 	}
 
@@ -383,17 +385,17 @@ func (h *APIHandler) HandleScriptDownload(w http.ResponseWriter, r *http.Request
 
 	_, err := h.sessionsSvc.ValidateBound(r.Context(), token, machineID, cardCode)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "invalid or expired session")
+		httpapi.WriteError(w, http.StatusUnauthorized, "invalid or expired session")
 		return
 	}
 
 	module, err := LoadActiveScriptModule()
 	if err != nil {
 		log.Printf("[SCRIPT] active script unavailable: %v", err)
-		writeError(w, http.StatusNotFound, "script module not published")
+		httpapi.WriteError(w, http.StatusNotFound, "script module not published")
 		return
 	}
-	writeOK(w, map[string]interface{}{
+	httpapi.WriteOK(w, map[string]interface{}{
 		"version":    module.Version,
 		"sha256":     module.SHA256,
 		"content":    module.Content,
@@ -409,10 +411,10 @@ func (h *AdminHandler) HandleScriptAdmin(w http.ResponseWriter, r *http.Request)
 		if id := r.URL.Query().Get("id"); id != "" {
 			module, err := loadScriptModuleContent(id)
 			if err != nil {
-				writeError(w, http.StatusNotFound, "script not found")
+				httpapi.WriteError(w, http.StatusNotFound, "script not found")
 				return
 			}
-			writeOK(w, map[string]interface{}{"script": module})
+			httpapi.WriteOK(w, map[string]interface{}{"script": module})
 			return
 		}
 		list, activeID, err := ListScriptModules()
@@ -429,15 +431,15 @@ func (h *AdminHandler) HandleScriptAdmin(w http.ResponseWriter, r *http.Request)
 					data["updated_at"] = active.UpdatedAt
 				}
 			}
-			writeOK(w, data)
+			httpapi.WriteOK(w, data)
 			return
 		}
 		module, err := LoadActiveScriptModule()
 		if err != nil {
-			writeOK(w, map[string]interface{}{"script": nil})
+			httpapi.WriteOK(w, map[string]interface{}{"script": nil})
 			return
 		}
-		writeOK(w, map[string]interface{}{
+		httpapi.WriteOK(w, map[string]interface{}{
 			"version":    module.Version,
 			"sha256":     module.SHA256,
 			"content":    module.Content,
@@ -452,52 +454,52 @@ func (h *AdminHandler) HandleScriptAdmin(w http.ResponseWriter, r *http.Request)
 			Action  string `json:"action"`
 			ID      string `json:"id"`
 		}
-		if err := readJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+		if err := httpapi.ReadJSON(r, &req); err != nil {
+			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		switch req.Action {
 		case "activate":
 			_, previousActiveID, _ := ListScriptModules()
 			if err := SetActiveScriptModule(req.ID); err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
+				httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 				return
 			}
 			module, _ := loadScriptModuleContent(req.ID)
 			h.recordScriptAudit("script_activated", module, fmt.Sprintf("previous_id=%s", previousActiveID))
-			writeOK(w, nil)
+			httpapi.WriteOK(w, nil)
 			return
 		case "delete":
 			module, _ := loadScriptModuleContent(req.ID)
 			if err := DeleteScriptModule(req.ID); err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
+				httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 				return
 			}
 			h.recordScriptAudit("script_deleted", module, "")
-			writeOK(w, nil)
+			httpapi.WriteOK(w, nil)
 			return
 		case "save":
 			module, err := SaveScriptModuleDraft(req.Version, req.Content, req.Note)
 			if err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
+				httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 				return
 			}
 			h.recordScriptAudit("script_saved", module, "")
-			writeOK(w, map[string]interface{}{"script": module, "id": module.ID, "version": module.Version, "sha256": module.SHA256, "content": module.Content, "size": module.Size, "updated_at": module.UpdatedAt})
+			httpapi.WriteOK(w, map[string]interface{}{"script": module, "id": module.ID, "version": module.Version, "sha256": module.SHA256, "content": module.Content, "size": module.Size, "updated_at": module.UpdatedAt})
 			return
 		}
 		module, err := saveScriptModule(req.Version, req.Content, req.Note, "", true)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		if err := SetActiveScriptModule(module.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		h.recordScriptAudit("script_published", module, "")
 		log.Printf("[SCRIPT] Published version=%s sha256=%s size=%d", module.Version, module.SHA256, module.Size)
-		writeOK(w, map[string]interface{}{
+		httpapi.WriteOK(w, map[string]interface{}{
 			"id":         module.ID,
 			"name":       module.Name,
 			"version":    module.Version,
@@ -507,7 +509,7 @@ func (h *AdminHandler) HandleScriptAdmin(w http.ResponseWriter, r *http.Request)
 			"updated_at": module.UpdatedAt,
 		})
 	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httpapi.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 

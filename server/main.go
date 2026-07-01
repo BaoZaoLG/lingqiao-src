@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/lingqiao/server/internal/httpapi"
+
 	"context"
 	"crypto/tls"
 	"database/sql"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"github.com/lingqiao/server/internal/config"
+	"github.com/lingqiao/server/internal/features/agents"
 	"github.com/lingqiao/server/internal/features/cards"
 	"github.com/lingqiao/server/internal/features/sessions"
 )
@@ -86,6 +89,41 @@ func main() {
 	if impl, ok := sqliteCm.(*SQLiteCardManager); ok {
 		db = impl.DB()
 	}
+
+	// Migrate invites from JSON storage if SQLite database is empty but json storage has invites
+	if db != nil {
+		var inviteCount int
+		err = db.QueryRow(`SELECT COUNT(*) FROM invites`).Scan(&inviteCount)
+		if err == nil && inviteCount == 0 {
+			var jsonInvites []agents.InviteCode
+			if err := storage.Load("invites", &jsonInvites); err == nil && len(jsonInvites) > 0 {
+				log.Println("[DB] Migrating invites from JSON to SQLite...")
+				tx, err := db.Begin()
+				if err == nil {
+					var errExec error
+					for _, iv := range jsonInvites {
+						var usedAt *time.Time
+						if !iv.UsedAt.IsZero() {
+							usedAt = &iv.UsedAt
+						}
+						_, errExec = tx.Exec(`INSERT OR IGNORE INTO invites (code, created_at, created_by, used_by, used_at, max_uses, use_count) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+							iv.Code, iv.CreatedAt, iv.CreatedBy, iv.UsedBy, usedAt, iv.MaxUses, iv.UseCount)
+						if errExec != nil {
+							break
+						}
+					}
+					if errExec != nil {
+						_ = tx.Rollback()
+						log.Printf("[DB] Failed to migrate invites: %v", errExec)
+					} else if errCommit := tx.Commit(); errCommit != nil {
+						log.Printf("[DB] Failed to commit invites migration: %v", errCommit)
+					} else {
+						log.Println("[DB] Invites migration completed successfully.")
+					}
+				}
+			}
+		}
+	}
 	cardsRepo := cards.NewSQLiteRepository(db)
 	cardsSvc := cards.NewService(cardsRepo, generateCardCode, time.Now)
 	cardsHandler := cards.NewHandler(cardsSvc, cardsRepo)
@@ -107,10 +145,35 @@ func main() {
 		})
 	})
 
+	inviteSvc := agents.NewInviteService(db)
+	agentsRepo := agents.NewSQLiteRepository(db)
+	agentsSvc := agents.NewService(agentsRepo, time.Now)
+	agentsSvc.SetAuditSink(func(action, agentID, detail string) {
+		cm.RecordAudit(AuditEntry{
+			Action:  action,
+			AgentID: agentID,
+			Detail:  detail,
+		})
+	})
+
 	api := NewAPIHandler(cm, sessionsSvc)
-	admin := NewAdminHandler(cm, sessionsSvc)
+	admin := NewAdminHandler(cm, cardsSvc, sessionsSvc, agentsSvc, inviteSvc)
 	admin.chat = api.chat
-	agent := NewAgentHandler(cm)
+
+	adapter := &agentCardManagerAdapter{
+		cardsSvc:  cardsSvc,
+		agentsSvc: agentsSvc,
+	}
+	agentAdmin := agents.NewAdminHandler(agentsSvc, adapter)
+	agent := agents.NewAgentHandler(agentsSvc, adapter, adapter, inviteSvc, cfg.SessionTTL, cfg.DataDir)
+	agent.SetAuditSink(func(action, cardCode, agentID, detail string) {
+		cm.RecordAudit(AuditEntry{
+			Action:  action,
+			Card:    cardCode,
+			AgentID: agentID,
+			Detail:  detail,
+		})
+	})
 	payloadStore := NewPayloadStore(storage)
 	payload := NewPayloadHandler(payloadStore, sessionsSvc)
 	payload.SetAuditSink(cm.RecordAudit)
@@ -121,7 +184,7 @@ func main() {
 	defer cancel()
 	go api.SessionCleanupTask(ctx)
 
-	adminServer := buildAdminServer(cfg.AdminAddr, api, admin, payload, cardsHandler)
+	adminServer := buildAdminServer(cfg.AdminAddr, api, admin, payload, cardsHandler, agentAdmin)
 	agentServer := buildAgentServer(cfg.AgentAddr, agent)
 
 	startServers(adminServer, agentServer)
@@ -160,14 +223,14 @@ func handleCLIGenerate(cm CardManager) bool {
 
 // ── Server Construction ──────────────────────────────────────────────────────
 
-func buildAdminServer(addr string, api *APIHandler, admin *AdminHandler, payload *PayloadHandler, cardsHandler *cards.Handler) *http.Server {
+func buildAdminServer(addr string, api *APIHandler, admin *AdminHandler, payload *PayloadHandler, cardsHandler *cards.Handler, agentAdmin *agents.AdminHandler) *http.Server {
 	mux := http.NewServeMux()
-	activateLimiter := newRateLimiter(1*time.Minute, 20)
+	activateLimiter := httpapi.NewRateLimiter(1*time.Minute, 20)
 
 	// Client API routes
 	mux.HandleFunc("/api/v1/activate", func(w http.ResponseWriter, r *http.Request) {
-		if !activateLimiter.allow(getClientIP(r)) {
-			writeError(w, http.StatusTooManyRequests, "激活请求过于频繁，请稍后再试")
+		if !activateLimiter.Allow(httpapi.GetClientIP(r)) {
+			httpapi.WriteError(w, http.StatusTooManyRequests, "激活请求过于频繁，请稍后再试")
 			return
 		}
 		api.HandleActivate(w, r)
@@ -193,7 +256,7 @@ func buildAdminServer(addr string, api *APIHandler, admin *AdminHandler, payload
 	mux.HandleFunc("/api/health", healthHandler)
 
 	// Admin routes (authenticated)
-	registerAdminRoutes(mux, admin, payload, cardsHandler)
+	registerAdminRoutes(mux, admin, payload, cardsHandler, agentAdmin)
 
 	// Serve admin panel HTML
 	adminSubFS, _ := fs.Sub(webDistFS, "web-dist/admin")
@@ -204,20 +267,9 @@ func buildAdminServer(addr string, api *APIHandler, admin *AdminHandler, payload
 	return newServer(addr, corsMiddleware(mux))
 }
 
-func buildAgentServer(addr string, agent *AgentHandler) *http.Server {
+func buildAgentServer(addr string, agent *agents.AgentHandler) *http.Server {
 	mux := http.NewServeMux()
-
-	// Agent API routes (no auth required)
-	mux.HandleFunc("/api/register", agent.HandleRegister)
-	mux.HandleFunc("/api/login", agent.HandleLogin)
-
-	// Agent API routes (authenticated)
-	mux.HandleFunc("/api/dashboard", agent.agentAuth(agent.HandleDashboard))
-	mux.HandleFunc("/api/cards", agent.agentAuth(agent.HandleListCards))
-	mux.HandleFunc("/api/card/generate", agent.agentAuth(agent.HandleGenerateCard))
-	mux.HandleFunc("/api/card/batch-generate", agent.agentAuth(agent.HandleBatchGenerate))
-	mux.HandleFunc("/api/info", agent.agentAuth(agent.HandleAgentInfo))
-	mux.HandleFunc("/api/password", agent.agentAuth(agent.HandlePasswordChange))
+	agent.RegisterRoutes(mux)
 
 	// Health check
 	mux.HandleFunc("/api/health", healthHandler)
@@ -246,20 +298,20 @@ func registerPayloadRoutes(mux *http.ServeMux, api *APIHandler, payload *Payload
 		case strings.Contains(path, "/chunk/"):
 			handleChunkAuth(w, r, payload)
 		default:
-			writeError(w, http.StatusBadRequest, "invalid path")
+			httpapi.WriteError(w, http.StatusBadRequest, "invalid path")
 		}
 	})
 }
 
 func handleChunkAuth(w http.ResponseWriter, r *http.Request, payload *PayloadHandler) {
 	if err := verifyRequestHMAC(r, r.URL.Path); err != nil {
-		writeError(w, http.StatusUnauthorized, "missing auth")
+		httpapi.WriteError(w, http.StatusUnauthorized, "missing auth")
 		return
 	}
 	payload.HandleChunkDownload(w, r)
 }
 
-func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *PayloadHandler, cardsHandler *cards.Handler) {
+func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *PayloadHandler, cardsHandler *cards.Handler, agentAdmin *agents.AdminHandler) {
 	auth := h.adminAuth
 
 	// Auth & settings
@@ -308,9 +360,7 @@ func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *PayloadHa
 	mux.HandleFunc("/admin/api/machine/cards", auth(h.HandleMachineCards))
 
 	// Agents
-	mux.HandleFunc("/admin/api/agents", auth(h.HandleAdminListAgents))
-	mux.HandleFunc("/admin/api/agent/update", auth(h.HandleAdminUpdateAgent))
-	mux.HandleFunc("/admin/api/agent/cards", auth(h.HandleAdminAgentCards))
+	agentAdmin.RegisterRoutes(mux, auth)
 
 	// Invites
 	mux.HandleFunc("/admin/api/invites", auth(h.HandleInviteList))
@@ -318,10 +368,6 @@ func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *PayloadHa
 	mux.HandleFunc("/admin/api/invite/delete", auth(h.HandleInviteDelete))
 
 	// Updates
-	mux.HandleFunc("/admin/api/update/upload", auth(h.HandleUpdateUpload))
-	mux.HandleFunc("/admin/api/update/info", auth(h.HandleUpdateInfo))
-	mux.HandleFunc("/admin/api/update/manage", auth(h.HandleUpdateManage))
-	mux.HandleFunc("/admin/api/update/download", h.HandleUpdateDownload)
 	mux.HandleFunc("/admin/api/releases", auth(h.HandleReleases))
 	mux.HandleFunc("/admin/api/releases/", auth(h.HandleReleaseRoute))
 	mux.HandleFunc("/admin/api/script", auth(h.HandleScriptAdmin))

@@ -35,8 +35,6 @@ func ConfigureRuntime(cfg RuntimeConfig) {
 	runtimeConfig = cfg
 	runtimeMu.Unlock()
 
-	configureInviteService(cfg.DataDir)
-	configureUpdateStore(cfg.DataDir)
 	configureReleaseService(cfg.DataDir)
 	initAnnouncement()
 	configureAuthClients()

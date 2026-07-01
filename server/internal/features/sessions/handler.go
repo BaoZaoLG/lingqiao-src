@@ -1,6 +1,8 @@
 package sessions
 
 import (
+	"github.com/lingqiao/server/internal/httpapi"
+
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,7 +17,7 @@ type SignedRequestReader interface {
 
 // VersionChecker provides a way to check if a client version is allowed
 type VersionChecker interface {
-	CheckVersion(w http.ResponseWriter, clientVersion string) (bool, map[string]interface{})
+	CheckVersion(w http.ResponseWriter, req ClientRequest) (bool, map[string]interface{})
 }
 
 // ClientIPFunc extracts the remote IP from a request
@@ -77,7 +79,7 @@ func writeJSON(w http.ResponseWriter, data interface{}) {
 // requireMethod ensures the request uses the expected method
 func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 	if r.Method != method {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httpapi.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return false
 	}
 	return true
@@ -90,21 +92,21 @@ func readJSON(r *http.Request, dst interface{}) error {
 }
 
 func (h *Handler) HandleActivate(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
 	req, err := h.reader.ReadSignedRequest(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	if req.Card == "" {
-		writeError(w, http.StatusBadRequest, "card is required")
+		httpapi.WriteError(w, http.StatusBadRequest, "card is required")
 		return
 	}
 
-	if blocked, _ := h.versionCheck.CheckVersion(w, req.ClientVersion); blocked {
+	if blocked, _ := h.versionCheck.CheckVersion(w, req); blocked {
 		return
 	}
 
@@ -122,11 +124,11 @@ func (h *Handler) HandleActivate(w http.ResponseWriter, r *http.Request) {
 		} else if errors.Is(err, ErrMaxSessionsReached) || errors.Is(err, ErrBoundToOtherMachine) || errors.Is(err, ErrCardNoLongerValid) || errors.Is(err, ErrCardBlacklisted) {
 			status = http.StatusForbidden
 		}
-		writeError(w, status, err.Error())
+		httpapi.WriteError(w, status, err.Error())
 		return
 	}
 
-	_, updateInfo := h.versionCheck.CheckVersion(w, req.ClientVersion)
+	_, updateInfo := h.versionCheck.CheckVersion(w, req)
 	resp := map[string]interface{}{
 		"session_token":   session.Token,
 		"expires_at":      session.ExpiresAt.Unix(),
@@ -140,17 +142,17 @@ func (h *Handler) HandleActivate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
 	req, err := h.reader.ReadSignedRequest(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 
-	if blocked, _ := h.versionCheck.CheckVersion(w, req.ClientVersion); blocked {
+	if blocked, _ := h.versionCheck.CheckVersion(w, req); blocked {
 		return
 	}
 
@@ -167,11 +169,11 @@ func (h *Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		} else if errors.Is(err, ErrCardNotFound) || errors.Is(err, ErrCardDisabled) || errors.Is(err, ErrCardExpired) || errors.Is(err, ErrMachineMismatch) || errors.Is(err, ErrCardMismatch) || errors.Is(err, ErrCardNoLongerValid) {
 			status = http.StatusForbidden
 		}
-		writeError(w, status, err.Error())
+		httpapi.WriteError(w, status, err.Error())
 		return
 	}
 
-	_, updateInfo := h.versionCheck.CheckVersion(w, req.ClientVersion)
+	_, updateInfo := h.versionCheck.CheckVersion(w, req)
 	resp := map[string]interface{}{
 		"expires_at":      session.ExpiresAt.Unix(),
 		"card_expires_at": card.ExpiresAt.Unix(),
@@ -184,13 +186,13 @@ func (h *Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleDeactivate(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
 	req, err := h.reader.ReadSignedRequest(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 
@@ -200,15 +202,15 @@ func (h *Handler) HandleDeactivate(w http.ResponseWriter, r *http.Request) {
 		CardCode:     req.Card,
 		Unbind:       false,
 	}); err != nil {
-		writeJSON(w, map[string]string{"status": "ok", "message": "会话不存在或已过期"})
+		httpapi.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "会话不存在或已过期"})
 		return
 	}
 
-	writeJSON(w, map[string]string{"status": "ok", "message": "已注销"})
+	httpapi.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "已注销"})
 }
 
 func (h *Handler) HandleListSessions(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
 
@@ -240,7 +242,7 @@ func (h *Handler) HandleListSessions(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.List(r.Context(), filter)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -269,21 +271,21 @@ func (h *Handler) HandleListSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleForceLogout(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
 	var reqPayload struct {
 		SessionToken string `json:"session_token"`
 	}
-	if err := readJSON(r, &reqPayload); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := httpapi.ReadJSON(r, &reqPayload); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	token := reqPayload.SessionToken
 	if token == "" {
-		writeError(w, http.StatusBadRequest, "session_token is required")
+		httpapi.WriteError(w, http.StatusBadRequest, "session_token is required")
 		return
 	}
 
@@ -293,10 +295,10 @@ func (h *Handler) HandleForceLogout(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if err == ErrSessionNotFound {
-			writeError(w, http.StatusNotFound, "session not found")
+			httpapi.WriteError(w, http.StatusNotFound, "session not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 

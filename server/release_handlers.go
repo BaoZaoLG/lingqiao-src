@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/lingqiao/server/internal/httpapi"
+
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -27,21 +29,21 @@ type updateCheckRequest struct {
 }
 
 func (h *APIHandler) HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	body, err := readBody(r)
+	body, err := httpapi.ReadBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := verifyRequestHMAC(r, string(body)); err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	var req updateCheckRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeProblem(w, r, http.StatusBadRequest, "INVALID_JSON", "Invalid JSON", "请求体不是有效 JSON")
+		httpapi.WriteProblem(w, r, http.StatusBadRequest, "INVALID_JSON", "Invalid JSON", "请求体不是有效 JSON")
 		return
 	}
 	if req.Channel == "" {
@@ -51,12 +53,12 @@ func (h *APIHandler) HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		req.CardCode = req.Card
 	}
 	if _, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.CardCode); err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	svc := currentReleaseService()
 	if svc == nil {
-		writeError(w, http.StatusServiceUnavailable, "release service unavailable")
+		httpapi.WriteError(w, http.StatusServiceUnavailable, "release service unavailable")
 		return
 	}
 	selected, err := releasesvc.NewSelector(svc.store).Select(r.Context(), releasesvc.ClientContext{
@@ -67,28 +69,28 @@ func (h *APIHandler) HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		AgentID:   req.AgentID,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if selected == nil {
-		writeOK(w, map[string]interface{}{"update_available": false})
+		httpapi.WriteOK(w, map[string]interface{}{"update_available": false})
 		return
 	}
 	manifest := manifestFromSelection(*selected)
 	signed, err := svc.signer.Sign(manifest)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "manifest signing failed")
+		httpapi.WriteError(w, http.StatusInternalServerError, "manifest signing failed")
 		return
 	}
 	manifestPayload, err := json.Marshal(signed.Manifest)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "manifest encoding failed")
+		httpapi.WriteError(w, http.StatusInternalServerError, "manifest encoding failed")
 		return
 	}
 	manifestHMAC := ""
 	derivedKey, err := getDerivedKey(r.Header.Get("X-Client-ID"))
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, "client key unavailable")
+		httpapi.WriteError(w, http.StatusUnauthorized, "client key unavailable")
 		return
 	}
 	manifestHMAC = SignHMAC(string(derivedKey), string(manifestPayload))
@@ -101,7 +103,7 @@ func (h *APIHandler) HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		Type:      releasesvc.EventOffered,
 		CreatedAt: time.Now().UTC(),
 	})
-	writeOK(w, map[string]interface{}{
+	httpapi.WriteOK(w, map[string]interface{}{
 		"update_available": true,
 		"manifest":         signed.Manifest,
 		"manifest_payload": base64.StdEncoding.EncodeToString(manifestPayload),
@@ -130,26 +132,26 @@ func manifestFromSelection(selected releasesvc.SelectedRelease) releasesvc.Manif
 }
 
 func (h *APIHandler) HandleUpdateEvent(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
-	body, err := readBody(r)
+	body, err := httpapi.ReadBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := verifyRequestHMAC(r, string(body)); err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	var event releasesvc.ReleaseEvent
 	if err := json.Unmarshal(body, &event); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON")
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 	// Validate required fields — reject empty/malformed events
 	if event.ReleaseID == "" || event.Type == "" {
-		writeError(w, http.StatusBadRequest, "release_id and type are required")
+		httpapi.WriteError(w, http.StatusBadRequest, "release_id and type are required")
 		return
 	}
 	// Sanitize: cap detail length to prevent abuse
@@ -158,22 +160,22 @@ func (h *APIHandler) HandleUpdateEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	svc := currentReleaseService()
 	if svc == nil {
-		writeError(w, http.StatusServiceUnavailable, "release service unavailable")
+		httpapi.WriteError(w, http.StatusServiceUnavailable, "release service unavailable")
 		return
 	}
 	if err := svc.store.RecordEvent(r.Context(), event); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeOK(w, nil)
+	httpapi.WriteOK(w, nil)
 }
 
 func (h *APIHandler) HandleUpdatePackageDownload(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
 	if err := verifyRequestHMAC(r, r.URL.Path); err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	if _, err := h.sessionsSvc.ValidateBound(r.Context(), r.Header.Get("X-Session-Token"), r.Header.Get("X-Machine-ID"), r.Header.Get("X-Card-Code")); err != nil {
@@ -181,38 +183,38 @@ func (h *APIHandler) HandleUpdatePackageDownload(w http.ResponseWriter, r *http.
 		if r.Header.Get("X-Session-Token") == "" {
 			status = http.StatusBadRequest
 		}
-		writeError(w, status, err.Error())
+		httpapi.WriteError(w, status, err.Error())
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/api/v1/update/package/")
 	if id == "" || strings.Contains(id, "/") || strings.Contains(id, "..") {
-		writeError(w, http.StatusBadRequest, "invalid package id")
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid package id")
 		return
 	}
 	svc := currentReleaseService()
 	if svc == nil {
-		writeError(w, http.StatusServiceUnavailable, "release service unavailable")
+		httpapi.WriteError(w, http.StatusServiceUnavailable, "release service unavailable")
 		return
 	}
 	pkg, err := svc.store.GetPackage(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "package not found")
+		httpapi.WriteError(w, http.StatusNotFound, "package not found")
 		return
 	}
 	path, err := svc.resolvePackagePath(pkg)
 	if err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		httpapi.WriteError(w, http.StatusForbidden, err.Error())
 		return
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "package file not found")
+		httpapi.WriteError(w, http.StatusNotFound, "package file not found")
 		return
 	}
 	defer file.Close()
 	stat, err := file.Stat()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "package stat failed")
+		httpapi.WriteError(w, http.StatusInternalServerError, "package stat failed")
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -246,7 +248,7 @@ func (s *releaseService) resolvePackagePath(pkg releasesvc.ReleasePackage) (stri
 func (h *AdminHandler) HandleReleases(w http.ResponseWriter, r *http.Request) {
 	svc := currentReleaseService()
 	if svc == nil {
-		writeError(w, http.StatusServiceUnavailable, "release service unavailable")
+		httpapi.WriteError(w, http.StatusServiceUnavailable, "release service unavailable")
 		return
 	}
 	switch r.Method {
@@ -255,14 +257,14 @@ func (h *AdminHandler) HandleReleases(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		h.createRelease(w, r, svc)
 	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		httpapi.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
 func (h *AdminHandler) writeReleaseList(w http.ResponseWriter, r *http.Request, svc *releaseService) {
 	releases, err := svc.store.ListReleases(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	items := make([]map[string]interface{}, 0, len(releases))
@@ -275,7 +277,7 @@ func (h *AdminHandler) writeReleaseList(w http.ResponseWriter, r *http.Request, 
 			"metrics":  metrics,
 		})
 	}
-	writeOK(w, map[string]interface{}{"releases": items, "public_key": svc.signer.PublicKeyHex()})
+	httpapi.WriteOK(w, map[string]interface{}{"releases": items, "public_key": svc.signer.PublicKeyHex()})
 }
 
 func (h *AdminHandler) createRelease(w http.ResponseWriter, r *http.Request, svc *releaseService) {
@@ -288,12 +290,12 @@ func (h *AdminHandler) createRelease(w http.ResponseWriter, r *http.Request, svc
 		Notes          string                    `json:"notes"`
 		Targeting      releasesvc.TargetingRules `json:"targeting"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := httpapi.ReadJSON(r, &req); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.Version == "" {
-		writeError(w, http.StatusBadRequest, "version is required")
+		httpapi.WriteError(w, http.StatusBadRequest, "version is required")
 		return
 	}
 	if req.Channel == "" {
@@ -315,11 +317,11 @@ func (h *AdminHandler) createRelease(w http.ResponseWriter, r *http.Request, svc
 		CreatedAt:      time.Now().UTC(),
 	}
 	if err := svc.store.SaveRelease(r.Context(), release); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	h.recordReleaseAudit("release_created", release, "")
-	writeOK(w, map[string]interface{}{"release": release})
+	httpapi.WriteOK(w, map[string]interface{}{"release": release})
 }
 
 func newReleaseID(version string, channel releasesvc.Channel) string {
@@ -330,13 +332,13 @@ func newReleaseID(version string, channel releasesvc.Channel) string {
 func (h *AdminHandler) HandleReleaseRoute(w http.ResponseWriter, r *http.Request) {
 	svc := currentReleaseService()
 	if svc == nil {
-		writeError(w, http.StatusServiceUnavailable, "release service unavailable")
+		httpapi.WriteError(w, http.StatusServiceUnavailable, "release service unavailable")
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/admin/api/releases/")
 	parts := strings.Split(strings.Trim(rest, "/"), "/")
 	if len(parts) != 2 || parts[0] == "" {
-		writeError(w, http.StatusNotFound, "release route not found")
+		httpapi.WriteError(w, http.StatusNotFound, "release route not found")
 		return
 	}
 	releaseID, action := parts[0], parts[1]
@@ -352,17 +354,17 @@ func (h *AdminHandler) HandleReleaseRoute(w http.ResponseWriter, r *http.Request
 	case "packages":
 		h.uploadReleasePackage(w, r, svc, releaseID)
 	default:
-		writeError(w, http.StatusNotFound, "release action not found")
+		httpapi.WriteError(w, http.StatusNotFound, "release action not found")
 	}
 }
 
 func (h *AdminHandler) updateReleaseStatus(w http.ResponseWriter, r *http.Request, svc *releaseService, releaseID string, status releasesvc.ReleaseStatus) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 	release, err := svc.store.GetRelease(r.Context(), releaseID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "release not found")
+		httpapi.WriteError(w, http.StatusNotFound, "release not found")
 		return
 	}
 	now := time.Now().UTC()
@@ -375,7 +377,7 @@ func (h *AdminHandler) updateReleaseStatus(w http.ResponseWriter, r *http.Reques
 		release.PausedAt = &now
 	}
 	if err := svc.store.SaveRelease(r.Context(), release); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	action := "release_status_changed"
@@ -386,22 +388,22 @@ func (h *AdminHandler) updateReleaseStatus(w http.ResponseWriter, r *http.Reques
 		action = "release_paused"
 	}
 	h.recordReleaseAudit(action, release, fmt.Sprintf("status=%s", status))
-	writeOK(w, map[string]interface{}{"release": release})
+	httpapi.WriteOK(w, map[string]interface{}{"release": release})
 }
 
 func (h *AdminHandler) rollbackRelease(w http.ResponseWriter, r *http.Request, svc *releaseService, releaseID string) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 	var req struct {
 		TargetReleaseID string `json:"target_release_id"`
 	}
 	if r.Body != nil {
-		_ = readJSON(r, &req)
+		_ = httpapi.ReadJSON(r, &req)
 	}
 	release, err := svc.store.GetRelease(r.Context(), releaseID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "release not found")
+		httpapi.WriteError(w, http.StatusNotFound, "release not found")
 		return
 	}
 	now := time.Now().UTC()
@@ -409,46 +411,46 @@ func (h *AdminHandler) rollbackRelease(w http.ResponseWriter, r *http.Request, s
 	release.RolledBackAt = &now
 	release.RolledBackTo = req.TargetReleaseID
 	if err := svc.store.SaveRelease(r.Context(), release); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	h.recordReleaseAudit("release_rolled_back", release, fmt.Sprintf("target_release_id=%s", req.TargetReleaseID))
-	writeOK(w, map[string]interface{}{"release": release})
+	httpapi.WriteOK(w, map[string]interface{}{"release": release})
 }
 
 func (h *AdminHandler) releaseEvents(w http.ResponseWriter, r *http.Request, svc *releaseService, releaseID string) {
-	if !requireMethod(w, r, http.MethodGet) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
 	events, err := svc.store.ListEvents(r.Context(), releaseID, 100)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	metrics, err := svc.store.ReleaseMetrics(r.Context(), releaseID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeOK(w, map[string]interface{}{"events": events, "metrics": metrics})
+	httpapi.WriteOK(w, map[string]interface{}{"events": events, "metrics": metrics})
 }
 
 func (h *AdminHandler) uploadReleasePackage(w http.ResponseWriter, r *http.Request, svc *releaseService, releaseID string) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 	release, err := svc.store.GetRelease(r.Context(), releaseID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "release not found")
+		httpapi.WriteError(w, http.StatusNotFound, "release not found")
 		return
 	}
 	if err := r.ParseMultipartForm(500 << 20); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid package upload")
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid package upload")
 		return
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "file is required")
+		httpapi.WriteError(w, http.StatusBadRequest, "file is required")
 		return
 	}
 	defer file.Close()
@@ -458,21 +460,21 @@ func (h *AdminHandler) uploadReleasePackage(w http.ResponseWriter, r *http.Reque
 	}
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 	if ext != ".exe" && ext != ".msi" {
-		writeError(w, http.StatusBadRequest, "only .exe or .msi packages are supported")
+		httpapi.WriteError(w, http.StatusBadRequest, "only .exe or .msi packages are supported")
 		return
 	}
 	filename := sanitizePackageFilename(header.Filename, release.Version)
 	relDir := filepath.Join("updates", release.ID)
 	absDir := filepath.Join(svc.dataDir, relDir)
 	if err := os.MkdirAll(absDir, 0755); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create package directory")
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to create package directory")
 		return
 	}
 	relPath := filepath.Join(relDir, filename)
 	absPath := filepath.Join(svc.dataDir, relPath)
 	dst, err := os.Create(absPath)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create package file")
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to create package file")
 		return
 	}
 	hash := sha256.New()
@@ -480,7 +482,7 @@ func (h *AdminHandler) uploadReleasePackage(w http.ResponseWriter, r *http.Reque
 	closeErr := dst.Close()
 	if err != nil || closeErr != nil {
 		_ = os.Remove(absPath)
-		writeError(w, http.StatusInternalServerError, "failed to save package")
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to save package")
 		return
 	}
 	pkg := releasesvc.ReleasePackage{
@@ -494,11 +496,11 @@ func (h *AdminHandler) uploadReleasePackage(w http.ResponseWriter, r *http.Reque
 		CreatedAt: time.Now().UTC(),
 	}
 	if err := svc.store.SavePackage(r.Context(), pkg); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	h.recordReleaseAudit("release_package_uploaded", release, fmt.Sprintf("package_id=%s kind=%s sha256=%s size=%d", pkg.ID, pkg.Kind, pkg.SHA256, pkg.FileSize))
-	writeOK(w, map[string]interface{}{"package": pkg})
+	httpapi.WriteOK(w, map[string]interface{}{"package": pkg})
 }
 
 func (h *AdminHandler) recordReleaseAudit(action string, release releasesvc.Release, extra string) {

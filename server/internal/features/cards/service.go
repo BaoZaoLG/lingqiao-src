@@ -56,6 +56,29 @@ func (s *Service) Create(ctx context.Context, duration time.Duration, note strin
 	return card, nil
 }
 
+func (s *Service) CreateWithCode(ctx context.Context, code string, duration time.Duration, note string, maxSessions int, agentID string) (Card, error) {
+	if duration <= 0 {
+		return Card{}, ErrInvalidDuration
+	}
+	if maxSessions < 1 {
+		return Card{}, ErrInvalidSessions
+	}
+	now := s.now()
+	card := Card{
+		Code:        code,
+		AgentID:     agentID,
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(duration),
+		Status:      StatusActive,
+		Note:        note,
+		MaxSessions: maxSessions,
+	}
+	if err := s.repo.Insert(ctx, card); err != nil {
+		return Card{}, err
+	}
+	return card, nil
+}
+
 func (s *Service) BatchCreate(ctx context.Context, count int, duration time.Duration, note string, maxSessions int, agentID string) ([]Card, error) {
 	if count <= 0 {
 		return nil, errors.New("count must be positive")
@@ -249,4 +272,48 @@ func (s *Service) BulkUpdateCardsDetailed(ctx context.Context, codes []string, a
 	}
 
 	return result, nil
+}
+
+func (s *Service) AllCards(ctx context.Context) ([]Card, error) {
+	return s.repo.List(ctx, ListFilter{})
+}
+
+func (s *Service) SearchCards(ctx context.Context, query, status, machineID string) ([]Card, error) {
+	return s.repo.List(ctx, ListFilter{
+		Query:     query,
+		Status:    Status(status),
+		MachineID: machineID,
+	})
+}
+
+func (s *Service) GetCard(ctx context.Context, code string) (Card, error) {
+	return s.repo.Get(ctx, code)
+}
+
+func (s *Service) GetCardsByMachine(ctx context.Context, machineID string) ([]Card, error) {
+	return s.repo.List(ctx, ListFilter{
+		MachineID: machineID,
+	})
+}
+
+func (s *Service) AgentCards(ctx context.Context, agentID string) ([]Card, error) {
+	return s.repo.List(ctx, ListFilter{AgentID: agentID})
+}
+
+func (s *Service) AgentStats(ctx context.Context, agentID string) (total, active, expired int, err error) {
+	cardsList, err := s.repo.List(ctx, ListFilter{AgentID: agentID})
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	now := s.now()
+	for _, c := range cardsList {
+		total++
+		if c.Status == StatusActive && now.Before(c.ExpiresAt) {
+			active++
+		}
+		if now.After(c.ExpiresAt) || c.Status == StatusExpired {
+			expired++
+		}
+	}
+	return total, active, expired, nil
 }

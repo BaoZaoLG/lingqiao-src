@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/lingqiao/server/internal/httpapi"
+
 	"net/http"
 	"os"
 	"strings"
@@ -30,12 +32,12 @@ func corsMiddleware(next http.Handler) http.Handler {
 		}
 
 		applyBodyLimit(w, r)
-		setSecurityHeaders(w)
+		httpapi.SetSecurityHeaders(w)
 
 		if r.URL.Path != "/api/v1/dll" &&
 			!strings.HasPrefix(r.URL.Path, "/api/v1/update/package/") &&
 			!strings.HasPrefix(r.URL.Path, "/admin/api/update/download") {
-			setCSP(w)
+			httpapi.SetCSP(w)
 		}
 
 		next.ServeHTTP(w, r)
@@ -55,8 +57,8 @@ func corsMiddlewareAgent(next http.Handler) http.Handler {
 		}
 
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-		setSecurityHeaders(w)
-		setCSP(w)
+		httpapi.SetSecurityHeaders(w)
+		httpapi.SetCSP(w)
 
 		next.ServeHTTP(w, r)
 	})

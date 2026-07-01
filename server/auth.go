@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -215,4 +216,20 @@ func SignHMAC(secret, data string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(data))
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// verifyRequestHMAC verifies HMAC from standard request headers.
+func verifyRequestHMAC(r *http.Request, body string) error {
+	sig := r.Header.Get("X-HMAC-Signature")
+	clientID := r.Header.Get("X-Client-ID")
+	timestamp := r.Header.Get("X-Timestamp")
+	nonce := r.Header.Get("X-Nonce")
+	if sig == "" || clientID == "" || timestamp == "" || nonce == "" {
+		return fmt.Errorf("missing HMAC signature, client ID, timestamp, or nonce")
+	}
+	if err := VerifyHMAC(clientID, body, sig, timestamp, nonce); err != nil {
+		log.Printf("[AUTH] HMAC verification failed from %s: %v", r.RemoteAddr, err)
+		return fmt.Errorf("HMAC verification failed")
+	}
+	return nil
 }

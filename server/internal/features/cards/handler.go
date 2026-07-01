@@ -47,7 +47,7 @@ func clampInt(val *int, min, max, def int) {
 
 func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 	if r.Method != method {
-		httpapi.WriteError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
+		httpapi.WriteError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return false
 	}
 	return true
@@ -77,7 +77,7 @@ func (h *Handler) HandleListCards(w http.ResponseWriter, r *http.Request) {
 
 	cards, err := h.repo.List(r.Context(), filter)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -131,7 +131,7 @@ func (h *Handler) HandleListCards(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleGenerateCard(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
@@ -140,8 +140,8 @@ func (h *Handler) HandleGenerateCard(w http.ResponseWriter, r *http.Request) {
 		MaxSessions int    `json:"max_sessions"`
 		Note        string `json:"note"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+	if err := httpapi.ReadJSON(r, &req); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -153,7 +153,7 @@ func (h *Handler) HandleGenerateCard(w http.ResponseWriter, r *http.Request) {
 
 	card, err := h.svc.Create(r.Context(), time.Duration(req.Duration)*time.Hour, req.Note, req.MaxSessions, "")
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	log.Printf("[ADMIN] Generated card: %s", card.Code)
@@ -162,7 +162,7 @@ func (h *Handler) HandleGenerateCard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleBatchGenerateCards(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
@@ -172,8 +172,8 @@ func (h *Handler) HandleBatchGenerateCards(w http.ResponseWriter, r *http.Reques
 		MaxSessions int    `json:"max_sessions"`
 		Note        string `json:"note"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+	if err := httpapi.ReadJSON(r, &req); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -186,7 +186,7 @@ func (h *Handler) HandleBatchGenerateCards(w http.ResponseWriter, r *http.Reques
 
 	cards, err := h.svc.BatchCreate(r.Context(), req.Count, time.Duration(req.Duration)*time.Hour, req.Note, req.MaxSessions, "")
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	log.Printf("[ADMIN] Batch generated %d cards", len(cards))
@@ -195,7 +195,7 @@ func (h *Handler) HandleBatchGenerateCards(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handler) HandleUpdateCard(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
@@ -204,12 +204,12 @@ func (h *Handler) HandleUpdateCard(w http.ResponseWriter, r *http.Request) {
 		Action      string `json:"action"`
 		ExtendHours int    `json:"extend_hours"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+	if err := httpapi.ReadJSON(r, &req); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.Code == "" {
-		httpapi.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "code is required")
+		httpapi.WriteError(w, http.StatusBadRequest, "code is required")
 		return
 	}
 
@@ -229,12 +229,12 @@ func (h *Handler) HandleUpdateCard(w http.ResponseWriter, r *http.Request) {
 	case "unbind":
 		err = h.svc.Unbind(r.Context(), req.Code)
 	default:
-		httpapi.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "unknown action")
+		httpapi.WriteError(w, http.StatusBadRequest, "unknown action")
 		return
 	}
 
 	if err != nil {
-		httpapi.WriteError(w, http.StatusNotFound, "NOT_FOUND", err.Error())
+		httpapi.WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -254,7 +254,7 @@ func (h *Handler) HandleUpdateCard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleUpdateCardDetails(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
@@ -266,17 +266,17 @@ func (h *Handler) HandleUpdateCardDetails(w http.ResponseWriter, r *http.Request
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	r.Body.Close()
 
 	if err := json.Unmarshal(body, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.Code == "" {
-		httpapi.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "code is required")
+		httpapi.WriteError(w, http.StatusBadRequest, "code is required")
 		return
 	}
 
@@ -292,9 +292,9 @@ func (h *Handler) HandleUpdateCardDetails(w http.ResponseWriter, r *http.Request
 
 	if err := h.svc.UpdateDetails(r.Context(), req.Code, notePtr, maxSessPtr); err != nil {
 		if errors.Is(err, ErrInvalidSessions) {
-			httpapi.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		} else {
-			httpapi.WriteError(w, http.StatusNotFound, "NOT_FOUND", err.Error())
+			httpapi.WriteError(w, http.StatusNotFound, err.Error())
 		}
 		return
 	}
@@ -304,7 +304,7 @@ func (h *Handler) HandleUpdateCardDetails(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handler) HandleBulkCards(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
@@ -314,18 +314,18 @@ func (h *Handler) HandleBulkCards(w http.ResponseWriter, r *http.Request) {
 		ExtendHours int      `json:"extend_hours"`
 		DryRun      bool     `json:"dry_run"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+	if err := httpapi.ReadJSON(r, &req); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if len(req.Codes) == 0 {
-		httpapi.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", "codes is required")
+		httpapi.WriteError(w, http.StatusBadRequest, "codes is required")
 		return
 	}
 
 	result, err := h.svc.BulkUpdateCardsDetailed(r.Context(), req.Codes, req.Action, req.ExtendHours, req.DryRun)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 

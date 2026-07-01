@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	agentsvc "github.com/lingqiao/server/internal/features/agents"
+	"github.com/lingqiao/server/internal/features/cards"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -159,13 +161,13 @@ type agentLeaderboardItem struct {
 	ExpiredCards int    `json:"expired_cards"`
 }
 
-func buildAgentLeaderboard(cards []*Card, agents []*Agent, now time.Time) []agentLeaderboardItem {
-	names := make(map[string]string, len(agents))
-	for _, agent := range agents {
+func buildAgentLeaderboard(cardsList []cards.Card, accs []agentsvc.Account, now time.Time) []agentLeaderboardItem {
+	names := make(map[string]string, len(accs))
+	for _, agent := range accs {
 		names[agent.ID] = agent.Username
 	}
 	byAgent := make(map[string]*agentLeaderboardItem)
-	for _, card := range cards {
+	for _, card := range cardsList {
 		if card.AgentID == "" {
 			continue
 		}
@@ -178,10 +180,10 @@ func buildAgentLeaderboard(cards []*Card, agents []*Agent, now time.Time) []agen
 			byAgent[card.AgentID] = item
 		}
 		item.TotalCards++
-		if card.Status == CardActive && card.ExpiresAt.After(now) {
+		if card.Status == cards.StatusActive && card.ExpiresAt.After(now) {
 			item.ActiveCards++
 		}
-		if card.Status == CardExpired || card.ExpiresAt.Before(now) {
+		if card.Status == cards.StatusExpired || card.ExpiresAt.Before(now) {
 			item.ExpiredCards++
 		}
 	}
@@ -192,35 +194,6 @@ func buildAgentLeaderboard(cards []*Card, agents []*Agent, now time.Time) []agen
 	sort.Slice(result, func(i, j int) bool { return result[i].TotalCards > result[j].TotalCards })
 	if len(result) > 10 {
 		result = result[:10]
-	}
-	return result
-}
-
-func filterCardsAdvanced(cards []*Card, agentID, bound, expiresBefore, expiresAfter, maxSessions string) []*Card {
-	before, hasBefore := parseTimeQuery(expiresBefore)
-	after, hasAfter := parseTimeQuery(expiresAfter)
-	maxSess, hasMaxSess := parseIntQuery(maxSessions)
-	result := make([]*Card, 0, len(cards))
-	for _, card := range cards {
-		if agentID != "" && card.AgentID != agentID {
-			continue
-		}
-		if bound == "true" && card.MachineID == "" {
-			continue
-		}
-		if bound == "false" && card.MachineID != "" {
-			continue
-		}
-		if hasBefore && card.ExpiresAt.After(before) {
-			continue
-		}
-		if hasAfter && card.ExpiresAt.Before(after) {
-			continue
-		}
-		if hasMaxSess && card.MaxSessions != maxSess {
-			continue
-		}
-		result = append(result, card)
 	}
 	return result
 }

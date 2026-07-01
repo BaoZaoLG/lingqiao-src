@@ -27,6 +27,7 @@ type Card struct {
 
 type Repository interface {
 	Get(ctx context.Context, code string) (Card, error)
+	Insert(ctx context.Context, card Card) error
 	Save(ctx context.Context, card Card) error
 	BatchSave(ctx context.Context, cards []Card) error
 	List(ctx context.Context, filter ListFilter) ([]Card, error)

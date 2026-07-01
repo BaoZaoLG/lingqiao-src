@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/lingqiao/server/internal/httpapi"
+
 	"crypto/sha256"
 	"encoding/hex"
 
@@ -633,58 +635,58 @@ func removeString(values []string, target string) []string {
 
 // HandleChatSend ...
 func (h *APIHandler) HandleChatSend(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 	req, err := h.readSignedRequest(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	session := toLegacySession(domainSession)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	msg, err := h.chat.Add(session, req.Content, req.ReplyToID)
 	if err != nil {
 		if err.Error() == "muted" {
-			writeError(w, http.StatusForbidden, "你已被禁言，暂时无法发送消息")
+			httpapi.WriteError(w, http.StatusForbidden, "你已被禁言，暂时无法发送消息")
 			return
 		}
 		if err.Error() == "rate limited" {
-			writeError(w, http.StatusTooManyRequests, "发送过于频繁，请稍后再试")
+			httpapi.WriteError(w, http.StatusTooManyRequests, "发送过于频繁，请稍后再试")
 			return
 		}
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeOK(w, map[string]interface{}{"message": msg})
+	httpapi.WriteOK(w, map[string]interface{}{"message": msg})
 }
 
 // HandleChatProfile ...
 func (h *APIHandler) HandleChatProfile(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 	req, err := h.readSignedRequest(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	session := toLegacySession(domainSession)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 
@@ -696,94 +698,94 @@ func (h *APIHandler) HandleChatProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if err.Error() == "muted" {
-			writeError(w, http.StatusForbidden, "你已被禁言，暂时无法修改昵称")
+			httpapi.WriteError(w, http.StatusForbidden, "你已被禁言，暂时无法修改昵称")
 			return
 		}
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeOK(w, map[string]interface{}{"profile": profile})
+	httpapi.WriteOK(w, map[string]interface{}{"profile": profile})
 }
 
 // HandleChatReact ...
 func (h *APIHandler) HandleChatReact(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 	req, err := h.readSignedRequest(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	session := toLegacySession(domainSession)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	msg, err := h.chat.React(session, req.MessageID, req.Reaction)
 	if err != nil {
 		if err.Error() == "muted" {
-			writeError(w, http.StatusForbidden, "你已被禁言，暂时无法添加表情")
+			httpapi.WriteError(w, http.StatusForbidden, "你已被禁言，暂时无法添加表情")
 			return
 		}
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeOK(w, map[string]interface{}{"message": msg})
+	httpapi.WriteOK(w, map[string]interface{}{"message": msg})
 }
 
 // HandleChatPresence ...
 func (h *APIHandler) HandleChatPresence(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 	req, err := h.readSignedRequest(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	session := toLegacySession(domainSession)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	online, err := h.chat.TouchPresence(session)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeOK(w, map[string]interface{}{"online": online})
+	httpapi.WriteOK(w, map[string]interface{}{"online": online})
 }
 
 // HandleChatMessages ...
 func (h *APIHandler) HandleChatMessages(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 	req, err := h.readSignedRequest(r)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	session := toLegacySession(domainSession)
 	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	writeOK(w, map[string]interface{}{"messages": h.chat.List(req.AfterID, session)})
+	httpapi.WriteOK(w, map[string]interface{}{"messages": h.chat.List(req.AfterID, session)})
 }

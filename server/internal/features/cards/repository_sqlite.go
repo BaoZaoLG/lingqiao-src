@@ -46,6 +46,29 @@ func (r *SQLiteRepository) Get(ctx context.Context, code string) (Card, error) {
 	return card, nil
 }
 
+func (r *SQLiteRepository) Insert(ctx context.Context, card Card) error {
+	var activatedAt *time.Time
+	if card.ActivatedAt != nil {
+		activatedAt = card.ActivatedAt
+	}
+	query := `
+		INSERT INTO cards (code, machine_id, agent_id, created_at, activated_at, expires_at, status, note, max_sessions)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err := r.db.ExecContext(ctx, query,
+		card.Code,
+		card.MachineID,
+		card.AgentID,
+		card.CreatedAt,
+		activatedAt,
+		card.ExpiresAt,
+		card.Status,
+		card.Note,
+		card.MaxSessions,
+	)
+	return err
+}
+
 func (r *SQLiteRepository) Save(ctx context.Context, card Card) error {
 	var activatedAt *time.Time
 	if card.ActivatedAt != nil {

@@ -1,13 +1,19 @@
 package main
 
 import (
+	"github.com/lingqiao/server/internal/httpapi"
+
+	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lingqiao/server/internal/features/cards"
 )
 
 // ── Card Management ──────────────────────────────────────────────────────────
@@ -16,14 +22,18 @@ import (
 // The following handlers are pending migration or are related to Import/Export.
 
 func (h *AdminHandler) HandleExportCards(w http.ResponseWriter, r *http.Request) {
-	cards := h.cm.AllCards()
+	cardsList, err := h.cardsSvc.AllCards(r.Context())
+	if err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to get cards")
+		return
+	}
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", "attachment; filename=cards_export.csv")
 	w.Write([]byte{0xEF, 0xBB, 0xBF})
 	writer := csv.NewWriter(w)
 	writer.UseCRLF = true
 	_ = writer.Write([]string{"code", "status", "note", "max_sessions", "machine_id", "created_at", "activated_at", "expires_at"})
-	for _, c := range cards {
+	for _, c := range cardsList {
 		activatedAt := ""
 		if c.ActivatedAt != nil {
 			activatedAt = c.ActivatedAt.Format("2006-01-02 15:04:05")
@@ -43,7 +53,7 @@ func (h *AdminHandler) HandleExportCards(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *AdminHandler) HandleImportCards(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
 
@@ -53,12 +63,12 @@ func (h *AdminHandler) HandleImportCards(w http.ResponseWriter, r *http.Request)
 		MaxSessions int    `json:"max_sessions"`
 		DryRun      bool   `json:"dry_run"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := httpapi.ReadJSON(r, &req); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.CSV == "" {
-		writeError(w, http.StatusBadRequest, "CSV data is required")
+		httpapi.WriteError(w, http.StatusBadRequest, "CSV data is required")
 		return
 	}
 	clampInt(&req.Duration, 1, 17520, 720)
@@ -68,11 +78,11 @@ func (h *AdminHandler) HandleImportCards(w http.ResponseWriter, r *http.Request)
 	reader.FieldsPerRecord = -1
 	records, err := reader.ReadAll()
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid CSV: "+err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid CSV: "+err.Error())
 		return
 	}
 
-	report := h.importCardsFromRecords(records, time.Duration(req.Duration)*time.Hour, req.MaxSessions, req.DryRun)
+	report := h.importCardsFromRecords(r.Context(), records, time.Duration(req.Duration)*time.Hour, req.MaxSessions, req.DryRun)
 	if !req.DryRun && report.Imported > 0 {
 		h.cm.RecordAudit(AuditEntry{
 			Action: "cards_import_completed",
@@ -84,7 +94,7 @@ func (h *AdminHandler) HandleImportCards(w http.ResponseWriter, r *http.Request)
 	} else {
 		log.Printf("[ADMIN] Imported %d cards from CSV", report.Imported)
 	}
-	writeOK(w, map[string]interface{}{"imported": report.Imported, "dry_run": req.DryRun, "report": report})
+	httpapi.WriteOK(w, map[string]interface{}{"imported": report.Imported, "dry_run": req.DryRun, "report": report})
 }
 
 type cardImportItem struct {
@@ -105,7 +115,7 @@ type cardImportReport struct {
 	Items      []cardImportItem `json:"items"`
 }
 
-func (h *AdminHandler) importCardsFromRecords(records [][]string, duration time.Duration, maxSessions int, dryRun bool) cardImportReport {
+func (h *AdminHandler) importCardsFromRecords(ctx context.Context, records [][]string, duration time.Duration, maxSessions int, dryRun bool) cardImportReport {
 	report := cardImportReport{Items: make([]cardImportItem, 0, len(records))}
 	seen := make(map[string]struct{}, len(records))
 	for idx, record := range records {
@@ -137,16 +147,25 @@ func (h *AdminHandler) importCardsFromRecords(records [][]string, duration time.
 			continue
 		}
 		formatted := FormatCardCode(normalized)
-		if _, exists := seen[normalized]; exists || h.cm.GetCard(formatted) != nil {
+		if _, exists := seen[normalized]; exists {
 			report.Duplicates++
 			report.Items = append(report.Items, cardImportItem{Row: rowNumber, Code: formatted, Note: note, Status: "duplicate", Message: "card already exists"})
+			continue
+		}
+		if _, err := h.cardsSvc.GetCard(ctx, formatted); err == nil {
+			report.Duplicates++
+			report.Items = append(report.Items, cardImportItem{Row: rowNumber, Code: formatted, Note: note, Status: "duplicate", Message: "card already exists"})
+			continue
+		} else if !errors.Is(err, cards.ErrNotFound) {
+			report.Invalid++
+			report.Items = append(report.Items, cardImportItem{Row: rowNumber, Code: formatted, Note: note, Status: "error", Message: "database error"})
 			continue
 		}
 		seen[normalized] = struct{}{}
 		report.ValidRows++
 		item := cardImportItem{Row: rowNumber, Code: formatted, Note: note, Status: "valid"}
 		if !dryRun {
-			if _, err := h.cm.GenerateCardWithCode(formatted, duration, note, maxSessions, ""); err != nil {
+			if _, err := h.cardsSvc.CreateWithCode(ctx, formatted, duration, note, maxSessions, ""); err != nil {
 				report.Invalid++
 				report.ValidRows--
 				item.Status = "invalid"
@@ -154,6 +173,12 @@ func (h *AdminHandler) importCardsFromRecords(records [][]string, duration time.
 			} else {
 				report.Imported++
 				item.Status = "imported"
+				h.cm.RecordAudit(AuditEntry{
+					Time:   time.Now(),
+					Action: "card_imported",
+					Card:   formatted,
+					Detail: fmt.Sprintf("duration=%s max_sessions=%d", duration, maxSessions),
+				})
 			}
 		}
 		report.Items = append(report.Items, item)
