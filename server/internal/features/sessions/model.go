@@ -16,13 +16,13 @@ type Session struct {
 
 type CardSnapshot struct {
 	Code        string
+	Status      string
+	Note        string
 	MachineID   string
 	AgentID     string
 	CreatedAt   time.Time
 	ActivatedAt *time.Time
 	ExpiresAt   time.Time
-	Status      string
-	Note        string
 	MaxSessions int
 }
 
@@ -43,18 +43,23 @@ type HeartbeatInput struct {
 
 type DeactivateInput struct {
 	SessionToken string
+	MachineID    string
+	CardCode     string
 	Unbind       bool
+	IsAdminForce bool
 }
 
 type ListFilter struct {
+	CardCode   string
+	MachineID  string
 	ActiveOnly bool
 	Page       int
 	PerPage    int
 }
 
 type ListResult struct {
-	Sessions []Session
-	Total    int
-	Page     int
-	PerPage  int
+	Items   []Session
+	Total   int
+	Page    int
+	PerPage int
 }

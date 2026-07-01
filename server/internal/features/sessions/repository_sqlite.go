@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -34,7 +35,7 @@ func (r *SQLiteRepository) RunInTx(ctx context.Context, fn func(Tx) error) error
 }
 
 func (r *SQLiteRepository) GetSession(ctx context.Context, token string) (Session, error) {
-	row := r.db.QueryRowContext(ctx, "SELECT token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr FROM client_sessions WHERE token = ?", token)
+	row := r.db.QueryRowContext(ctx, "SELECT token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr FROM sessions WHERE token = ?", token)
 	return scanSession(row)
 }
 
@@ -42,14 +43,29 @@ func (r *SQLiteRepository) ListSessions(ctx context.Context, filter ListFilter, 
 	var sessions []Session
 	var total int
 
-	query := "SELECT token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr FROM client_sessions"
-	countQuery := "SELECT COUNT(*) FROM client_sessions"
+	query := "SELECT token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr FROM sessions"
+	countQuery := "SELECT COUNT(*) FROM sessions"
 
+	var conditions []string
 	var args []interface{}
+
 	if filter.ActiveOnly {
-		query += " WHERE expires_at > ?"
-		countQuery += " WHERE expires_at > ?"
+		conditions = append(conditions, "expires_at > ?")
 		args = append(args, now.Format(time.RFC3339))
+	}
+	if filter.CardCode != "" {
+		conditions = append(conditions, "card_code = ?")
+		args = append(args, filter.CardCode)
+	}
+	if filter.MachineID != "" {
+		conditions = append(conditions, "machine_id = ?")
+		args = append(args, filter.MachineID)
+	}
+
+	if len(conditions) > 0 {
+		whereClause := " WHERE " + strings.Join(conditions, " AND ")
+		query += whereClause
+		countQuery += whereClause
 	}
 
 	err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total)
@@ -83,7 +99,7 @@ func (r *SQLiteRepository) ListSessions(ctx context.Context, filter ListFilter, 
 }
 
 func (r *SQLiteRepository) DeleteExpired(ctx context.Context, now time.Time) (int, error) {
-	res, err := r.db.ExecContext(ctx, "DELETE FROM client_sessions WHERE expires_at < ?", now.Format(time.RFC3339))
+	res, err := r.db.ExecContext(ctx, "DELETE FROM sessions WHERE expires_at < ?", now.Format(time.RFC3339))
 	if err != nil {
 		return 0, err
 	}
@@ -96,17 +112,29 @@ type sqliteTx struct {
 }
 
 func (t *sqliteTx) GetCard(ctx context.Context, code string) (CardSnapshot, error) {
-	row := t.tx.QueryRowContext(ctx, "SELECT code, machine_id, agent_id, created_at, activated_at, expires_at, status, note, max_sessions FROM cards WHERE code = ?", code)
-	
+	row := t.tx.QueryRowContext(ctx, "SELECT code, status, note, machine_id, agent_id, created_at, activated_at, expires_at, max_sessions FROM cards WHERE code = ?", code)
+
 	var c CardSnapshot
 	var createdStr, expiresStr, activatedStr, machineID, agentID, note sql.NullString
-	err := row.Scan(&c.Code, &machineID, &agentID, &createdStr, &activatedStr, &expiresStr, &c.Status, &note, &c.MaxSessions)
+
+	err := row.Scan(
+		&c.Code,
+		&c.Status,
+		&note,
+		&machineID,
+		&agentID,
+		&createdStr,
+		&activatedStr,
+		&expiresStr,
+		&c.MaxSessions,
+	)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return CardSnapshot{}, ErrCardNotFound
 		}
 		return CardSnapshot{}, err
 	}
+
 	c.MachineID = machineID.String
 	c.AgentID = agentID.String
 	c.Note = note.String
@@ -121,12 +149,12 @@ func (t *sqliteTx) GetCard(ctx context.Context, code string) (CardSnapshot, erro
 
 func (t *sqliteTx) IsCardBlacklisted(ctx context.Context, code string) (bool, error) {
 	var count int
-	err := t.tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM blacklist WHERE card_code = ? OR card_code = 'ALL'", code).Scan(&count)
+	err := t.tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM blacklist WHERE value = ? OR value = 'ALL'", code).Scan(&count)
 	return count > 0, err
 }
 
 func (t *sqliteTx) ListSessionsByCard(ctx context.Context, code string) ([]Session, error) {
-	rows, err := t.tx.QueryContext(ctx, "SELECT token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr FROM client_sessions WHERE card_code = ?", code)
+	rows, err := t.tx.QueryContext(ctx, "SELECT token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr FROM sessions WHERE card_code = ?", code)
 	if err != nil {
 		return nil, err
 	}
@@ -144,8 +172,8 @@ func (t *sqliteTx) ListSessionsByCard(ctx context.Context, code string) ([]Sessi
 }
 
 func (t *sqliteTx) InsertSession(ctx context.Context, session Session) error {
-	_, err := t.tx.ExecContext(ctx, 
-		"INSERT INTO client_sessions (token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+	_, err := t.tx.ExecContext(ctx,
+		"INSERT INTO sessions (token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		session.Token, session.CardCode, session.MachineID, session.Fingerprint, session.ClientVersion,
 		session.CreatedAt.Format(time.RFC3339), session.LastSeen.Format(time.RFC3339), session.ExpiresAt.Format(time.RFC3339), session.RemoteAddr,
 	)
@@ -153,20 +181,20 @@ func (t *sqliteTx) InsertSession(ctx context.Context, session Session) error {
 }
 
 func (t *sqliteTx) GetSession(ctx context.Context, token string) (Session, error) {
-	row := t.tx.QueryRowContext(ctx, "SELECT token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr FROM client_sessions WHERE token = ?", token)
+	row := t.tx.QueryRowContext(ctx, "SELECT token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr FROM sessions WHERE token = ?", token)
 	return scanSession(row)
 }
 
 func (t *sqliteTx) UpdateSession(ctx context.Context, session Session) error {
 	_, err := t.tx.ExecContext(ctx,
-		"UPDATE client_sessions SET client_version = ?, last_seen = ?, expires_at = ?, remote_addr = ? WHERE token = ?",
+		"UPDATE sessions SET client_version = ?, last_seen = ?, expires_at = ?, remote_addr = ? WHERE token = ?",
 		session.ClientVersion, session.LastSeen.Format(time.RFC3339), session.ExpiresAt.Format(time.RFC3339), session.RemoteAddr, session.Token,
 	)
 	return err
 }
 
 func (t *sqliteTx) DeleteSession(ctx context.Context, token string) error {
-	_, err := t.tx.ExecContext(ctx, "DELETE FROM client_sessions WHERE token = ?", token)
+	_, err := t.tx.ExecContext(ctx, "DELETE FROM sessions WHERE token = ?", token)
 	return err
 }
 

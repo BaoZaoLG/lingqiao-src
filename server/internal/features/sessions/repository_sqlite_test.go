@@ -14,7 +14,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("failed to open memory db: %v", err)
 	}
-	
+
 	// Create tables
 	_, err = db.Exec(`
 		CREATE TABLE cards (
@@ -28,7 +28,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 			note TEXT,
 			max_sessions INTEGER
 		);
-		CREATE TABLE client_sessions (
+		CREATE TABLE sessions (
 			token TEXT PRIMARY KEY,
 			card_code TEXT,
 			machine_id TEXT,
@@ -39,12 +39,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 			expires_at TEXT,
 			remote_addr TEXT
 		);
-		CREATE TABLE blacklist (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			card_code TEXT,
-			reason TEXT,
-			created_at TEXT
-		);
+		CREATE TABLE blacklist (value TEXT PRIMARY KEY, type TEXT, reason TEXT, created_at DATETIME);
 	`)
 	if err != nil {
 		t.Fatalf("failed to create tables: %v", err)
@@ -60,7 +55,7 @@ func TestSQLiteRepository(t *testing.T) {
 
 	now := time.Now()
 	nowStr := now.Format(time.RFC3339)
-	
+
 	// Insert test card
 	db.Exec("INSERT INTO cards (code, status, created_at, expires_at, max_sessions) VALUES ('C1', 'active', ?, ?, 1)", nowStr, nowStr)
 
@@ -111,7 +106,7 @@ func TestSQLiteRepository(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	err = repo.RunInTx(ctx, func(tx Tx) error {
 		c, _ := tx.GetCard(ctx, "C1")
 		if c.MachineID != "" {
@@ -119,7 +114,7 @@ func TestSQLiteRepository(t *testing.T) {
 		}
 		return nil
 	})
-	
+
 	// Test ListSessions
 	filter := ListFilter{ActiveOnly: true, Page: 1, PerPage: 10}
 	sessions, total, err := repo.ListSessions(ctx, filter, now.Add(-time.Hour)) // it should be active compared to -1h

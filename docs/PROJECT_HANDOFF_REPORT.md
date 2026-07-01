@@ -78,3 +78,15 @@ cd ..
 2. **客户端解耦**：拆分客户端巨型头文件（如 `ui/impl_chat.h`），分离 UI 表现层与核心业务控制器，增加防重打包校验。
 3. **安全规范增强**：引入服务端证书热加载，以及针对所有发布包（Manifest、MSI、Bundle）的完整数字签名链条。
 4. **管理控制平面**：实现细粒度的 RBAC 权限系统，增加版本分发大盘与代理提卡风控。
+
+## Sessions Module
+
+`server/internal/features/sessions` owns activation sessions, heartbeats, logout, forced logout, session validation, and expired-session cleanup.
+
+Runtime flow:
+
+1. Client signed request enters root compatibility handler or sessions handler.
+2. Handler delegates to `sessions.Service`.
+3. Service executes business rules and calls `sessions.Store`.
+4. SQLite repository updates existing `cards` and `sessions` tables in one transaction.
+5. Consumers such as chat, releases, payloads, scripts, and DLL download validate sessions through service methods.

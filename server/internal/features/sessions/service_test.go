@@ -120,7 +120,7 @@ func (m *memoryStore) DeleteExpired(ctx context.Context, now time.Time) (int, er
 // Tests defined by plan:
 func TestServiceActivateBindsCardAndCreatesSession(t *testing.T) {
 	s, m := setupServiceTest()
-	now := time.Date(2026, 6, 29, 12, 0, 0, 0, time.UTC)
+	now := time.Now()
 	m.cards["ABCDEF123456"] = CardSnapshot{
 		Code:        "ABCDEF123456",
 		CreatedAt:   now.Add(-24 * time.Hour),
@@ -180,7 +180,7 @@ func TestServiceActivateRejectsMaxSessions(t *testing.T) {
 	now := time.Now()
 	m.cards["C1"] = CardSnapshot{Code: "C1", Status: "active", MaxSessions: 1, ExpiresAt: now.Add(time.Hour)}
 	s.Activate(context.Background(), ActivationInput{CardCode: "C1", MachineID: "m1"})
-	
+
 	_, _, err := s.Activate(context.Background(), ActivationInput{CardCode: "C1", MachineID: "m1"})
 	if err == nil {
 		t.Fatal("Expected ErrMaxSessionsReached")
@@ -192,7 +192,7 @@ func TestServiceHeartbeatExtendsSessionAndUpdatesClientVersion(t *testing.T) {
 	now := time.Now()
 	m.cards["C1"] = CardSnapshot{Code: "C1", Status: "active", MaxSessions: 1, MachineID: "m1", ExpiresAt: now.Add(time.Hour)}
 	m.sessions["tok1"] = Session{Token: "tok1", CardCode: "C1", MachineID: "m1", ClientVersion: "1.0", ExpiresAt: now.Add(time.Minute)}
-	
+
 	session, _, err := s.Heartbeat(context.Background(), HeartbeatInput{SessionToken: "tok1", MachineID: "m1", ClientVersion: "2.0"})
 	if err != nil {
 		t.Fatalf("Heartbeat failed: %v", err)
@@ -207,7 +207,7 @@ func TestServiceHeartbeatDeletesExpiredOrInvalidSession(t *testing.T) {
 	now := time.Now()
 	m.cards["C1"] = CardSnapshot{Code: "C1", Status: "active", MaxSessions: 1, MachineID: "m1", ExpiresAt: now.Add(-time.Hour)} // expired card
 	m.sessions["tok1"] = Session{Token: "tok1", CardCode: "C1", MachineID: "m1", ExpiresAt: now.Add(time.Minute)}
-	
+
 	_, _, err := s.Heartbeat(context.Background(), HeartbeatInput{SessionToken: "tok1", MachineID: "m1"})
 	if err == nil {
 		t.Fatal("Expected error for expired card")
@@ -234,7 +234,7 @@ func TestServiceDeactivateWithUnbindPreservesRemainingDuration(t *testing.T) {
 	activated := now.Add(-time.Hour)
 	m.cards["C1"] = CardSnapshot{Code: "C1", MachineID: "m1", ActivatedAt: &activated, ExpiresAt: now.Add(23 * time.Hour)}
 	m.sessions["tok1"] = Session{Token: "tok1", CardCode: "C1", MachineID: "m1"}
-	
+
 	if err := s.Deactivate(context.Background(), DeactivateInput{SessionToken: "tok1", Unbind: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestServiceValidateBoundRejectsMissingTokenMachineMismatchAndCardMismatch(t
 	now := time.Now()
 	m.cards["C1"] = CardSnapshot{Code: "C1", Status: "active", ExpiresAt: now.Add(time.Hour)}
 	m.sessions["tok1"] = Session{Token: "tok1", CardCode: "C1", MachineID: "m1", ExpiresAt: now.Add(time.Minute)}
-	
+
 	if _, err := s.ValidateBound(context.Background(), "", "m1", "C1"); err == nil {
 		t.Fatal("Expected error for missing token")
 	}
@@ -280,7 +280,7 @@ func TestServiceListReturnsOnlyActiveSortedAndPaginated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Sessions) != 1 || res.Sessions[0].Token != "tok1" {
+	if len(res.Items) != 1 || res.Items[0].Token != "tok1" {
 		t.Fatal("Expected only active sessions")
 	}
 }

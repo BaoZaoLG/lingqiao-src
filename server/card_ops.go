@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
+
 	"fmt"
 	"log"
 	"os"
@@ -27,43 +27,6 @@ func NewJSONCardManager(storage *JSONStorage) *JSONCardManager {
 
 func (cm *JSONCardManager) GetStorage() *JSONStorage {
 	return cm.storage
-}
-
-func (cm *JSONCardManager) GetSession(token string) *Session {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	return cloneSession(cm.sessions[token])
-}
-
-func (cm *JSONCardManager) ValidateBoundSession(token, machineID, cardCode string) (*Session, error) {
-	if token == "" {
-		return nil, fmt.Errorf("session_token is required")
-	}
-	if machineID == "" {
-		return nil, fmt.Errorf("machine_id is required")
-	}
-	now := time.Now()
-	cm.mu.RLock()
-	session, exists := cm.sessions[token]
-	var card *Card
-	if exists {
-		card = cm.cards[session.CardCode]
-	}
-	cm.mu.RUnlock()
-
-	if !exists || session == nil || session.ExpiresAt.Before(now) {
-		return nil, fmt.Errorf("invalid or expired session")
-	}
-	if session.MachineID != machineID {
-		return nil, fmt.Errorf("session machine mismatch")
-	}
-	if cardCode != "" && normalizeCardCode(session.CardCode) != normalizeCardCode(cardCode) {
-		return nil, fmt.Errorf("session card mismatch")
-	}
-	if card == nil || card.Status == CardDisabled || card.Status == CardExpired || now.After(card.ExpiresAt) {
-		return nil, fmt.Errorf("card no longer valid")
-	}
-	return cloneSession(session), nil
 }
 
 func (cm *JSONCardManager) SetAuditRecorder(recorder *auditsvc.Recorder) {
@@ -294,131 +257,6 @@ func (cm *JSONCardManager) ValidateCard(code string) (*Card, error) {
 	return card, nil
 }
 
-// ActivateCard binds a card to a machine and creates a session.
-func (cm *JSONCardManager) ActivateCard(code, machineID, fingerprint, addr, clientVersion string) (*Session, error) {
-	code = normalizeCardCode(code)
-	card, err := cm.ValidateCard(code)
-	if err != nil {
-		return nil, err
-	}
-
-	// Single lock for both count check and session creation (prevents TOCTOU race)
-	cm.mu.Lock()
-
-	activeSessions := make([]cardops.Session, 0, len(cm.sessions))
-	for _, s := range cm.sessions {
-		activeSessions = append(activeSessions, lifecycleSessionFromSession(s))
-	}
-
-	token := generateSessionToken()
-	updatedCard, lifecycleSession, err := newCardSessionService().Activate(cardops.ActivationInput{
-		Card:           lifecycleCardFromCard(card),
-		Token:          token,
-		MachineID:      machineID,
-		Fingerprint:    fingerprint,
-		RemoteAddr:     addr,
-		ClientVersion:  clientVersion,
-		ActiveSessions: activeSessions,
-	})
-	if err != nil {
-		cm.mu.Unlock()
-		return nil, err
-	}
-	lifecycleSession.CardCode = code
-	applyLifecycleCard(card, updatedCard)
-	session := sessionFromLifecycleSession(lifecycleSession)
-	cm.sessions[token] = session
-	cm.appendAuditLocked(AuditEntry{
-		Time:    time.Now(),
-		Action:  "card_activated",
-		Card:    code,
-		Machine: machineID,
-		Addr:    addr,
-	})
-	cm.mu.Unlock()
-	cm.save()
-	return session, nil
-}
-
-// Heartbeat extends a session's expiry.
-func (cm *JSONCardManager) Heartbeat(token, machineID, addr, clientVersion string) (*Session, error) {
-	cm.mu.Lock()
-
-	session, exists := cm.sessions[token]
-	if !exists {
-		cm.mu.Unlock()
-		return nil, fmt.Errorf("session not found")
-	}
-
-	card, exists := cm.cards[session.CardCode]
-	if !exists {
-		delete(cm.sessions, token)
-		cm.mu.Unlock()
-		cm.save()
-		return nil, fmt.Errorf("card no longer valid")
-	}
-
-	lifecycleSession, err := newCardSessionService().Heartbeat(cardops.HeartbeatInput{
-		Session:       lifecycleSessionFromSession(session),
-		Card:          lifecycleCardFromCard(card),
-		MachineID:     machineID,
-		RemoteAddr:    addr,
-		ClientVersion: clientVersion,
-	})
-	if err != nil {
-		if errors.Is(err, cardops.ErrSessionExpired) || errors.Is(err, cardops.ErrCardNoLongerValid) {
-			delete(cm.sessions, token)
-			cm.mu.Unlock()
-			cm.save()
-			return nil, err
-		}
-		cm.mu.Unlock()
-		return nil, err
-	}
-	applyLifecycleSession(session, lifecycleSession)
-	cm.mu.Unlock()
-	cm.save()
-	return session, nil
-}
-
-// DeactivateSession ends a session and optionally unbinds the card.
-func (cm *JSONCardManager) DeactivateSession(token string, unbind bool) error {
-	cm.mu.Lock()
-
-	session, exists := cm.sessions[token]
-	if !exists {
-		cm.mu.Unlock()
-		return fmt.Errorf("session not found")
-	}
-
-	cardCode := session.CardCode
-	delete(cm.sessions, token)
-
-	if unbind {
-		if card, exists := cm.cards[cardCode]; exists {
-			if card.ActivatedAt != nil {
-				// Preserve remaining time from now, not from creation
-				remaining := time.Until(card.ExpiresAt)
-				if remaining < 0 {
-					remaining = 0
-				}
-				card.ExpiresAt = time.Now().Add(remaining)
-			}
-			card.MachineID = ""
-			card.ActivatedAt = nil
-		}
-	}
-
-	cm.appendAuditLocked(AuditEntry{
-		Time:   time.Now(),
-		Action: "session_deactivated",
-		Card:   cardCode,
-	})
-	cm.mu.Unlock()
-	cm.save()
-	return nil
-}
-
 // GetCard returns a card by code.
 func (cm *JSONCardManager) GetCard(code string) *Card {
 	cm.mu.RLock()
@@ -433,17 +271,6 @@ func (cm *JSONCardManager) AllCards() []*Card {
 	result := make([]*Card, 0, len(cm.cards))
 	for _, c := range cm.cards {
 		result = append(result, cloneCard(c))
-	}
-	return result
-}
-
-// AllSessions returns all sessions.
-func (cm *JSONCardManager) AllSessions() []*Session {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-	result := make([]*Session, 0, len(cm.sessions))
-	for _, s := range cm.sessions {
-		result = append(result, cloneSession(s))
 	}
 	return result
 }
@@ -543,19 +370,6 @@ func (cm *JSONCardManager) ExtendCard(code string, duration time.Duration) error
 	return nil
 }
 
-// CleanupExpired removes expired sessions.
-func (cm *JSONCardManager) CleanupExpired() {
-	cm.mu.Lock()
-	now := time.Now()
-	for token, session := range cm.sessions {
-		if session.ExpiresAt.Before(now) {
-			delete(cm.sessions, token)
-		}
-	}
-	cm.mu.Unlock()
-	cm.save()
-}
-
 // IsBlacklisted checks if a value is blacklisted.
 func (cm *JSONCardManager) IsBlacklisted(value string) bool {
 	cm.mu.RLock()
@@ -565,3 +379,15 @@ func (cm *JSONCardManager) IsBlacklisted(value string) bool {
 }
 
 // BatchGenerateCards creates multiple cards at once.
+
+// AllSessions returns all sessions.
+func (cm *JSONCardManager) AllSessions() []*Session {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	sessions := make([]*Session, 0, len(cm.sessions))
+	for _, s := range cm.sessions {
+		sessions = append(sessions, cloneSession(s))
+	}
+	return sessions
+}

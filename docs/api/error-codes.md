@@ -31,3 +31,8 @@ Initial error codes:
 | `MACHINE_MISMATCH` | 403 | Session machine does not match request machine. |
 | `RELEASE_SERVICE_UNAVAILABLE` | 503 | Release subsystem is unavailable. |
 | `PACKAGE_NOT_FOUND` | 404 | Release package metadata or file is missing. |
+| SESSION_NOT_FOUND | 401 | Session token does not exist. |
+| SESSION_EXPIRED | 401 | Session expired. |
+| MACHINE_MISMATCH | 403 | Session machine does not match request machine. |
+| SESSION_CARD_MISMATCH | 403 | Session card does not match request card. |
+| MAX_SESSIONS_REACHED | 403 | Card reached active session limit. |

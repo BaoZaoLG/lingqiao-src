@@ -18,13 +18,36 @@ import (
 
 // APIHandler handles all HTTP API requests.
 type APIHandler struct {
-	cm          CardManager
-	sessionsSvc *sessions.Service
-	chat        *ChatStore
+	cm             CardManager
+	sessionsSvc    *sessions.Service
+	sessionHandler *sessions.Handler
+	chat           *ChatStore
 }
 
 func NewAPIHandler(cm CardManager, sessionsSvc *sessions.Service) *APIHandler {
-	return &APIHandler{cm: cm, sessionsSvc: sessionsSvc, chat: NewChatStore(cm.GetStorage(), time.Now)}
+	h := &APIHandler{cm: cm, sessionsSvc: sessionsSvc, chat: NewChatStore(cm.GetStorage(), time.Now)}
+	h.sessionHandler = sessions.NewHandler(sessionsSvc, h, h, getClientIP)
+	return h
+}
+
+// ReadSignedRequest implements sessions.SignedRequestReader
+func (h *APIHandler) ReadSignedRequest(r *http.Request) (sessions.ClientRequest, error) {
+	req, err := h.readSignedRequest(r)
+	if err != nil {
+		return sessions.ClientRequest{}, err
+	}
+	return sessions.ClientRequest{
+		Card:          req.Card,
+		MachineID:     req.MachineID,
+		Fingerprint:   req.Fingerprint,
+		ClientVersion: req.ClientVersion,
+		SessionToken:  req.SessionToken,
+	}, nil
+}
+
+// CheckVersion implements sessions.VersionChecker
+func (h *APIHandler) CheckVersion(w http.ResponseWriter, clientVersion string) (bool, map[string]interface{}) {
+	return h.checkVersion(w, clientVersion)
 }
 
 type request struct {
@@ -111,118 +134,15 @@ func (h *APIHandler) checkVersion(w http.ResponseWriter, clientVersion string) (
 }
 
 func (h *APIHandler) HandleActivate(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
-		return
-	}
-
-	req, err := h.readSignedRequest(r)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	if req.Card == "" {
-		writeError(w, http.StatusBadRequest, "card is required")
-		return
-	}
-
-	if blocked, _ := h.checkVersion(w, req.ClientVersion); blocked {
-		return
-	}
-
-	session, card, err := h.sessionsSvc.Activate(r.Context(), sessions.ActivationInput{
-		CardCode:      req.Card,
-		MachineID:     req.MachineID,
-		Fingerprint:   req.Fingerprint,
-		RemoteAddr:    getClientIP(r),
-		ClientVersion: req.ClientVersion,
-	})
-	if err != nil {
-		log.Printf("[ACTIVATE] Failed: card=%s machine=%s error=%v", req.Card, req.MachineID, err)
-		writeError(w, http.StatusForbidden, translateCardError(err))
-		return
-	}
-
-	cardExp := card.ExpiresAt.Unix()
-
-	log.Printf("[ACTIVATE] OK: card=%s machine=%s token=%s", req.Card, req.MachineID, short(session.Token, 8)+"...")
-
-	_, updateInfo := h.checkVersion(w, req.ClientVersion)
-	resp := map[string]interface{}{
-		"session_token":   session.Token,
-		"expires_at":      session.ExpiresAt.Unix(),
-		"card_expires_at": cardExp,
-		"message":         "激活成功",
-	}
-	if updateInfo != nil {
-		resp["update"] = updateInfo
-	}
-	writeOK(w, resp)
+	h.sessionHandler.HandleActivate(w, r)
 }
 
 func (h *APIHandler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
-		return
-	}
-
-	req, err := h.readSignedRequest(r)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	if req.SessionToken == "" {
-		writeError(w, http.StatusBadRequest, "session_token is required")
-		return
-	}
-
-	if blocked, _ := h.checkVersion(w, req.ClientVersion); blocked {
-		return
-	}
-
-	session, card, err := h.sessionsSvc.Heartbeat(r.Context(), sessions.HeartbeatInput{
-		SessionToken:  req.SessionToken,
-		MachineID:     req.MachineID,
-		RemoteAddr:    getClientIP(r),
-		ClientVersion: req.ClientVersion,
-	})
-	if err != nil {
-		log.Printf("[HEARTBEAT] Failed: token=%s error=%v", short(req.SessionToken, 8)+"...", err)
-		writeError(w, http.StatusForbidden, err.Error())
-		return
-	}
-
-	cardExp := card.ExpiresAt.Unix()
-
-	_, updateInfo := h.checkVersion(w, req.ClientVersion)
-	resp := map[string]interface{}{
-		"expires_at":      session.ExpiresAt.Unix(),
-		"card_expires_at": cardExp,
-		"message":         "心跳正常",
-	}
-	if updateInfo != nil {
-		resp["update"] = updateInfo
-	}
-	writeOK(w, resp)
+	h.sessionHandler.HandleHeartbeat(w, r)
 }
 
 func (h *APIHandler) HandleDeactivate(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
-		return
-	}
-
-	req, err := h.readSignedRequest(r)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-
-	if err := h.sessionsSvc.Deactivate(r.Context(), sessions.DeactivateInput{
-		SessionToken: req.SessionToken,
-		Unbind:       false,
-	}); err != nil {
-		writeJSON(w, response{Status: "ok", Message: "会话不存在或已过期"})
-		return
-	}
-	writeJSON(w, response{Status: "ok", Message: "已注销"})
+	h.sessionHandler.HandleDeactivate(w, r)
 }
 
 func (h *APIHandler) HandleAnnouncement(w http.ResponseWriter, r *http.Request) {
@@ -251,7 +171,7 @@ func (h *APIHandler) HandleDllDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.cm.ValidateBoundSession(token, r.Header.Get("X-Machine-ID"), r.Header.Get("X-Card-Code"))
+	session, err := h.sessionsSvc.ValidateBound(r.Context(), token, r.Header.Get("X-Machine-ID"), r.Header.Get("X-Card-Code"))
 	if err != nil {
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return
@@ -313,7 +233,7 @@ func (h *APIHandler) SessionCleanupTask(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			h.cm.CleanupExpired()
+			h.sessionsSvc.CleanupExpired(ctx)
 		}
 	}
 }

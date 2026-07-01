@@ -427,3 +427,15 @@ Lingqiao 当前不是不能维护，而是缺少平台化边界。最好的改�
 最后整理目�?```
 
 短期不要追求一次性变漂亮。只要接下来所有新功能都进入清晰模块，旧逻辑逐步退场，项目会从“修修补补”慢慢恢复成一套有主干的系统�?
+
+## Sessions Module
+
+`server/internal/features/sessions` owns activation sessions, heartbeats, logout, forced logout, session validation, and expired-session cleanup.
+
+Runtime flow:
+
+1. Client signed request enters root compatibility handler or sessions handler.
+2. Handler delegates to `sessions.Service`.
+3. Service executes business rules and calls `sessions.Store`.
+4. SQLite repository updates existing `cards` and `sessions` tables in one transaction.
+5. Consumers such as chat, releases, payloads, scripts, and DLL download validate sessions through service methods.

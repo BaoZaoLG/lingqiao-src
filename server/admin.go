@@ -18,6 +18,7 @@ import (
 type AdminHandler struct {
 	cm              CardManager
 	sessionsSvc     *sessions.Service
+	sessionHandler  *sessions.Handler
 	chat            *ChatStore
 	adminPassHash   string
 	mu              sync.Mutex
@@ -38,6 +39,7 @@ func NewAdminHandlerWithTTL(cm CardManager, sessionsSvc *sessions.Service, sessi
 	h := &AdminHandler{
 		cm:              cm,
 		sessionsSvc:     sessionsSvc,
+		sessionHandler:  sessions.NewHandler(sessionsSvc, nil, nil, nil),
 		chat:            NewChatStore(cm.GetStorage(), time.Now),
 		sessions:        make(map[string]time.Time),
 		sessionTTL:      sessionTTL,

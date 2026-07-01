@@ -2,7 +2,7 @@ package main
 
 import (
 	"database/sql"
-	"errors"
+
 	"fmt"
 	"strings"
 	"sync"
@@ -89,42 +89,6 @@ func (cm *SQLiteCardManager) GetStorage() *JSONStorage {
 
 func (cm *SQLiteCardManager) DB() *sql.DB {
 	return cm.db
-}
-
-func (cm *SQLiteCardManager) ValidateBoundSession(token, machineID, cardCode string) (*Session, error) {
-	if token == "" {
-		return nil, fmt.Errorf("session_token is required")
-	}
-	if machineID == "" {
-		return nil, fmt.Errorf("machine_id is required")
-	}
-	now := time.Now()
-
-	row := cm.db.QueryRow(`SELECT token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr FROM sessions WHERE token = ?`, token)
-	var session Session
-	if err := row.Scan(&session.Token, &session.CardCode, &session.MachineID, &session.Fingerprint, &session.ClientVersion, &session.CreatedAt, &session.LastSeen, &session.ExpiresAt, &session.RemoteAddr); err != nil {
-		return nil, fmt.Errorf("invalid or expired session")
-	}
-	if session.ExpiresAt.Before(now) {
-		return nil, fmt.Errorf("invalid or expired session")
-	}
-	if session.MachineID != machineID {
-		return nil, fmt.Errorf("session machine mismatch")
-	}
-	if cardCode != "" && normalizeCardCode(session.CardCode) != normalizeCardCode(cardCode) {
-		return nil, fmt.Errorf("session card mismatch")
-	}
-
-	crow := cm.db.QueryRow(`SELECT status, expires_at FROM cards WHERE code = ?`, session.CardCode)
-	var status string
-	var expiresAt time.Time
-	if err := crow.Scan(&status, &expiresAt); err != nil {
-		return nil, fmt.Errorf("card no longer valid")
-	}
-	if status == string(CardDisabled) || status == string(CardExpired) || now.After(expiresAt) {
-		return nil, fmt.Errorf("card no longer valid")
-	}
-	return &session, nil
 }
 
 func (cm *SQLiteCardManager) SetAuditRecorder(recorder *auditsvc.Recorder) {
@@ -280,191 +244,6 @@ func (cm *SQLiteCardManager) getActiveSessionsForCard(code string) []cardops.Ses
 	return sessions
 }
 
-func (cm *SQLiteCardManager) GetSession(token string) *Session {
-	row := cm.db.QueryRow(`SELECT token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr FROM sessions WHERE token = ?`, token)
-	var s Session
-	err := row.Scan(&s.Token, &s.CardCode, &s.MachineID, &s.Fingerprint, &s.ClientVersion, &s.CreatedAt, &s.LastSeen, &s.ExpiresAt, &s.RemoteAddr)
-	if err != nil {
-		return nil
-	}
-	return &s
-}
-
-func (cm *SQLiteCardManager) ActivateCard(code, machineID, fingerprint, addr, clientVersion string) (*Session, error) {
-	code = normalizeCardCode(code)
-
-	tx, err := cm.db.Begin()
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-
-	// Get Card inside tx
-	row := tx.QueryRow(`SELECT code, machine_id, agent_id, created_at, activated_at, expires_at, status, note, max_sessions FROM cards WHERE code = ?`, code)
-	var c Card
-	var activatedAt sql.NullTime
-	if err := row.Scan(&c.Code, &c.MachineID, &c.AgentID, &c.CreatedAt, &activatedAt, &c.ExpiresAt, &c.Status, &c.Note, &c.MaxSessions); err != nil {
-		return nil, cardops.ErrCardNotFound
-	}
-	c.ActivatedAt = parseTime(activatedAt)
-
-	// Validate logic again inside tx to avoid race
-	if cm.IsBlacklisted(code) {
-		return nil, cardops.ErrCardBlacklisted
-	}
-	if c.Status == CardDisabled {
-		return nil, cardops.ErrCardDisabled
-	}
-	if c.Status == CardExpired || time.Now().After(c.ExpiresAt) {
-		return nil, cardops.ErrCardExpired
-	}
-
-	rows, err := tx.Query(`SELECT token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr FROM sessions WHERE card_code = ?`, code)
-	if err != nil {
-		return nil, err
-	}
-	var activeSessions []cardops.Session
-	for rows.Next() {
-		var s cardops.Session
-		if err := rows.Scan(&s.Token, &s.CardCode, &s.MachineID, &s.Fingerprint, &s.ClientVersion, &s.CreatedAt, &s.LastSeen, &s.ExpiresAt, &s.RemoteAddr); err == nil {
-			activeSessions = append(activeSessions, s)
-		}
-	}
-	rows.Close()
-
-	token := generateSessionToken()
-	updatedCard, lifecycleSession, err := newCardSessionService().Activate(cardops.ActivationInput{
-		Card:           lifecycleCardFromCard(&c),
-		Token:          token,
-		MachineID:      machineID,
-		Fingerprint:    fingerprint,
-		RemoteAddr:     addr,
-		ClientVersion:  clientVersion,
-		ActiveSessions: activeSessions,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	lifecycleSession.CardCode = code
-	applyLifecycleCard(&c, updatedCard)
-	session := sessionFromLifecycleSession(lifecycleSession)
-
-	// Update card
-	_, err = tx.Exec(`UPDATE cards SET machine_id = ?, activated_at = ?, expires_at = ? WHERE code = ?`,
-		c.MachineID, c.ActivatedAt, c.ExpiresAt, c.Code)
-	if err != nil {
-		return nil, err
-	}
-
-	// Insert session
-	_, err = tx.Exec(`INSERT INTO sessions (token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		session.Token, session.CardCode, session.MachineID, session.Fingerprint, session.ClientVersion, session.CreatedAt, session.LastSeen, session.ExpiresAt, session.RemoteAddr)
-	if err != nil {
-		return nil, err
-	}
-
-	tx.Commit()
-
-	cm.RecordAudit(AuditEntry{
-		Time:    time.Now(),
-		Action:  "card_activated",
-		Card:    code,
-		Machine: machineID,
-		Addr:    addr,
-	})
-
-	return session, nil
-}
-
-func (cm *SQLiteCardManager) Heartbeat(token, machineID, addr, clientVersion string) (*Session, error) {
-	tx, err := cm.db.Begin()
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-
-	row := tx.QueryRow(`SELECT token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr FROM sessions WHERE token = ?`, token)
-	var session Session
-	if err := row.Scan(&session.Token, &session.CardCode, &session.MachineID, &session.Fingerprint, &session.ClientVersion, &session.CreatedAt, &session.LastSeen, &session.ExpiresAt, &session.RemoteAddr); err != nil {
-		return nil, fmt.Errorf("session not found")
-	}
-
-	crow := tx.QueryRow(`SELECT code, machine_id, agent_id, created_at, activated_at, expires_at, status, note, max_sessions FROM cards WHERE code = ?`, session.CardCode)
-	var card Card
-	var activatedAt sql.NullTime
-	if err := crow.Scan(&card.Code, &card.MachineID, &card.AgentID, &card.CreatedAt, &activatedAt, &card.ExpiresAt, &card.Status, &card.Note, &card.MaxSessions); err != nil {
-		tx.Exec(`DELETE FROM sessions WHERE token = ?`, token)
-		tx.Commit()
-		return nil, fmt.Errorf("card no longer valid")
-	}
-	card.ActivatedAt = parseTime(activatedAt)
-
-	lifecycleSession, err := newCardSessionService().Heartbeat(cardops.HeartbeatInput{
-		Session:       lifecycleSessionFromSession(&session),
-		Card:          lifecycleCardFromCard(&card),
-		MachineID:     machineID,
-		RemoteAddr:    addr,
-		ClientVersion: clientVersion,
-	})
-	if err != nil {
-		if errors.Is(err, cardops.ErrSessionExpired) || errors.Is(err, cardops.ErrCardNoLongerValid) {
-			tx.Exec(`DELETE FROM sessions WHERE token = ?`, token)
-			tx.Commit()
-		}
-		return nil, err
-	}
-
-	applyLifecycleSession(&session, lifecycleSession)
-	tx.Exec(`UPDATE sessions SET last_seen = ?, expires_at = ?, client_version = ?, remote_addr = ? WHERE token = ?`,
-		session.LastSeen, session.ExpiresAt, session.ClientVersion, session.RemoteAddr, session.Token)
-	tx.Commit()
-
-	return &session, nil
-}
-
-func (cm *SQLiteCardManager) DeactivateSession(token string, unbind bool) error {
-	tx, err := cm.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	row := tx.QueryRow(`SELECT card_code FROM sessions WHERE token = ?`, token)
-	var cardCode string
-	if err := row.Scan(&cardCode); err != nil {
-		return fmt.Errorf("session not found")
-	}
-
-	tx.Exec(`DELETE FROM sessions WHERE token = ?`, token)
-
-	if unbind {
-		crow := tx.QueryRow(`SELECT created_at, activated_at, expires_at FROM cards WHERE code = ?`, cardCode)
-		var createdAt, expiresAt time.Time
-		var activatedAt sql.NullTime
-		if err := crow.Scan(&createdAt, &activatedAt, &expiresAt); err == nil {
-			if activatedAt.Valid {
-				remaining := time.Until(expiresAt)
-				if remaining < 0 {
-					remaining = 0
-				}
-				newExpires := time.Now().Add(remaining)
-				tx.Exec(`UPDATE cards SET machine_id = '', activated_at = NULL, expires_at = ? WHERE code = ?`, newExpires, cardCode)
-			} else {
-				tx.Exec(`UPDATE cards SET machine_id = '', activated_at = NULL WHERE code = ?`, cardCode)
-			}
-		}
-	}
-	tx.Commit()
-
-	cm.RecordAudit(AuditEntry{
-		Time:   time.Now(),
-		Action: "session_deactivated",
-		Card:   cardCode,
-	})
-	return nil
-}
-
 func (cm *SQLiteCardManager) AllCards() []*Card {
 	rows, err := cm.db.Query(`SELECT code, machine_id, agent_id, created_at, activated_at, expires_at, status, note, max_sessions FROM cards`)
 	if err != nil {
@@ -478,22 +257,6 @@ func (cm *SQLiteCardManager) AllCards() []*Card {
 		if err := rows.Scan(&c.Code, &c.MachineID, &c.AgentID, &c.CreatedAt, &act, &c.ExpiresAt, &c.Status, &c.Note, &c.MaxSessions); err == nil {
 			c.ActivatedAt = parseTime(act)
 			res = append(res, &c)
-		}
-	}
-	return res
-}
-
-func (cm *SQLiteCardManager) AllSessions() []*Session {
-	rows, err := cm.db.Query(`SELECT token, card_code, machine_id, fingerprint, client_version, created_at, last_seen, expires_at, remote_addr FROM sessions`)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	var res []*Session
-	for rows.Next() {
-		var s Session
-		if err := rows.Scan(&s.Token, &s.CardCode, &s.MachineID, &s.Fingerprint, &s.ClientVersion, &s.CreatedAt, &s.LastSeen, &s.ExpiresAt, &s.RemoteAddr); err == nil {
-			res = append(res, &s)
 		}
 	}
 	return res
@@ -598,10 +361,6 @@ func (cm *SQLiteCardManager) ExtendCard(code string, duration time.Duration) err
 		Detail: fmt.Sprintf("added_duration=%s new_expires=%s", duration, updated.ExpiresAt.Format(time.RFC3339)),
 	})
 	return nil
-}
-
-func (cm *SQLiteCardManager) CleanupExpired() {
-	cm.db.Exec(`DELETE FROM sessions WHERE expires_at < ?`, time.Now())
 }
 
 func (cm *SQLiteCardManager) IsBlacklisted(value string) bool {
@@ -727,7 +486,6 @@ func (cm *SQLiteCardManager) SearchCards(query, status, machineID string) []*Car
 
 func (cm *SQLiteCardManager) GetUniqueMachines() []MachineInfo {
 	cards := cm.AllCards()
-	sessions := cm.AllSessions()
 	blacklist := cm.AllBlacklist()
 
 	machineMap := make(map[string]*MachineInfo)
@@ -742,14 +500,24 @@ func (cm *SQLiteCardManager) GetUniqueMachines() []MachineInfo {
 		}
 		info.CardCount++
 	}
-	for _, s := range sessions {
-		if info, ok := machineMap[s.MachineID]; ok {
-			if info.LastSeen == nil || s.LastSeen.After(*info.LastSeen) {
-				t := s.LastSeen
-				info.LastSeen = &t
+
+	rows, err := cm.db.Query(`SELECT machine_id, last_seen FROM sessions`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var mID string
+			var ls time.Time
+			if err := rows.Scan(&mID, &ls); err == nil {
+				if info, ok := machineMap[mID]; ok {
+					if info.LastSeen == nil || ls.After(*info.LastSeen) {
+						t := ls
+						info.LastSeen = &t
+					}
+				}
 			}
 		}
 	}
+
 	for _, entry := range blacklist {
 		if entry.Type == "machine" {
 			if info, ok := machineMap[entry.Value]; ok {

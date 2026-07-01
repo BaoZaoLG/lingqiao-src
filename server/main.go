@@ -401,8 +401,8 @@ func printStartupInfo(cm CardManager) {
 			activeCount++
 		}
 	}
-	log.Printf("[SERVER] Loaded %d cards (%d active), %d sessions",
-		len(cards), activeCount, len(cm.AllSessions()))
+	log.Printf("[SERVER] Loaded %d cards (%d active)",
+		len(cards), activeCount)
 	if len(cards) == 0 {
 		log.Println("[SERVER] No cards in database — generate one with: go run . --generate-card")
 	}

@@ -6,54 +6,20 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-
-	"github.com/lingqiao/server/internal/features/sessions"
 )
 
 // ── Session Management ───────────────────────────────────────────────────────
 
 func (h *AdminHandler) HandleListSessions(w http.ResponseWriter, r *http.Request) {
-	page, perPage := parsePagination(r)
-
-	res, err := h.sessionsSvc.List(r.Context(), sessions.ListFilter{
-		ActiveOnly: true,
-		Page:       page,
-		PerPage:    perPage,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+	if h.sessionHandler != nil {
+		h.sessionHandler.HandleListSessions(w, r)
 	}
-
-	writeOK(w, map[string]interface{}{
-		"sessions": res.Sessions,
-		"total":    res.Total,
-		"page":     res.Page,
-		"per_page": res.PerPage,
-	})
 }
 
 func (h *AdminHandler) HandleForceLogout(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodPost) {
-		return
+	if h.sessionHandler != nil {
+		h.sessionHandler.HandleForceLogout(w, r)
 	}
-
-	var req struct {
-		SessionToken string `json:"session_token"`
-	}
-	if err := readJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	if err := h.sessionsSvc.Deactivate(r.Context(), sessions.DeactivateInput{
-		SessionToken: req.SessionToken,
-		Unbind:       false,
-	}); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeOK(w, map[string]interface{}{"message": "已强制下线"})
 }
 
 // ── Blacklist ────────────────────────────────────────────────────────────────

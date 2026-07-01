@@ -59,7 +59,7 @@ func (s *SessionService) Activate(input ActivationInput) (Card, Session, error) 
 	card := input.Card
 
 	if card.MaxSessions <= 1 && card.MachineID != "" && card.MachineID != input.MachineID {
-		return Card{}, Session{}, fmt.Errorf("card already bound to another machine")
+		return Card{}, Session{}, fmt.Errorf("%w: machine mismatch", ErrCardBoundToOtherMachine)
 	}
 
 	activeCount := 0

@@ -257,19 +257,13 @@ func applyLifecycleSession(dst *Session, src cardops.Session) {
 
 type CardManager interface {
 	GetStorage() *JSONStorage
-	GetSession(token string) *Session
-	ValidateBoundSession(token, machineID, cardCode string) (*Session, error)
 	SetAuditRecorder(recorder *auditsvc.Recorder)
 	RecordAudit(entry AuditEntry)
 	GenerateCard(duration time.Duration, note string, maxSessions int, agentID string) (*Card, error)
 	GenerateCardWithCode(code string, duration time.Duration, note string, maxSessions int, agentID string) (*Card, error)
 	ValidateCard(code string) (*Card, error)
-	ActivateCard(code, machineID, fingerprint, addr, clientVersion string) (*Session, error)
-	Heartbeat(token, machineID, addr, clientVersion string) (*Session, error)
-	DeactivateSession(token string, unbind bool) error
 	GetCard(code string) *Card
 	AllCards() []*Card
-	AllSessions() []*Session
 	AllBlacklist() []*BlacklistEntry
 	AuditLog() []AuditEntry
 	AddBlacklist(typ, value, reason string)
@@ -277,7 +271,6 @@ type CardManager interface {
 	UpdateCardStatus(code string, status CardStatus) error
 	ExtendCard(code string, duration time.Duration) error
 
-	CleanupExpired()
 	IsBlacklisted(value string) bool
 
 	BatchGenerateCards(count int, duration time.Duration, note string, maxSessions int, agentID string) ([]*Card, error)
