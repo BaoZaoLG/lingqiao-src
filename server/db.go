@@ -3,6 +3,8 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"github.com/lingqiao/server/internal/features/cards"
+	"github.com/lingqiao/server/internal/storage"
 	"log"
 	"os"
 	"strings"
@@ -103,6 +105,17 @@ func applySchema(db *sql.DB) error {
 			return fmt.Errorf("exec %q: %w", stmt[:min(40, len(stmt))], err)
 		}
 	}
+
+	// Add risk control columns for agents
+	agentRiskColumns := []string{
+		"max_session_duration_minutes INTEGER NOT NULL DEFAULT 0",
+		"max_daily_sessions INTEGER NOT NULL DEFAULT 0",
+		"max_concurrent_sessions INTEGER NOT NULL DEFAULT 0",
+	}
+	for _, colDef := range agentRiskColumns {
+		_, _ = db.Exec("ALTER TABLE agents ADD COLUMN " + colDef)
+	}
+
 	return nil
 }
 
@@ -154,7 +167,7 @@ func deduplicateAgentUsernames(db *sql.DB) error {
 // migrateJSONToSQLite copies cards, agents, invites, blacklist, and audit
 // entries from oldCm (JSON-backed) into db (SQLite) when db is empty.
 // This one-time migration is skipped on subsequent starts.
-func migrateJSONToSQLite(db *sql.DB, storage *JSONStorage) error {
+func migrateJSONToSQLite(db *sql.DB, storage storage.Store) error {
 	// Count existing cards — if any rows exist, migration already ran.
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM cards`).Scan(&count); err != nil || count > 0 {
@@ -206,7 +219,7 @@ func migrateJSONToSQLite(db *sql.DB, storage *JSONStorage) error {
 	type legacyData struct {
 		Cards     map[string]legacyCard    `json:"cards"`
 		Sessions  map[string]legacySession `json:"sessions"`
-		Blacklist []BlacklistEntry         `json:"blacklist"`
+		Blacklist []cards.BlacklistEntry   `json:"blacklist"`
 		Agents    map[string]legacyAgent   `json:"agents"`
 		AuditLog  []legacyAudit            `json:"audit"`
 	}

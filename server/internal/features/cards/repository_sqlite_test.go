@@ -69,6 +69,13 @@ func TestSQLiteRepository(t *testing.T) {
 	if retrieved.Code != card.Code || retrieved.MachineID != card.MachineID || retrieved.Status != card.Status {
 		t.Fatalf("Retrieved card does not match: %+v", retrieved)
 	}
+	var rawExpires string
+	if err := db.QueryRow("SELECT expires_at FROM cards WHERE code = ?", card.Code).Scan(&rawExpires); err != nil {
+		t.Fatalf("scan raw expires_at: %v", err)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, rawExpires); err != nil {
+		t.Fatalf("expires_at should be RFC3339-compatible, got %q: %v", rawExpires, err)
+	}
 
 	// Test List
 	filter := ListFilter{Query: "TEST", Status: StatusActive}
@@ -87,6 +94,29 @@ func TestSQLiteRepository(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("Expected count 1, got %d", count)
+	}
+}
+
+func TestSQLiteRepositoryParsesLegacyGoTimeString(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	repo := NewSQLiteRepository(db)
+
+	rawCreated := "2026-07-02 16:06:28.338015275 +0800 CST m=+3972.908943307"
+	rawExpires := "2026-07-02 17:06:28.338015275 +0800 CST m=+3972.908943307"
+	if _, err := db.Exec(
+		"INSERT INTO cards (code, status, created_at, expires_at, max_sessions) VALUES (?, ?, ?, ?, ?)",
+		"LEGACY-TIME", StatusActive, rawCreated, rawExpires, 1,
+	); err != nil {
+		t.Fatalf("insert legacy time card: %v", err)
+	}
+
+	card, err := repo.Get(context.Background(), "LEGACY-TIME")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if card.ExpiresAt.IsZero() || card.ExpiresAt.Year() != 2026 || card.ExpiresAt.Hour() != 17 {
+		t.Fatalf("legacy expires_at was not parsed: %#v", card.ExpiresAt)
 	}
 }
 

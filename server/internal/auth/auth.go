@@ -1,17 +1,21 @@
-package main
+package auth
 
 import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // ClientCredentials holds the client ID and secret for HMAC signing.
@@ -21,10 +25,17 @@ type ClientCredentials struct {
 }
 
 // knownClients is the registry of known API clients.
-var knownClients []ClientCredentials
-var knownClientsMu sync.RWMutex
+var (
+	knownClients   []ClientCredentials
+	knownClientsMu sync.RWMutex
+	authDataDir    string
+)
 
-func configureAuthClients() {
+func Init(dataDir string) {
+	authDataDir = dataDir
+}
+
+func ConfigureClients() {
 	knownClientsMu.Lock()
 	knownClients = nil
 	derivedKeyCache = sync.Map{}
@@ -48,16 +59,16 @@ func ensureKnownClients() {
 	secret := os.Getenv("HMAC_SECRET")
 	if secret == "" {
 		// Try to load persisted secret, or generate a new one
-		if data, err := os.ReadFile(dataPath("hmac_secret.key")); err == nil {
+		if data, err := os.ReadFile(filepath.Join(authDataDir, "hmac_secret.key")); err == nil {
 			secret = strings.TrimSpace(string(data))
 		}
 		if secret == "" {
 			b := make([]byte, 32)
 			rand.Read(b)
 			secret = hex.EncodeToString(b)
-			os.MkdirAll(dataDir(), 0755)
-			os.WriteFile(dataPath("hmac_secret.key"), []byte(secret), 0600)
-			log.Printf("[AUTH] Generated new HMAC secret (saved to %s)", dataPath("hmac_secret.key"))
+			os.MkdirAll(authDataDir, 0755)
+			os.WriteFile(filepath.Join(authDataDir, "hmac_secret.key"), []byte(secret), 0600)
+			log.Printf("[AUTH] Generated new HMAC secret (saved to %s)", filepath.Join(authDataDir, "hmac_secret.key"))
 		}
 	}
 	knownClients = []ClientCredentials{
@@ -144,7 +155,7 @@ func defaultClientSecret() string {
 var derivedKeyCache sync.Map
 
 // getDerivedKey returns the PBKDF2-derived HMAC key for a client (cached).
-func getDerivedKey(clientID string) ([]byte, error) {
+func GetDerivedKey(clientID string) ([]byte, error) {
 	if cached, ok := derivedKeyCache.Load(clientID); ok {
 		return cached.([]byte), nil
 	}
@@ -156,6 +167,14 @@ func getDerivedKey(clientID string) ([]byte, error) {
 	key := pbkdf2([]byte(secret), salt, 100000, 32)
 	derivedKeyCache.Store(clientID, key)
 	return key, nil
+}
+
+func GetDLLKey(clientID string) ([]byte, error) {
+	secret, err := getClientSecret(clientID)
+	if err != nil {
+		return nil, err
+	}
+	return pbkdf2([]byte(secret), []byte("CefBridge-DLL-Salt-v1"), 100000, 32), nil
 }
 
 // VerifyHMAC verifies an HMAC-SHA256 signature with timestamp + nonce anti-replay.
@@ -177,7 +196,7 @@ func VerifyHMAC(clientID, body, signature, timestamp, nonce string) error {
 	}
 
 	// Get PBKDF2-derived key
-	derivedKey, err := getDerivedKey(clientID)
+	derivedKey, err := GetDerivedKey(clientID)
 	if err != nil {
 		return err
 	}
@@ -196,7 +215,7 @@ func VerifyHMAC(clientID, body, signature, timestamp, nonce string) error {
 
 // VerifyHMACSimple verifies an HMAC-SHA256 signature without timestamp/nonce (for legacy/GET).
 func VerifyHMACSimple(clientID, data, signature string) error {
-	derivedKey, err := getDerivedKey(clientID)
+	derivedKey, err := GetDerivedKey(clientID)
 	if err != nil {
 		return err
 	}
@@ -219,7 +238,7 @@ func SignHMAC(secret, data string) string {
 }
 
 // verifyRequestHMAC verifies HMAC from standard request headers.
-func verifyRequestHMAC(r *http.Request, body string) error {
+func VerifyRequest(r *http.Request, body string) error {
 	sig := r.Header.Get("X-HMAC-Signature")
 	clientID := r.Header.Get("X-Client-ID")
 	timestamp := r.Header.Get("X-Timestamp")
@@ -232,4 +251,44 @@ func verifyRequestHMAC(r *http.Request, body string) error {
 		return fmt.Errorf("HMAC verification failed")
 	}
 	return nil
+}
+
+func HashPassword(pw string) string {
+	hash, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+	if err != nil {
+		log.Printf("[WARN] bcrypt failed, falling back to sha256: %v", err)
+		h := sha256.Sum256([]byte(pw))
+		return hex.EncodeToString(h[:])
+	}
+	return string(hash)
+}
+
+func IsBcryptHash(h string) bool {
+	return len(h) >= 4 && h[0] == '$' && h[1] == '2'
+}
+
+func VerifyPassword(pw, storedHash string) (match bool, newHash string) {
+	if IsBcryptHash(storedHash) {
+		return bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(pw)) == nil, ""
+	}
+	h := sha256.Sum256([]byte(pw))
+	legacyHash := hex.EncodeToString(h[:])
+	if subtle.ConstantTimeCompare([]byte(legacyHash), []byte(storedHash)) != 1 {
+		return false, ""
+	}
+	bcryptHash, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
+	if err != nil {
+		return true, ""
+	}
+	return true, string(bcryptHash)
+}
+
+func ExtractToken(r *http.Request, cookieName string) string {
+	if cookie, err := r.Cookie(cookieName); err == nil && cookie.Value != "" {
+		return cookie.Value
+	}
+	if auth := r.Header.Get("Authorization"); len(auth) > 7 && auth[:7] == "Bearer " {
+		return auth[7:]
+	}
+	return ""
 }

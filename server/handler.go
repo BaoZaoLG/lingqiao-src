@@ -8,16 +8,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lingqiao/server/internal/storage"
 	"log"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/lingqiao/server/internal/auth"
 	cardops "github.com/lingqiao/server/internal/cards"
 	"github.com/lingqiao/server/internal/features/security/blacklist"
 	"github.com/lingqiao/server/internal/features/sessions"
 	"github.com/lingqiao/server/internal/httpapi"
-	releasesvc "github.com/lingqiao/server/internal/releases"
 )
 
 // APIHandler handles all HTTP API requests.
@@ -25,11 +26,11 @@ type APIHandler struct {
 	blacklistSvc   *blacklist.Service
 	sessionsSvc    *sessions.Service
 	sessionHandler *sessions.Handler
-	chat           *ChatStore
+	versionCheck   sessions.VersionChecker
 }
 
-func NewAPIHandler(blacklistSvc *blacklist.Service, storage *JSONStorage, sessionsSvc *sessions.Service) *APIHandler {
-	h := &APIHandler{blacklistSvc: blacklistSvc, sessionsSvc: sessionsSvc, chat: NewChatStore(storage, time.Now)}
+func NewAPIHandler(blacklistSvc *blacklist.Service, storage storage.Store, sessionsSvc *sessions.Service, versionCheck sessions.VersionChecker) *APIHandler {
+	h := &APIHandler{blacklistSvc: blacklistSvc, sessionsSvc: sessionsSvc, versionCheck: versionCheck}
 	h.sessionHandler = sessions.NewHandler(sessionsSvc, h, h, httpapi.GetClientIP)
 	return h
 }
@@ -83,7 +84,7 @@ func (h *APIHandler) readSignedRequest(r *http.Request) (*request, error) {
 		return nil, err
 	}
 
-	if err := verifyRequestHMAC(r, string(body)); err != nil {
+	if err := auth.VerifyRequest(r, string(body)); err != nil {
 		return nil, err
 	}
 
@@ -105,47 +106,10 @@ func (h *APIHandler) readSignedRequest(r *http.Request) (*request, error) {
 // checkVersion enforces minimum version and returns update info if applicable.
 // Returns (blocked, updateInfo) — if blocked is true, the response has already been written.
 func (h *APIHandler) checkVersion(w http.ResponseWriter, req sessions.ClientRequest) (blocked bool, updateInfo map[string]interface{}) {
-	if req.ClientVersion == "" {
-		return false, nil
+	if h.versionCheck != nil {
+		return h.versionCheck.CheckVersion(w, req)
 	}
-	svc := currentReleaseService()
-	if svc == nil {
-		return false, nil
-	}
-
-	selected, err := releasesvc.NewSelector(svc.store).Select(context.Background(), releasesvc.ClientContext{
-		Version:   req.ClientVersion,
-		Channel:   releasesvc.ChannelStable,
-		MachineID: req.MachineID,
-		CardCode:  req.Card,
-		AgentID:   "",
-	})
-	if err != nil || selected == nil {
-		return false, nil
-	}
-
-	manifest := manifestFromSelection(*selected)
-
-	info := map[string]interface{}{
-		"update_available": true,
-		"latest_version":   selected.Release.Version,
-		"force_update":     selected.Release.ForceUpdate,
-		"download_url":     manifest.PackageURL,
-		"sha256":           manifest.PackageSHA256,
-	}
-
-	if selected.Release.MinVersion != "" && compareVersion(req.ClientVersion, selected.Release.MinVersion) {
-		resp := map[string]interface{}{
-			"status":       "error",
-			"message":      fmt.Sprintf("版本过低，请更新到 v%s 或更高版本", selected.Release.MinVersion),
-			"download_url": manifest.PackageURL,
-			"sha256":       manifest.PackageSHA256,
-		}
-		httpapi.WriteJSON(w, http.StatusForbidden, resp)
-		return true, nil
-	}
-
-	return false, info
+	return false, nil
 }
 
 func (h *APIHandler) HandleActivate(w http.ResponseWriter, r *http.Request) {
@@ -169,13 +133,17 @@ func (h *APIHandler) HandleAnnouncement(w http.ResponseWriter, r *http.Request) 
 	httpapi.WriteOK(w, map[string]interface{}{"announcement": a})
 }
 
+func (h *APIHandler) handleAgentUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}
+
 func (h *APIHandler) HandleDllDownload(w http.ResponseWriter, r *http.Request) {
 	if !httpapi.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
 
 	// Verify HMAC signature — mandatory for all DLL downloads
-	if err := verifyRequestHMAC(r, r.URL.Path); err != nil {
+	if err := auth.VerifyRequest(r, r.URL.Path); err != nil {
 		httpapi.WriteError(w, http.StatusUnauthorized, "signature verification failed")
 		return
 	}
@@ -202,9 +170,12 @@ func (h *APIHandler) HandleDllDownload(w http.ResponseWriter, r *http.Request) {
 
 	// Encrypt with the client-compatible DLL key. The client expects:
 	// [12-byte GCM nonce][ciphertext][16-byte GCM tag].
-	clientSecret := defaultClientSecret()
-	salt := []byte("CefBridge-DLL-Salt-v1")
-	key := pbkdf2([]byte(clientSecret), salt, 100000, 32)
+
+	key, err := auth.GetDLLKey(r.Header.Get("X-Client-ID"))
+	if err != nil {
+		httpapi.WriteError(w, http.StatusUnauthorized, "client key unavailable")
+		return
+	}
 	encrypted, err := encryptDLLForClient(dllBytes, key)
 	if err != nil {
 		log.Printf("[DLL] Failed to encrypt response: %v", err)
@@ -214,7 +185,7 @@ func (h *APIHandler) HandleDllDownload(w http.ResponseWriter, r *http.Request) {
 
 	mid := session.MachineID
 	if len(mid) > 8 {
-		mid = short(mid, 8) + "..."
+		mid = mid[:8] + "..."
 	}
 	log.Printf("[DLL] Served to machine=%s size=%d", mid, len(encrypted))
 

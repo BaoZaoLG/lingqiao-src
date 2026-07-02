@@ -60,7 +60,7 @@ add_library(CefHook SHARED
 )
 
 set_target_properties(CefHook PROPERTIES LINKER_LANGUAGE CXX OUTPUT_NAME "CefHook" PREFIX "")
-target_include_directories(CefHook PRIVATE ${COMMON_INCLUDES} ${MINHOOK_DIR}/include ${MINHOOK_DIR}/src)
+target_include_directories(CefHook PRIVATE ${COMMON_INCLUDES} ${MINHOOK_DIR}/include ${MINHOOK_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/../../packages/autoexam/dist)
 target_link_libraries(CefHook PRIVATE shell32 comdlg32 advapi32 bcrypt winhttp crypt32)
 target_compile_options(CefHook PRIVATE /utf-8 /GS /guard:cf /O2 /GL)
 target_link_options(CefHook PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf /LTCG /OPT:REF /OPT:ICF /PDBALTPATH:%_PDB%)
@@ -100,6 +100,7 @@ add_custom_command(TARGET ManualDllInjectorGui POST_BUILD
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/version.rc.in ${CMAKE_CURRENT_BINARY_DIR}/version.rc @ONLY)
 
 set(INJECTOR_HEADERS
+    controllers/session_controller.h
     controllers/update_controller.h
     services/api_client.h
     security/antidebug.h
@@ -125,7 +126,7 @@ set(INJECTOR_HEADERS
     ui/ui_resources.qrc
 )
 
-add_executable(Injector WIN32 injector_qt.cpp controllers/update_controller.cpp services/api_client.cpp ${INJECTOR_HEADERS} ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
+add_executable(Injector WIN32 injector_qt.cpp controllers/session_controller.cpp controllers/update_controller.cpp services/api_client.cpp ${INJECTOR_HEADERS} ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
 set_target_properties(Injector PROPERTIES OUTPUT_NAME "CX_LingQiao")
 target_include_directories(Injector PRIVATE ${COMMON_INCLUDES} ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(Injector PRIVATE Qt5::Widgets Qt5::Network Qt5::WinExtras Qt5::Concurrent
@@ -143,3 +144,15 @@ add_custom_command(TARGET Injector POST_BUILD
     COMMAND "${CMAKE_PREFIX_PATH}/bin/windeployqt.exe" --release --force --no-translations "$<TARGET_FILE:Injector>"
     COMMENT "Deploying Qt runtime for Injector..."
 )
+
+# ============================================================
+# Client Tests
+# ============================================================
+add_executable(ClientTests WIN32 test_client.cpp services/api_client.cpp)
+target_include_directories(ClientTests PRIVATE ${COMMON_INCLUDES} ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(ClientTests PRIVATE Qt5::Core Qt5::Network winhttp bcrypt)
+target_compile_options(ClientTests PRIVATE /utf-8 /EHsc)
+target_compile_definitions(ClientTests PRIVATE
+    _CRT_SECURE_NO_WARNINGS
+)
+

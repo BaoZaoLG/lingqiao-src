@@ -1,4 +1,4 @@
-package main
+package payloads
 
 import (
 	"crypto/aes"
@@ -11,8 +11,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/lingqiao/server/internal/audit"
+	"github.com/lingqiao/server/internal/auth"
+	"github.com/lingqiao/server/internal/features/cards"
 	"github.com/lingqiao/server/internal/features/sessions"
 	"github.com/lingqiao/server/internal/httpapi"
+	"github.com/lingqiao/server/internal/utils"
 
 	"io"
 	"log"
@@ -24,38 +27,39 @@ import (
 	"time"
 )
 
-type PayloadHandler struct {
+type Handler struct {
 	store       *PayloadStore
 	sessionsSvc *sessions.Service
+	dataDir     string
 	uploadKey   string
 	auditSink   func(audit.Event)
 }
 
-func NewPayloadHandler(store *PayloadStore, sessionsSvc *sessions.Service) *PayloadHandler {
+func NewHandler(store *PayloadStore, sessionsSvc *sessions.Service, dataDir string) *Handler {
 	key := os.Getenv("UPLOAD_KEY")
 	if key == "" {
-		// Try to load persisted key, or generate a new one
-		if data, err := os.ReadFile(dataPath("upload_key")); err == nil {
+		keyPath := filepath.Join(dataDir, "upload_key")
+		if data, err := os.ReadFile(keyPath); err == nil {
 			key = strings.TrimSpace(string(data))
 		}
 		if key == "" {
 			b := make([]byte, 24)
 			rand.Read(b)
 			key = hex.EncodeToString(b)
-			os.MkdirAll(dataDir(), 0755)
-			os.WriteFile(dataPath("upload_key"), []byte(key), 0600)
-			log.Printf("[PAYLOAD] Generated upload key and saved to %s", dataPath("upload_key"))
+			os.MkdirAll(dataDir, 0755)
+			os.WriteFile(keyPath, []byte(key), 0600)
+			log.Printf("[PAYLOAD] Generated upload key and saved to %s", keyPath)
 		}
 	}
-	return &PayloadHandler{store: store, sessionsSvc: sessionsSvc, uploadKey: key}
+	return &Handler{store: store, sessionsSvc: sessionsSvc, dataDir: dataDir, uploadKey: key}
 }
 
-func (h *PayloadHandler) SetAuditSink(auditSink func(audit.Event)) {
+func (h *Handler) SetAuditSink(auditSink func(audit.Event)) {
 	h.auditSink = auditSink
 }
 
 // HandleUpload receives encrypted payload chunks from the pack script.
-func (h *PayloadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		httpapi.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -149,7 +153,7 @@ func (h *PayloadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chunkDir := dataPath("payloads", req.PayloadID)
+	chunkDir := filepath.Join(h.dataDir, "payloads", req.PayloadID)
 	os.MkdirAll(chunkDir, 0755)
 
 	for i, chunkData := range decodedChunks {
@@ -182,7 +186,7 @@ func (h *PayloadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *PayloadHandler) HandleAdminList(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) HandleAdminList(w http.ResponseWriter, r *http.Request) {
 	if !httpapi.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
@@ -206,7 +210,7 @@ func (h *PayloadHandler) HandleAdminList(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-func (h *PayloadHandler) HandleAdminManage(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) HandleAdminManage(w http.ResponseWriter, r *http.Request) {
 	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -233,7 +237,7 @@ func (h *PayloadHandler) HandleAdminManage(w http.ResponseWriter, r *http.Reques
 			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		_ = os.RemoveAll(dataPath("payloads", req.PayloadID))
+		_ = os.RemoveAll(filepath.Join(h.dataDir, "payloads", req.PayloadID))
 		h.recordPayloadAudit("payload_deleted", info, "")
 		httpapi.WriteOK(w, nil)
 	default:
@@ -242,8 +246,8 @@ func (h *PayloadHandler) HandleAdminManage(w http.ResponseWriter, r *http.Reques
 }
 
 // HandlePayloadInfo returns metadata about a payload (requires HMAC auth).
-func (h *PayloadHandler) HandlePayloadInfo(w http.ResponseWriter, r *http.Request) {
-	if err := verifyRequestHMAC(r, r.URL.Path); err != nil {
+func (h *Handler) HandlePayloadInfo(w http.ResponseWriter, r *http.Request) {
+	if err := auth.VerifyRequest(r, r.URL.Path); err != nil {
 		httpapi.WriteError(w, http.StatusUnauthorized, "missing auth")
 		return
 	}
@@ -270,7 +274,7 @@ func (h *PayloadHandler) HandlePayloadInfo(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-func (h *PayloadHandler) recordPayloadAudit(action string, info *PayloadInfo, extra string) {
+func (h *Handler) recordPayloadAudit(action string, info *PayloadInfo, extra string) {
 	if h == nil || h.auditSink == nil || info == nil {
 		return
 	}
@@ -300,7 +304,7 @@ func payloadSummaryFromInfo(info *PayloadInfo) *PayloadSummary {
 }
 
 // HandleChunkDownload serves a single chunk.
-func (h *PayloadHandler) HandleChunkDownload(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) HandleChunkDownload(w http.ResponseWriter, r *http.Request) {
 	parts := splitPayloadPath(r.URL.Path)
 	if len(parts) < 2 {
 		httpapi.WriteError(w, http.StatusBadRequest, "invalid path")
@@ -332,7 +336,7 @@ func (h *PayloadHandler) HandleChunkDownload(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	chunkPath := dataPath("payloads", payloadID, fmt.Sprintf("chunk_%04d.bin", chunkIdx))
+	chunkPath := filepath.Join(h.dataDir, "payloads", payloadID, fmt.Sprintf("chunk_%04d.bin", chunkIdx))
 	data, err := os.ReadFile(chunkPath)
 	if err != nil {
 		httpapi.WriteError(w, http.StatusNotFound, "chunk file not found")
@@ -346,7 +350,7 @@ func (h *PayloadHandler) HandleChunkDownload(w http.ResponseWriter, r *http.Requ
 
 // HandleKeyExchange: client sends session_token + machine_id + payload_id,
 // server returns the AES key encrypted with KEK derived from card_code + HWID.
-func (h *PayloadHandler) HandleKeyExchange(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) HandleKeyExchange(w http.ResponseWriter, r *http.Request) {
 	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -365,7 +369,7 @@ func (h *PayloadHandler) HandleKeyExchange(w http.ResponseWriter, r *http.Reques
 		httpapi.WriteError(w, http.StatusUnauthorized, "missing auth headers")
 		return
 	}
-	if err := VerifyHMAC(clientID, string(body), sig, timestamp, nonce); err != nil {
+	if err := auth.VerifyHMAC(clientID, string(body), sig, timestamp, nonce); err != nil {
 		httpapi.WriteError(w, http.StatusUnauthorized, "HMAC verification failed")
 		return
 	}
@@ -394,7 +398,7 @@ func (h *PayloadHandler) HandleKeyExchange(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Derive KEK from card_code + HWID
-	normalizedCard := normalizeCardCode(session.CardCode)
+	normalizedCard := cards.NormalizeCode(session.CardCode)
 	kekMaterial := normalizedCard + req.MachineID
 	salt := []byte("payload_key_" + req.PayloadID)
 	kek := pbkdf2DeriveKey([]byte(kekMaterial), salt, 100000, 32)
@@ -432,7 +436,7 @@ func (h *PayloadHandler) HandleKeyExchange(w http.ResponseWriter, r *http.Reques
 	keyHmac := mac.Sum(nil)
 
 	log.Printf("[KEY-EXCHANGE] OK: card=%s machine=%s payload=%s",
-		short(session.CardCode, 8)+"...", short(req.MachineID, 8)+"...", req.PayloadID)
+		utils.Short(session.CardCode, 8)+"...", utils.Short(req.MachineID, 8)+"...", req.PayloadID)
 
 	httpapi.WriteJSON(w, http.StatusOK, map[string]interface{}{
 		"status":         "ok",

@@ -68,6 +68,7 @@
 #include "workers.h"
 #include "antidebug.h"
 #include "strcrypt.h"
+#include "controllers/session_controller.h"
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
@@ -116,6 +117,81 @@ public:
         applyUiScale(true);
         initLogger();
         logEvent("APP", "Application started v" + GetClientVersion());
+
+        // Initialize SessionController
+        m_sessionController = new SessionController(new ApiClient(SERVER_HOST, SERVER_PORT), this);
+        connect(m_sessionController, &SessionController::onActivated, this, [this](const QString& token, qint64 exp) {
+            m_sessionToken = token;
+            m_machineID = GetMachineFingerprint();
+            m_cardExpiresAt = exp;
+            setStatus("ok", QString::fromUtf8(_S("激活成功")));
+            setUiLocked(false);
+            setConnDot("ok");
+            updateTrayIcon();
+            showTrayMessage(QString::fromUtf8(_S("灵桥")), QString::fromUtf8(_S("卡密激活成功")));
+            playSound("success");
+            logEvent("ACTIVATE", "Success");
+            downloadDllAsync();
+            fetchBalance();
+            startChatPolling();
+            CheckEnterpriseUpdateAsync();
+            if (exp > 0) {
+                setExpiryStatus(QString::fromUtf8(_S("到期：%1"))
+                    .arg(QDateTime::fromSecsSinceEpoch(exp).toString("yyyy-MM-dd hh:mm")));
+            }
+        });
+        connect(m_sessionController, &SessionController::onActivationFailed, this, [this](const ApiError& err) {
+            setStatus("error", err.detail);
+            playSound("error");
+            logEvent("ACTIVATE", "Failed: " + err.detail);
+            m_activateBtn->setEnabled(true);
+            m_cardInput->setEnabled(true);
+            m_activateBtn->setText(QString::fromUtf8(_S("激活")));
+            m_activateBtn->setProperty("role", "primary");
+            m_activateBtn->setStyleSheet(primaryButtonStyle(spx(12), spx(8)));
+            setConnDot("error");
+        });
+        connect(m_sessionController, &SessionController::onHeartbeatOk, this, [this](qint64 exp) {
+            setConnDot("ok");
+            CheckEnterpriseUpdateAsync();
+            if (exp > 0) {
+                m_cardExpiresAt = exp;
+                setExpiryStatus(QString::fromUtf8(_S("到期：%1"))
+                    .arg(QDateTime::fromSecsSinceEpoch(exp).toString("yyyy-MM-dd hh:mm")));
+            }
+        });
+        connect(m_sessionController, &SessionController::onHeartbeatFailed, this, [this](const ApiError& err, int failureCount) {
+            setConnDot("error");
+            logEvent("HEARTBEAT", QString("Failed (attempt %1): %2").arg(failureCount).arg(err.detail));
+            if (failureCount >= 3) {
+                logEvent("HEARTBEAT", "3 consecutive failures, attempting auto-reconnect");
+                QSettings s(_S("LingQiao"), _S("Injector"));
+                QString savedCard = s.value("card_code").toString();
+                qint64 savedExp = s.value("card_expires_at").toLongLong();
+                if (savedExp > 0 && savedExp < QDateTime::currentSecsSinceEpoch()) {
+                    resetToInactiveState("Heartbeat failed and saved card is expired", QString::fromUtf8(_S("卡密已过期，请输入新卡密")), true);
+                } else if (!savedCard.isEmpty()) {
+                    m_sessionToken.clear();
+                    m_machineID.clear();
+                    m_cardExpiresAt = 0;
+                    m_activated = false;
+                    m_cardInput->setText(savedCard);
+                    setStatus("idle", QString::fromUtf8(_S("连接中断，正在重新激活...")));
+                    onActivate();
+                } else {
+                    resetToInactiveState("Heartbeat failed without saved card", QString::fromUtf8(_S("会话已失效，请输入新卡密")), true);
+                }
+            }
+        });
+        connect(m_sessionController, &SessionController::onSessionExpired, this, [this](const QString& reason) {
+            resetToInactiveState(reason, QString::fromUtf8(_S("连接中断，请重新激活")), false);
+        });
+        connect(m_sessionController, &SessionController::onUpdateHint, this, [this](const UpdateHint& hint) {
+            handleUpdateCheck(hint.latestVersion, hint.downloadUrl, hint.forceUpdate, hint.sha256);
+        });
+        connect(m_sessionController, &SessionController::onVersionRejected, this, [this](const QString& detail, const QString& downloadUrl, const QString& sha256) {
+            applyForceUpdateBlock(ExtractVersionFromMsg(detail), downloadUrl, sha256);
+        });
 
         // Load saved settings
         QSettings settings(_S("LingQiao"), _S("Injector"));
@@ -198,7 +274,8 @@ public:
     ~MainWindow() {
         m_heartbeatRunning = false;
         logEvent("APP", "Application closing");
-        if (m_activated) saveSession();
+        // Session is saved internally by SessionController.
+        // deactivateSessionOnServer is also called internally if needed, or we just leave it.
         CleanupDll();
         cleanupTempFiles();
     }
@@ -232,6 +309,7 @@ public:
 
 private:
     TitleBar*      m_titleBar      = nullptr;
+    SessionController* m_sessionController = nullptr;
     InlineStatus*  m_status        = nullptr;
     QStackedWidget* m_pageStack     = nullptr;
     AnimatedButton* m_homeNavBtn    = nullptr;

@@ -1,4 +1,4 @@
-package main
+package payloads
 
 import (
 	"fmt"
@@ -6,6 +6,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/lingqiao/server/internal/storage"
 )
 
 // ── Payload Storage ─────────────────────────────────────────────────────────
@@ -37,10 +39,10 @@ type PayloadStore struct {
 	mu       sync.RWMutex
 	payloads map[string]*PayloadInfo
 	activeID string
-	storage  *JSONStorage
+	storage  storage.Store
 }
 
-func NewPayloadStore(storage *JSONStorage) *PayloadStore {
+func NewStore(storage storage.Store) *PayloadStore {
 	ps := &PayloadStore{
 		payloads: make(map[string]*PayloadInfo),
 		storage:  storage,

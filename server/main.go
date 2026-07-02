@@ -19,9 +19,14 @@ import (
 	"time"
 
 	"github.com/lingqiao/server/internal/audit"
+	"github.com/lingqiao/server/internal/auth"
 	"github.com/lingqiao/server/internal/config"
 	"github.com/lingqiao/server/internal/features/agents"
 	"github.com/lingqiao/server/internal/features/cards"
+	"github.com/lingqiao/server/internal/features/chat"
+	"github.com/lingqiao/server/internal/features/payloads"
+	"github.com/lingqiao/server/internal/features/releases"
+	"github.com/lingqiao/server/internal/features/scripts"
 	"github.com/lingqiao/server/internal/features/security/blacklist"
 	"github.com/lingqiao/server/internal/features/sessions"
 )
@@ -74,7 +79,7 @@ func main() {
 	initAnnouncement()
 
 	cardsRepo := cards.NewSQLiteRepository(db)
-	cardsSvc := cards.NewService(cardsRepo, generateCardCode, time.Now)
+	cardsSvc := cards.NewService(cardsRepo, cards.GenerateCardCode, time.Now)
 
 	auditRepo := audit.NewSQLiteRepository(db)
 	auditRecorder := audit.NewRecorder(auditRepo)
@@ -160,9 +165,13 @@ func main() {
 		}
 	})
 
-	api := NewAPIHandler(blacklistSvc, storage, sessionsSvc)
-	admin := NewAdminHandler(cardsSvc, sessionsSvc, agentsSvc, inviteSvc, blacklistSvc, auditRecorder, storage, db)
-	admin.chat = api.chat
+	chatSvc := chat.NewService(storage, time.Now)
+	chatHandler := chat.NewHandler(chatSvc, sessionsSvc, blacklistSvc)
+	releaseHandler := releases.NewHandler(releases.CurrentService(), sessionsSvc, auditRecorder)
+	scriptsHandler := scripts.NewHandler(auditRecorder, sessionsSvc)
+
+	api := NewAPIHandler(blacklistSvc, storage, sessionsSvc, releaseHandler)
+	admin := NewAdminHandler(cardsSvc, sessionsSvc, agentsSvc, inviteSvc, blacklistSvc, auditRecorder, db)
 
 	adapter := &agentCardManagerAdapter{
 		cardsSvc:  cardsSvc,
@@ -180,8 +189,8 @@ func main() {
 			log.Printf("[AUDIT] Failed to record audit for agent %s: %v", agentID, err)
 		}
 	})
-	payloadStore := NewPayloadStore(storage)
-	payload := NewPayloadHandler(payloadStore, sessionsSvc)
+	payloadStore := payloads.NewStore(storage)
+	payload := payloads.NewHandler(payloadStore, sessionsSvc, cfg.DataDir)
 	payload.SetAuditSink(func(e audit.Event) {
 		if err := auditRecorder.Append(e); err != nil {
 			log.Printf("[AUDIT] Failed to record audit for payload: %v", err)
@@ -194,7 +203,7 @@ func main() {
 	defer cancel()
 	go api.SessionCleanupTask(ctx)
 
-	adminServer := buildAdminServer(cfg.AdminAddr, api, admin, payload, cardsHandler, agentAdmin)
+	adminServer := buildAdminServer(cfg.AdminAddr, api, admin, payload, cardsHandler, agentAdmin, chatHandler, releaseHandler, scriptsHandler)
 	agentServer := buildAgentServer(cfg.AgentAddr, agent)
 
 	startServers(adminServer, agentServer)
@@ -243,7 +252,7 @@ func handleCLIGenerate(cardsSvc *cards.Service, auditRecorder *audit.Recorder) b
 
 // ── Server Construction ──────────────────────────────────────────────────────
 
-func buildAdminServer(addr string, api *APIHandler, admin *AdminHandler, payload *PayloadHandler, cardsHandler *cards.Handler, agentAdmin *agents.AdminHandler) *http.Server {
+func buildAdminServer(addr string, api *APIHandler, admin *AdminHandler, payload *payloads.Handler, cardsHandler *cards.Handler, agentAdmin *agents.AdminHandler, chatHandler *chat.Handler, releaseHandler *releases.Handler, scriptsHandler *scripts.Handler) *http.Server {
 	mux := http.NewServeMux()
 	activateLimiter := httpapi.NewRateLimiter(1*time.Minute, 20)
 
@@ -258,16 +267,16 @@ func buildAdminServer(addr string, api *APIHandler, admin *AdminHandler, payload
 	mux.HandleFunc("/api/v1/heartbeat", api.HandleHeartbeat)
 	mux.HandleFunc("/api/v1/deactivate", api.HandleDeactivate)
 	mux.HandleFunc("/api/v1/announcement", api.HandleAnnouncement)
-	mux.HandleFunc("/api/v1/chat/profile", api.HandleChatProfile)
-	mux.HandleFunc("/api/v1/chat/messages", api.HandleChatMessages)
-	mux.HandleFunc("/api/v1/chat/presence", api.HandleChatPresence)
-	mux.HandleFunc("/api/v1/chat/react", api.HandleChatReact)
-	mux.HandleFunc("/api/v1/chat/send", api.HandleChatSend)
+	mux.HandleFunc("/api/v1/chat/profile", chatHandler.HandleChatProfile)
+	mux.HandleFunc("/api/v1/chat/messages", chatHandler.HandleChatMessages)
+	mux.HandleFunc("/api/v1/chat/presence", chatHandler.HandleChatPresence)
+	mux.HandleFunc("/api/v1/chat/react", chatHandler.HandleChatReact)
+	mux.HandleFunc("/api/v1/chat/send", chatHandler.HandleChatSend)
 	mux.HandleFunc("/api/v1/dll", api.HandleDllDownload)
-	mux.HandleFunc("/api/v1/script", api.HandleScriptDownload)
-	mux.HandleFunc("/api/v1/update/check", api.HandleUpdateCheck)
-	mux.HandleFunc("/api/v1/update/events", api.HandleUpdateEvent)
-	mux.HandleFunc("/api/v1/update/package/", api.HandleUpdatePackageDownload)
+	mux.HandleFunc("/api/v1/script", scriptsHandler.HandleScriptDownload)
+	mux.HandleFunc("/api/v1/update/check", releaseHandler.HandleUpdateCheck)
+	mux.HandleFunc("/api/v1/update/events", releaseHandler.HandleUpdateEvent)
+	mux.HandleFunc("/api/v1/update/package/", releaseHandler.HandleUpdatePackageDownload)
 
 	// Payload routes
 	registerPayloadRoutes(mux, api, payload)
@@ -276,7 +285,7 @@ func buildAdminServer(addr string, api *APIHandler, admin *AdminHandler, payload
 	mux.HandleFunc("/api/health", healthHandler)
 
 	// Admin routes (authenticated)
-	registerAdminRoutes(mux, admin, payload, cardsHandler, agentAdmin)
+	registerAdminRoutes(mux, admin, payload, cardsHandler, agentAdmin, chatHandler, releaseHandler, scriptsHandler)
 
 	// Serve admin panel HTML
 	adminSubFS, _ := fs.Sub(webDistFS, "web-dist/admin")
@@ -306,7 +315,7 @@ func buildAgentServer(addr string, agent *agents.AgentHandler) *http.Server {
 
 // ── Route Registration ───────────────────────────────────────────────────────
 
-func registerPayloadRoutes(mux *http.ServeMux, api *APIHandler, payload *PayloadHandler) {
+func registerPayloadRoutes(mux *http.ServeMux, api *APIHandler, payload *payloads.Handler) {
 	mux.HandleFunc("/api/v1/key-exchange", func(w http.ResponseWriter, r *http.Request) {
 		payload.HandleKeyExchange(w, r)
 	})
@@ -323,16 +332,19 @@ func registerPayloadRoutes(mux *http.ServeMux, api *APIHandler, payload *Payload
 	})
 }
 
-func handleChunkAuth(w http.ResponseWriter, r *http.Request, payload *PayloadHandler) {
-	if err := verifyRequestHMAC(r, r.URL.Path); err != nil {
+func handleChunkAuth(w http.ResponseWriter, r *http.Request, payload *payloads.Handler) {
+	if err := auth.VerifyRequest(r, r.URL.Path); err != nil {
 		httpapi.WriteError(w, http.StatusUnauthorized, "missing auth")
 		return
 	}
 	payload.HandleChunkDownload(w, r)
 }
 
-func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *PayloadHandler, cardsHandler *cards.Handler, agentAdmin *agents.AdminHandler) {
+func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *payloads.Handler, cardsHandler *cards.Handler, agentAdmin *agents.AdminHandler, chatHandler *chat.Handler, releaseHandler *releases.Handler, scriptsHandler *scripts.Handler) {
 	auth := h.adminAuth
+	authP := func(perm string, handler http.HandlerFunc) http.HandlerFunc {
+		return auth(h.RequirePermission(perm, handler))
+	}
 
 	// Auth & settings
 	mux.HandleFunc("/admin/api/login", h.HandleLogin)
@@ -344,21 +356,31 @@ func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *PayloadHa
 	mux.HandleFunc("/admin/api/ops/overview", auth(h.HandleOpsOverview))
 	mux.HandleFunc("/admin/api/modules/overview", auth(h.HandleModulesOverview))
 
+	// Admin Users
+	mux.HandleFunc("/admin/api/admin-users", authP("admins.write", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			h.HandleAdminUserCreate(w, r)
+		} else {
+			h.HandleAdminUsersList(w, r)
+		}
+	}))
+	mux.HandleFunc("/admin/api/admin-user/update", authP("admins.write", h.HandleAdminUserUpdate))
+
 	// Card management
-	mux.HandleFunc("/admin/api/cards", auth(cardsHandler.HandleListCards))
-	mux.HandleFunc("/admin/api/card/generate", auth(cardsHandler.HandleGenerateCard))
-	mux.HandleFunc("/admin/api/card/batch-generate", auth(cardsHandler.HandleBatchGenerateCards))
-	mux.HandleFunc("/admin/api/card/update", auth(cardsHandler.HandleUpdateCard))
-	mux.HandleFunc("/admin/api/card/update-details", auth(cardsHandler.HandleUpdateCardDetails))
-	mux.HandleFunc("/admin/api/cards/bulk", auth(cardsHandler.HandleBulkCards))
-	mux.HandleFunc("/admin/api/cards/export", auth(h.HandleExportCards))
-	mux.HandleFunc("/admin/api/cards/import", auth(h.HandleImportCards))
+	mux.HandleFunc("/admin/api/cards", authP("cards.read", cardsHandler.HandleListCards))
+	mux.HandleFunc("/admin/api/card/generate", authP("cards.write", cardsHandler.HandleGenerateCard))
+	mux.HandleFunc("/admin/api/card/batch-generate", authP("cards.write", cardsHandler.HandleBatchGenerateCards))
+	mux.HandleFunc("/admin/api/card/update", authP("cards.write", cardsHandler.HandleUpdateCard))
+	mux.HandleFunc("/admin/api/card/update-details", authP("cards.write", cardsHandler.HandleUpdateCardDetails))
+	mux.HandleFunc("/admin/api/cards/bulk", authP("cards.bulk", cardsHandler.HandleBulkCards))
+	mux.HandleFunc("/admin/api/cards/export", authP("cards.read", h.HandleExportCards))
+	mux.HandleFunc("/admin/api/cards/import", authP("cards.write", h.HandleImportCards))
 
 	// Sessions & blacklist
-	mux.HandleFunc("/admin/api/sessions", auth(h.HandleListSessions))
-	mux.HandleFunc("/admin/api/force-logout", auth(h.HandleForceLogout))
-	mux.HandleFunc("/admin/api/blacklist", auth(h.HandleBlacklist))
-	mux.HandleFunc("/admin/api/audit", auth(h.HandleAuditLog))
+	mux.HandleFunc("/admin/api/sessions", authP("sessions.read", h.HandleListSessions))
+	mux.HandleFunc("/admin/api/force-logout", authP("sessions.force_logout", h.HandleForceLogout))
+	mux.HandleFunc("/admin/api/blacklist", authP("system.read", h.HandleBlacklist))
+	mux.HandleFunc("/admin/api/audit", authP("audit.read", h.HandleAuditLog))
 
 	// Announcement
 	mux.HandleFunc("/admin/api/announcement", auth(func(w http.ResponseWriter, r *http.Request) {
@@ -370,32 +392,32 @@ func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *PayloadHa
 	}))
 
 	// Community chat
-	mux.HandleFunc("/admin/api/chat/messages", auth(h.HandleChatMessages))
-	mux.HandleFunc("/admin/api/chat/delete", auth(h.HandleChatDelete))
-	mux.HandleFunc("/admin/api/chat/system", auth(h.HandleChatSystem))
-	mux.HandleFunc("/admin/api/chat/mute", auth(h.HandleChatMute))
+	mux.HandleFunc("/admin/api/chat/messages", auth(chatHandler.HandleAdminChatMessages))
+	mux.HandleFunc("/admin/api/chat/delete", auth(chatHandler.HandleChatDelete))
+	mux.HandleFunc("/admin/api/chat/system", auth(chatHandler.HandleChatSystem))
+	mux.HandleFunc("/admin/api/chat/mute", auth(chatHandler.HandleChatMute))
 
 	// Machines
-	mux.HandleFunc("/admin/api/machines", auth(h.HandleAdminMachines))
-	mux.HandleFunc("/admin/api/machine/cards", auth(h.HandleMachineCards))
+	mux.HandleFunc("/admin/api/machines", authP("agents.read", h.HandleAdminMachines))
+	mux.HandleFunc("/admin/api/machine/cards", authP("agents.read", h.HandleMachineCards))
 
 	// Agents
-	agentAdmin.RegisterRoutes(mux, auth)
+	agentAdmin.RegisterRoutes(mux, authP)
 
 	// Invites
-	mux.HandleFunc("/admin/api/invites", auth(h.HandleInviteList))
-	mux.HandleFunc("/admin/api/invite/create", auth(h.HandleInviteCreate))
-	mux.HandleFunc("/admin/api/invite/delete", auth(h.HandleInviteDelete))
+	mux.HandleFunc("/admin/api/invites", authP("invites.write", h.HandleInviteList))
+	mux.HandleFunc("/admin/api/invite/create", authP("invites.write", h.HandleInviteCreate))
+	mux.HandleFunc("/admin/api/invite/delete", authP("invites.write", h.HandleInviteDelete))
 
 	// Updates
-	mux.HandleFunc("/admin/api/releases", auth(h.HandleReleases))
-	mux.HandleFunc("/admin/api/releases/", auth(h.HandleReleaseRoute))
-	mux.HandleFunc("/admin/api/script", auth(h.HandleScriptAdmin))
+	mux.HandleFunc("/admin/api/releases", authP("releases.write", releaseHandler.HandleReleases))
+	mux.HandleFunc("/admin/api/releases/", authP("releases.write", releaseHandler.HandleReleaseRoute))
+	mux.HandleFunc("/admin/api/script", authP("scripts.write", scriptsHandler.HandleScriptAdmin))
 
 	// Payload upload (requires admin auth + upload key)
-	mux.HandleFunc("/admin/api/payloads", auth(payload.HandleAdminList))
-	mux.HandleFunc("/admin/api/payloads/manage", auth(payload.HandleAdminManage))
-	mux.HandleFunc("/admin/api/payload/upload", auth(payload.HandleUpload))
+	mux.HandleFunc("/admin/api/payloads", authP("payloads.write", payload.HandleAdminList))
+	mux.HandleFunc("/admin/api/payloads/manage", authP("payloads.write", payload.HandleAdminManage))
+	mux.HandleFunc("/admin/api/payload/upload", authP("payloads.write", payload.HandleUpload))
 }
 
 // ── Server Helpers ───────────────────────────────────────────────────────────

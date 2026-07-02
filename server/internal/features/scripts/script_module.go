@@ -1,7 +1,9 @@
-package main
+package scripts
 
 import (
 	"github.com/lingqiao/server/internal/audit"
+	"github.com/lingqiao/server/internal/auth"
+	"github.com/lingqiao/server/internal/features/sessions"
 	"github.com/lingqiao/server/internal/httpapi"
 
 	"crypto/sha256"
@@ -23,16 +25,18 @@ var scriptVersionRe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 // ScriptModule ...
 type ScriptModule struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Version   string    `json:"version"`
-	SHA256    string    `json:"sha256"`
-	Content   string    `json:"content"`
-	Size      int       `json:"size"`
-	Note      string    `json:"note,omitempty"`
-	Active    bool      `json:"active"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Version      string    `json:"version"`
+	SHA256       string    `json:"sha256"`
+	Content      string    `json:"content"`
+	Size         int       `json:"size"`
+	Note         string    `json:"note,omitempty"`
+	SourceCommit string    `json:"source_commit,omitempty"`
+	ReleaseID    string    `json:"release_id,omitempty"`
+	Active       bool      `json:"active"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type scriptIndex struct {
@@ -40,7 +44,23 @@ type scriptIndex struct {
 	Scripts  []ScriptModule `json:"scripts"`
 }
 
-func scriptDir() string { return dataPath("scripts") }
+var globalDataDir string
+
+func Init(dir string) { globalDataDir = dir }
+
+func scriptDir() string { return filepath.Join(globalDataDir, "scripts") }
+
+type Handler struct {
+	auditRecorder *audit.Recorder
+	sessionsSvc   *sessions.Service
+}
+
+func NewHandler(auditRecorder *audit.Recorder, sessionsSvc *sessions.Service) *Handler {
+	return &Handler{
+		auditRecorder: auditRecorder,
+		sessionsSvc:   sessionsSvc,
+	}
+}
 
 func scriptIndexPath() string { return filepath.Join(scriptDir(), "index.json") }
 
@@ -361,12 +381,12 @@ func sanitizeScriptVersion(version string) string {
 }
 
 // HandleScriptDownload ...
-func (h *APIHandler) HandleScriptDownload(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) HandleScriptDownload(w http.ResponseWriter, r *http.Request) {
 	if !httpapi.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
 	if r.Header.Get("X-HMAC-Signature") != "" {
-		if err := verifyRequestHMAC(r, r.URL.Path); err != nil {
+		if err := auth.VerifyRequest(r, r.URL.Path); err != nil {
 			httpapi.WriteError(w, http.StatusUnauthorized, "signature verification failed")
 			return
 		}
@@ -396,17 +416,30 @@ func (h *APIHandler) HandleScriptDownload(w http.ResponseWriter, r *http.Request
 		httpapi.WriteError(w, http.StatusNotFound, "script module not published")
 		return
 	}
-	httpapi.WriteOK(w, map[string]interface{}{
-		"version":    module.Version,
-		"sha256":     module.SHA256,
-		"content":    module.Content,
-		"size":       module.Size,
-		"updated_at": module.UpdatedAt,
-	})
+	
+	w.Header().Set("X-Script-ID", module.ID)
+	w.Header().Set("X-Script-Version", module.Version)
+	w.Header().Set("X-Script-SHA256", module.SHA256)
+	w.Header().Set("X-Script-Hash", module.SHA256)
+
+	if r.Header.Get("Accept") == "application/json" || r.URL.Query().Get("format") == "json" {
+		httpapi.WriteOK(w, map[string]interface{}{
+			"version":    module.Version,
+			"sha256":     module.SHA256,
+			"content":    module.Content,
+			"size":       module.Size,
+			"updated_at": module.UpdatedAt,
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(module.Content))
 }
 
 // HandleScriptAdmin ...
-func (h *AdminHandler) HandleScriptAdmin(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) HandleScriptAdmin(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		if id := r.URL.Query().Get("id"); id != "" {
@@ -526,7 +559,7 @@ func (h *AdminHandler) HandleScriptAdmin(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-func (h *AdminHandler) recordScriptAudit(action string, module *ScriptModule, extra string) error {
+func (h *Handler) recordScriptAudit(action string, module *ScriptModule, extra string) error {
 	if h == nil || h.auditRecorder == nil || module == nil {
 		return nil
 	}

@@ -1,4 +1,4 @@
-package main
+package releases
 
 import (
 	"context"
@@ -28,7 +28,7 @@ var (
 	releaseDataDir string
 )
 
-func configureReleaseService(dir string) {
+func ConfigureService(dir string) {
 	releaseSvcMu.Lock()
 	old := releaseSvc
 	releaseSvc = nil
@@ -59,7 +59,7 @@ func newReleaseService(dir string, seed []byte) (*releaseService, error) {
 	return &releaseService{store: store, signer: signer, dataDir: dir}, nil
 }
 
-func currentReleaseService() *releaseService {
+func CurrentService() *releaseService {
 	releaseSvcMu.RLock()
 	svc := releaseSvc
 	dir := releaseDataDir

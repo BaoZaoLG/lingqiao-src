@@ -33,55 +33,9 @@ private:
         m_activateBtn->setText("...");
         setStatus("idle", QString::fromUtf8(_S("正在连接服务器验证卡密...")));
 
-        QThread* thread = new QThread();
-        ActivateWorker* w = new ActivateWorker();
-        w->cardCode = code;
-        w->machineID = GetMachineFingerprint();
-        w->fingerprint = w->machineID;
-        w->moveToThread(thread);
-        connect(thread, &QThread::started, w, &ActivateWorker::process);
-        connect(w, &ActivateWorker::updateAvailable, this, [this](const QString& latest, const QString& url, bool force, const QString& sha256) {
-            handleUpdateCheck(latest, url, force, sha256);
-        });
-        connect(w, &ActivateWorker::versionRejected, this, [this,thread,w](const QString& msg, const QString& dlUrl, const QString& sha256) {
-            applyForceUpdateBlock(ExtractVersionFromMsg(msg), dlUrl, sha256);
-            thread->quit(); w->deleteLater(); thread->deleteLater();
-        });
-        connect(w, &ActivateWorker::activationSuccess, this, [this,thread,w](const QString& token, qint64 exp) {
-            m_sessionToken = token;
-            m_machineID = w->machineID;
-            m_cardExpiresAt = exp;
-            setStatus("ok", QString::fromUtf8(_S("激活成功")));
-            setUiLocked(false);
-            setConnDot("ok");
-            saveSession();
-            updateTrayIcon();
-            showTrayMessage(QString::fromUtf8(_S("灵桥")), QString::fromUtf8(_S("卡密激活成功")));
-            playSound("success");
-            logEvent("ACTIVATE", "Success: card=" + maskCard(w->cardCode));
-            downloadDllAsync();
-            fetchBalance();
-            startChatPolling();
-            CheckEnterpriseUpdateAsync();
-            if (exp > 0) {
-                setExpiryStatus(QString::fromUtf8(_S("到期：%1"))
-                    .arg(QDateTime::fromSecsSinceEpoch(exp).toString("yyyy-MM-dd hh:mm")));
-            }
-            thread->quit(); w->deleteLater(); thread->deleteLater();
-        });
-        connect(w, &ActivateWorker::activationFailed, this, [this,thread,w](const QString& err) {
-            setStatus("error", err);
-            playSound("error");
-            logEvent("ACTIVATE", "Failed: card=" + maskCard(w->cardCode) + " err=" + err);
-            m_activateBtn->setEnabled(true);
-            m_cardInput->setEnabled(true);
-            m_activateBtn->setText(QString::fromUtf8(_S("激活")));
-            m_activateBtn->setProperty("role", "primary");
-            m_activateBtn->setStyleSheet(primaryButtonStyle(spx(12), spx(8)));
-            setConnDot("error");
-            thread->quit(); w->deleteLater(); thread->deleteLater();
-        });
-        thread->start();
+        if (m_sessionController) {
+            m_sessionController->activate(code, GetMachineFingerprint(), GetMachineFingerprint(), GetClientVersion());
+        }
     }
 
     void onBrowse() {

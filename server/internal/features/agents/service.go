@@ -145,19 +145,30 @@ func (s *Service) ChangePassword(ctx context.Context, id, oldPassword, newPasswo
 }
 
 func (s *Service) SetAgentStatus(ctx context.Context, id string, disabled bool) error {
-	agent, err := s.repo.GetAgent(ctx, id)
-	if err != nil {
+	if err := s.repo.UpdateAgentStatus(ctx, id, disabled); err != nil {
 		return err
 	}
-	if agent == nil {
-		return ErrAgentNotFound
+	action := "agent_enabled"
+	if disabled {
+		action = "agent_disabled"
 	}
-	err = s.repo.UpdateAgentStatus(ctx, id, disabled)
-	if err != nil {
+	if s.auditSink != nil {
+		s.auditSink(action, id, fmt.Sprintf("agent_id=%s", id))
+	}
+	return nil
+}
+
+func (s *Service) SetAgentLimits(ctx context.Context, id string, maxSessionDuration, maxDailySessions, maxConcurrentSessions int) error {
+	limits := AgentLimits{
+		MaxSessionDurationMinutes: maxSessionDuration,
+		MaxDailySessions:          maxDailySessions,
+		MaxConcurrentSessions:     maxConcurrentSessions,
+	}
+	if err := s.repo.UpdateAgentLimits(ctx, id, limits); err != nil {
 		return err
 	}
 	if s.auditSink != nil {
-		s.auditSink("agent_status_changed", id, fmt.Sprintf("agent_id=%s disabled=%v", id, disabled))
+		s.auditSink("agent_limits_updated", id, fmt.Sprintf("duration=%d daily=%d concurrent=%d", maxSessionDuration, maxDailySessions, maxConcurrentSessions))
 	}
 	return nil
 }

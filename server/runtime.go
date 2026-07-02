@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/lingqiao/server/internal/auth"
+	"github.com/lingqiao/server/internal/features/releases"
 )
 
 // RuntimeConfig ...
@@ -35,9 +38,10 @@ func ConfigureRuntime(cfg RuntimeConfig) {
 	runtimeConfig = cfg
 	runtimeMu.Unlock()
 
-	configureReleaseService(cfg.DataDir)
+	releases.ConfigureService(cfg.DataDir)
 	initAnnouncement()
-	configureAuthClients()
+	auth.Init(cfg.DataDir)
+	auth.ConfigureClients()
 }
 
 func currentRuntimeConfig() RuntimeConfig {

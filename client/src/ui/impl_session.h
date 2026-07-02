@@ -30,128 +30,24 @@
         return "****";
     }
 
-    // ── Session Persistence (encrypted with machine fingerprint) ────
-    // XOR-encrypt a string with a key derived from machine fingerprint
-    static QString xorEncrypt(const QString& data, const QString& key) {
-        QByteArray dataBytes = data.toUtf8();
-        QByteArray keyBytes = key.toUtf8();
-        if (keyBytes.isEmpty()) return QString();
-        QByteArray result;
-        for (int i = 0; i < dataBytes.size(); i++) {
-            result.append(dataBytes[i] ^ keyBytes[i % keyBytes.size()] ^ (char)((i * 0x9D) & 0xFF));
-        }
-        return result.toBase64();
-    }
-
-    static QString xorDecrypt(const QString& encBase64, const QString& key) {
-        QByteArray dataBytes = QByteArray::fromBase64(encBase64.toUtf8());
-        QByteArray keyBytes = key.toUtf8();
-        if (keyBytes.isEmpty()) return QString();
-        QByteArray result;
-        for (int i = 0; i < dataBytes.size(); i++) {
-            result.append(dataBytes[i] ^ keyBytes[i % keyBytes.size()] ^ (char)((i * 0x9D) & 0xFF));
-        }
-        return QString::fromUtf8(result);
-    }
-
-    void saveSession() {
-        QString fp = GetMachineFingerprint();
-        if (fp.isEmpty()) {
-            logEvent("SESSION", "Cannot save session: machine fingerprint unavailable");
-            return;
-        }
-        QSettings s(_S("LingQiao"), _S("Injector"));
-        s.setValue("session_token", xorEncrypt(m_sessionToken, fp));
-        s.setValue("machine_id", m_machineID);
-        s.setValue("card_expires_at", m_cardExpiresAt);
-        s.setValue("card_code", m_cardInput ? m_cardInput->text() : "");
-    }
-
-    void clearSavedSession() {
-        QSettings s(_S("LingQiao"), _S("Injector"));
-        s.remove("session_token");
-        s.remove("machine_id");
-        s.remove("card_expires_at");
-        s.remove("card_code");
-    }
-
-    static void queuePendingDeactivation(const QString& token, const QString& mid) {
-        QString fp = GetMachineFingerprint();
-        if (token.isEmpty() || mid.isEmpty() || fp.isEmpty()) return;
-        QSettings s(_S("LingQiao"), _S("Injector"));
-        QStringList tokens = s.value("pending_deactivate_tokens").toStringList();
-        QStringList machines = s.value("pending_deactivate_machines").toStringList();
-        if (!tokens.contains(xorEncrypt(token, fp))) {
-            tokens.append(xorEncrypt(token, fp));
-            machines.append(mid);
-            s.setValue("pending_deactivate_tokens", tokens);
-            s.setValue("pending_deactivate_machines", machines);
-        }
-    }
-
-    void flushPendingDeactivations() {
-        QString fp = GetMachineFingerprint();
-        if (fp.isEmpty()) return;
-        QSettings s(_S("LingQiao"), _S("Injector"));
-        QStringList tokens = s.value("pending_deactivate_tokens").toStringList();
-        QStringList machines = s.value("pending_deactivate_machines").toStringList();
-        if (tokens.isEmpty() || tokens.size() != machines.size()) {
-            s.remove("pending_deactivate_tokens");
-            s.remove("pending_deactivate_machines");
-            return;
-        }
-        QtConcurrent::run([tokens, machines, fp]() {
-            QStringList keepTokens;
-            QStringList keepMachines;
-            for (int i = 0; i < tokens.size(); ++i) {
-                QString token = xorDecrypt(tokens[i], fp);
-                QString mid = machines[i];
-                if (token.isEmpty() || mid.isEmpty()) continue;
-                QJsonObject req;
-                req["client_id"] = QString::fromWCharArray(CLIENT_ID);
-                req["session_token"] = token;
-                req["machine_id"] = mid;
-                QByteArray body = QJsonDocument(req).toJson(QJsonDocument::Compact);
-                HttpResponse resp = HttpPostJson(SERVER_HOST, SERVER_PORT, g_pathDeact, body);
-                if (resp.statusCode == 0 || resp.statusCode >= 500) {
-                    keepTokens.append(tokens[i]);
-                    keepMachines.append(mid);
-                }
-            }
-            QSettings out(_S("LingQiao"), _S("Injector"));
-            if (keepTokens.isEmpty()) {
-                out.remove("pending_deactivate_tokens");
-                out.remove("pending_deactivate_machines");
-            } else {
-                out.setValue("pending_deactivate_tokens", keepTokens);
-                out.setValue("pending_deactivate_machines", keepMachines);
-            }
-        });
-    }
-
-    void deactivateSessionOnServer(const QString& token, const QString& mid) {
-        if (token.isEmpty() || mid.isEmpty()) return;
-        QtConcurrent::run([token, mid]() {
-            QJsonObject req;
-            req["client_id"] = QString::fromWCharArray(CLIENT_ID);
-            req["session_token"] = token;
-            req["machine_id"] = mid;
-            QByteArray body = QJsonDocument(req).toJson(QJsonDocument::Compact);
-            HttpResponse resp = HttpPostJson(SERVER_HOST, SERVER_PORT, g_pathDeact, body);
-            if (resp.statusCode == 0 || resp.statusCode >= 500) {
-                queuePendingDeactivation(token, mid);
-            }
-        });
-    }
+    // ── Session Persistence ────
+    // Session persistence and network orchestration is now handled by SessionController.
+    // The following methods bridge the UI state to the new controller.
 
     void resetToInactiveState(const QString& reason, const QString& statusText,
                               bool notifyServer = false,
                               const QString& tokenOverride = QString(),
                               const QString& midOverride = QString(),
                               const QString& statusState = QStringLiteral("error")) {
-        QString token = tokenOverride.isEmpty() ? m_sessionToken : tokenOverride;
-        QString mid = midOverride.isEmpty() ? m_machineID : midOverride;
-        if (notifyServer) deactivateSessionOnServer(token, mid);
+        if (notifyServer && m_sessionController) {
+            QString token = tokenOverride.isEmpty() ? m_sessionToken : tokenOverride;
+            QString mid = midOverride.isEmpty() ? m_machineID : midOverride;
+            m_sessionController->deactivateSpecificSessionOnServer(token, mid, GetMachineFingerprint());
+        }
+        
+        if (m_sessionController) {
+            m_sessionController->resetToInactive(reason);
+        }
 
         logEvent("SESSION", reason);
         m_sessionToken.clear();
@@ -160,7 +56,6 @@
         m_heartbeatFailCount = 0;
         m_heartbeatInProgress = false;
         SetEnvironmentVariableW(L"INJECTOR_SESSION_TOKEN", NULL);
-        clearSavedSession();
         if (m_cardInput) m_cardInput->clear();
         clearExpiryStatus();
         if (m_balanceLabel) m_balanceLabel->setVisible(false);
@@ -172,91 +67,13 @@
     }
 
     bool tryRestoreSession() {
-        flushPendingDeactivations();
-        QSettings s(_S("LingQiao"), _S("Injector"));
-        QString encToken = s.value("session_token").toString();
-        QString mid = s.value("machine_id").toString();
-        qint64 exp = s.value("card_expires_at").toLongLong();
-        QString card = s.value("card_code").toString();
-
-        // Decrypt session token — guard against empty fingerprint
+        if (!m_sessionController) return false;
         QString fp = GetMachineFingerprint();
-        if (fp.isEmpty() && !encToken.isEmpty()) {
+        if (fp.isEmpty()) {
             logEvent("SESSION", "Cannot restore: machine fingerprint unavailable");
             return false;
         }
-        QString token = encToken.isEmpty() ? QString() : xorDecrypt(encToken, fp);
-
-        if (token.isEmpty() || mid.isEmpty()) return false;
-        // Check if card already expired
-        if (exp > 0 && exp < QDateTime::currentSecsSinceEpoch()) {
-            resetToInactiveState("Saved session expired before restore",
-                QString::fromUtf8(_S("卡密已过期，请输入新卡密")),
-                true, token, mid);
-            return false;
-        }
-
-        // Restore UI state
-        m_sessionToken = token;
-        m_machineID = mid;
-        m_cardExpiresAt = exp;
-        if (!card.isEmpty() && m_cardInput) m_cardInput->setText(card);
-
-        // Async heartbeat to validate the session — don't block UI thread
-        QPointer<MainWindow> safeThis(this);
-        auto hbToken = token;
-        auto hbMid = mid;
-        QtConcurrent::run([safeThis, hbToken, hbMid]() {
-            QJsonObject req;
-            req["client_id"] = QString::fromWCharArray(CLIENT_ID);
-            req["session_token"] = hbToken;
-            req["machine_id"] = hbMid;
-            req["client_version"] = GetClientVersion();
-            QByteArray body = QJsonDocument(req).toJson(QJsonDocument::Compact);
-            HttpResponse resp = HttpPostJson(SERVER_HOST, SERVER_PORT, g_pathHb, body);
-
-            QMetaObject::invokeMethod(safeThis, [safeThis, resp, hbToken, hbMid]() {
-                if (!safeThis) return;
-                if (resp.statusCode == 200) {
-                    QJsonParseError parseError{};
-                    QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
-                    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-                        safeThis->logEvent("SESSION", "Rejected malformed heartbeat response during restore");
-                    } else {
-                    QJsonObject obj = doc.object();
-                    if (obj["status"].toString() == "ok") {
-                        qint64 restoredExp = (qint64)obj["card_expires_at"].toDouble();
-                        if (restoredExp > 0 && restoredExp <= QDateTime::currentSecsSinceEpoch()) {
-                            safeThis->resetToInactiveState("Restored heartbeat returned expired card",
-                                QString::fromUtf8(_S("卡密已过期，请输入新卡密")),
-                                true, hbToken, hbMid);
-                            return;
-                        }
-                        safeThis->m_activated = true;
-                        safeThis->m_cardExpiresAt = restoredExp;
-                        safeThis->setUiLocked(false);
-                        safeThis->setConnDot("ok");
-                        safeThis->downloadDllAsync();
-                        safeThis->fetchBalance();
-                        safeThis->startChatPolling();
-                        safeThis->CheckEnterpriseUpdateAsync();
-                        if (safeThis->m_cardExpiresAt > 0) {
-                            safeThis->setExpiryStatus(QString::fromUtf8(_S("到期：%1"))
-                                .arg(QDateTime::fromSecsSinceEpoch(safeThis->m_cardExpiresAt).toString("yyyy-MM-dd hh:mm")));
-                        }
-                        safeThis->updateTrayIcon();
-                        safeThis->logEvent("SESSION", "Session restored via heartbeat");
-                        return;
-                    }
-                    }
-                }
-                // Heartbeat failed — clear saved session, user needs to re-activate
-                safeThis->resetToInactiveState("Heartbeat failed during async restore",
-                    QString::fromUtf8(_S("会话已失效，请输入新卡密")),
-                    true, hbToken, hbMid);
-            }, Qt::QueuedConnection);
-        });
-        return true; // token was valid enough to attempt restore
+        return m_sessionController->tryRestoreSession(fp, GetClientVersion());
     }
 
     // ── Expiry Check ───────────────────────────────────────────────

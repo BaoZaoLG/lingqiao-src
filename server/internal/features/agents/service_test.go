@@ -49,6 +49,18 @@ func (m *mockRepository) GetAgent(ctx context.Context, id string) (*Account, err
 	return &a, nil
 }
 
+func (m *mockRepository) UpdateAgentLimits(ctx context.Context, id string, limits AgentLimits) error {
+	a, ok := m.agents[id]
+	if !ok {
+		return nil
+	}
+	a.MaxSessionDurationMinutes = limits.MaxSessionDurationMinutes
+	a.MaxDailySessions = limits.MaxDailySessions
+	a.MaxConcurrentSessions = limits.MaxConcurrentSessions
+	m.agents[id] = a
+	return nil
+}
+
 func (m *mockRepository) UsernameExists(ctx context.Context, username string) (bool, error) {
 	for _, a := range m.agents {
 		if a.Username == username {
@@ -158,7 +170,10 @@ func setupTestDB(t *testing.T) *sql.DB {
 		password TEXT NOT NULL,
 		prefix TEXT,
 		created_at DATETIME NOT NULL,
-		disabled INTEGER NOT NULL DEFAULT 0
+		disabled INTEGER NOT NULL DEFAULT 0,
+		max_session_duration_minutes INTEGER NOT NULL DEFAULT 0,
+		max_daily_sessions INTEGER NOT NULL DEFAULT 0,
+		max_concurrent_sessions INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE UNIQUE INDEX idx_agents_username ON agents(username);
 

@@ -48,7 +48,7 @@ func (s *Service) Activate(ctx context.Context, input ActivationInput) (Session,
 		if err != nil {
 			return err
 		}
-		if c.Status == "disabled" {
+		if c.Status == "disabled" || c.Status == "disable" {
 			return ErrCardDisabled
 		}
 		if c.Status == "expired" || c.ExpiresAt.Before(s.now()) {
@@ -159,7 +159,7 @@ func (s *Service) Heartbeat(ctx context.Context, input HeartbeatInput) (Session,
 		}
 
 		c, err := tx.GetCard(ctx, sess.CardCode)
-		if err != nil || c.Status == "disabled" || c.Status == "expired" || c.ExpiresAt.Before(s.now()) {
+		if err != nil || c.Status == "disabled" || c.Status == "disable" || c.Status == "expired" || c.ExpiresAt.Before(s.now()) {
 			tx.DeleteSession(ctx, input.SessionToken)
 			return ErrCardNoLongerValid
 		}
@@ -254,7 +254,7 @@ func (s *Service) ValidateBound(ctx context.Context, token, machineID, cardCode 
 		if err != nil {
 			return err
 		}
-		if c.Status == "disabled" {
+		if c.Status == "disabled" || c.Status == "disable" {
 			return ErrCardDisabled
 		}
 		if c.Status == "expired" || c.ExpiresAt.Before(s.now()) {

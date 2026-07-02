@@ -22,16 +22,16 @@ func NewSQLiteRepository(db *sql.DB) *SQLiteRepository {
 func (r *SQLiteRepository) Get(ctx context.Context, code string) (Card, error) {
 	row := r.db.QueryRowContext(ctx, "SELECT code, machine_id, agent_id, created_at, activated_at, expires_at, status, note, max_sessions FROM cards WHERE code = ?", code)
 	var card Card
-	var activatedAt sql.NullTime
+	var machineID, agentID, note, createdAt, activatedAt, expiresAt sql.NullString
 	err := row.Scan(
 		&card.Code,
-		&card.MachineID,
-		&card.AgentID,
-		&card.CreatedAt,
+		&machineID,
+		&agentID,
+		&createdAt,
 		&activatedAt,
-		&card.ExpiresAt,
+		&expiresAt,
 		&card.Status,
-		&card.Note,
+		&note,
 		&card.MaxSessions,
 	)
 	if err != nil {
@@ -40,16 +40,22 @@ func (r *SQLiteRepository) Get(ctx context.Context, code string) (Card, error) {
 		}
 		return Card{}, err
 	}
-	if activatedAt.Valid {
-		card.ActivatedAt = &activatedAt.Time
+	card.MachineID = machineID.String
+	card.AgentID = agentID.String
+	card.Note = note.String
+	card.CreatedAt = parseDBTime(createdAt.String)
+	card.ExpiresAt = parseDBTime(expiresAt.String)
+	if activatedAt.Valid && activatedAt.String != "" {
+		t := parseDBTime(activatedAt.String)
+		card.ActivatedAt = &t
 	}
 	return card, nil
 }
 
 func (r *SQLiteRepository) Insert(ctx context.Context, card Card) error {
-	var activatedAt *time.Time
+	var activatedAt interface{}
 	if card.ActivatedAt != nil {
-		activatedAt = card.ActivatedAt
+		activatedAt = formatDBTime(*card.ActivatedAt)
 	}
 	query := `
 		INSERT INTO cards (code, machine_id, agent_id, created_at, activated_at, expires_at, status, note, max_sessions)
@@ -59,9 +65,9 @@ func (r *SQLiteRepository) Insert(ctx context.Context, card Card) error {
 		card.Code,
 		card.MachineID,
 		card.AgentID,
-		card.CreatedAt,
+		formatDBTime(card.CreatedAt),
 		activatedAt,
-		card.ExpiresAt,
+		formatDBTime(card.ExpiresAt),
 		card.Status,
 		card.Note,
 		card.MaxSessions,
@@ -70,9 +76,9 @@ func (r *SQLiteRepository) Insert(ctx context.Context, card Card) error {
 }
 
 func (r *SQLiteRepository) Save(ctx context.Context, card Card) error {
-	var activatedAt *time.Time
+	var activatedAt interface{}
 	if card.ActivatedAt != nil {
-		activatedAt = card.ActivatedAt
+		activatedAt = formatDBTime(*card.ActivatedAt)
 	}
 	query := `
 		INSERT INTO cards (code, machine_id, agent_id, created_at, activated_at, expires_at, status, note, max_sessions)
@@ -90,9 +96,9 @@ func (r *SQLiteRepository) Save(ctx context.Context, card Card) error {
 		card.Code,
 		card.MachineID,
 		card.AgentID,
-		card.CreatedAt,
+		formatDBTime(card.CreatedAt),
 		activatedAt,
-		card.ExpiresAt,
+		formatDBTime(card.ExpiresAt),
 		card.Status,
 		card.Note,
 		card.MaxSessions,
@@ -133,22 +139,28 @@ func (r *SQLiteRepository) List(ctx context.Context, filter ListFilter) ([]Card,
 	var cards []Card
 	for rows.Next() {
 		var card Card
-		var activatedAt sql.NullTime
+		var machineID, agentID, note, createdAt, activatedAt, expiresAt sql.NullString
 		if err := rows.Scan(
 			&card.Code,
-			&card.MachineID,
-			&card.AgentID,
-			&card.CreatedAt,
+			&machineID,
+			&agentID,
+			&createdAt,
 			&activatedAt,
-			&card.ExpiresAt,
+			&expiresAt,
 			&card.Status,
-			&card.Note,
+			&note,
 			&card.MaxSessions,
 		); err != nil {
 			return nil, err
 		}
-		if activatedAt.Valid {
-			card.ActivatedAt = &activatedAt.Time
+		card.MachineID = machineID.String
+		card.AgentID = agentID.String
+		card.Note = note.String
+		card.CreatedAt = parseDBTime(createdAt.String)
+		card.ExpiresAt = parseDBTime(expiresAt.String)
+		if activatedAt.Valid && activatedAt.String != "" {
+			t := parseDBTime(activatedAt.String)
+			card.ActivatedAt = &t
 		}
 		cards = append(cards, card)
 	}
@@ -180,17 +192,17 @@ func (r *SQLiteRepository) BatchSave(ctx context.Context, cards []Card) error {
 	defer stmt.Close()
 
 	for _, card := range cards {
-		var activatedAt *time.Time
+		var activatedAt interface{}
 		if card.ActivatedAt != nil {
-			activatedAt = card.ActivatedAt
+			activatedAt = formatDBTime(*card.ActivatedAt)
 		}
 		_, err := stmt.ExecContext(ctx,
 			card.Code,
 			card.MachineID,
 			card.AgentID,
-			card.CreatedAt,
+			formatDBTime(card.CreatedAt),
 			activatedAt,
-			card.ExpiresAt,
+			formatDBTime(card.ExpiresAt),
 			card.Status,
 			card.Note,
 			card.MaxSessions,
@@ -263,4 +275,32 @@ func (r *SQLiteRepository) Count(ctx context.Context, filter ListFilter) (int, e
 	var count int
 	err := r.db.QueryRowContext(ctx, query, args...).Scan(&count)
 	return count, err
+}
+
+func formatDBTime(t time.Time) string {
+	return t.Round(0).Format(time.RFC3339Nano)
+}
+
+func parseDBTime(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	if i := strings.Index(value, " m="); i >= 0 {
+		value = value[:i]
+	}
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999 -0700 MST",
+		"2006-01-02 15:04:05.999999999 -0700",
+		"2006-01-02 15:04:05 -0700 MST",
+		"2006-01-02 15:04:05 -0700",
+		"2006-01-02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, value); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }

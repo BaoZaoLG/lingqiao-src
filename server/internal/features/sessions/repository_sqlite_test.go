@@ -125,3 +125,56 @@ func TestSQLiteRepository(t *testing.T) {
 		t.Fatal("Expected 1 session")
 	}
 }
+
+func TestSQLiteRepositoryGetCardParsesLegacyGoTimeString(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	repo := NewSQLiteRepository(db)
+	ctx := context.Background()
+
+	rawCreated := "2026-07-02 16:06:28.338015275 +0800 CST m=+3972.908943307"
+	rawExpires := "2026-07-02 17:06:28.338015275 +0800 CST m=+3972.908943307"
+	if _, err := db.Exec("INSERT INTO cards (code, status, created_at, expires_at, max_sessions) VALUES ('C-LEGACY', 'active', ?, ?, 1)", rawCreated, rawExpires); err != nil {
+		t.Fatalf("insert legacy time card: %v", err)
+	}
+
+	err := repo.RunInTx(ctx, func(tx Tx) error {
+		card, err := tx.GetCard(ctx, "C-LEGACY")
+		if err != nil {
+			return err
+		}
+		if card.ExpiresAt.IsZero() || card.ExpiresAt.Year() != 2026 || card.ExpiresAt.Hour() != 17 {
+			t.Fatalf("legacy expires_at was not parsed: %#v", card.ExpiresAt)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSQLiteRepositoryGetCardFindsHyphenatedStoredCodeFromNormalizedInput(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	repo := NewSQLiteRepository(db)
+	ctx := context.Background()
+
+	now := time.Now().Format(time.RFC3339)
+	if _, err := db.Exec("INSERT INTO cards (code, status, created_at, expires_at, max_sessions) VALUES ('XY7JQ1-7THM1P-A2ZCHT', 'active', ?, ?, 1)", now, now); err != nil {
+		t.Fatalf("insert hyphenated card: %v", err)
+	}
+
+	err := repo.RunInTx(ctx, func(tx Tx) error {
+		card, err := tx.GetCard(ctx, "XY7JQ17THM1PA2ZCHT")
+		if err != nil {
+			return err
+		}
+		if card.Code != "XY7JQ1-7THM1P-A2ZCHT" {
+			t.Fatalf("card code = %q, want stored hyphenated code", card.Code)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

@@ -217,8 +217,11 @@ func (s *Service) BulkUpdateCardsDetailed(ctx context.Context, codes []string, a
 		changed := false
 		switch bulkAction {
 		case cardops.BulkDisable, cardops.BulkEnable, cardops.BulkExpire:
-			status := Status(action)
-			if action == "expire" {
+			status := StatusActive
+			switch bulkAction {
+			case cardops.BulkDisable:
+				status = StatusDisabled
+			case cardops.BulkExpire:
 				status = StatusExpired
 			}
 			if card.Status != status {

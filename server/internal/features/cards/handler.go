@@ -216,8 +216,11 @@ func (h *Handler) HandleUpdateCard(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch req.Action {
 	case "disable", "enable", "expire":
-		status := Status(req.Action)
-		if req.Action == "expire" {
+		status := StatusActive
+		switch req.Action {
+		case "disable":
+			status = StatusDisabled
+		case "expire":
 			status = StatusExpired
 		}
 		err = h.svc.UpdateStatus(r.Context(), req.Code, status)

@@ -20,13 +20,11 @@ func NewAdminHandler(svc *Service, cm CardReader) *AdminHandler {
 	return &AdminHandler{svc: svc, cm: cm}
 }
 
-func (h *AdminHandler) RegisterRoutes(mux *http.ServeMux, auth middlewareFunc) {
-	mux.HandleFunc("/admin/api/agents", auth(h.HandleAdminListAgents))
-	mux.HandleFunc("/admin/api/agent/update", auth(h.HandleAdminUpdateAgent))
-	mux.HandleFunc("/admin/api/agent/cards", auth(h.HandleAdminAgentCards))
+func (h *AdminHandler) RegisterRoutes(mux *http.ServeMux, authP func(string, http.HandlerFunc) http.HandlerFunc) {
+	mux.HandleFunc("/admin/api/agents", authP("agents.read", h.HandleAdminListAgents))
+	mux.HandleFunc("/admin/api/agent/update", authP("agents.write", h.HandleAdminUpdateAgent))
+	mux.HandleFunc("/admin/api/agent/cards", authP("agents.read", h.HandleAdminAgentCards))
 }
-
-type middlewareFunc func(http.HandlerFunc) http.HandlerFunc
 
 // HandleAdminListAgents ...
 func (h *AdminHandler) HandleAdminListAgents(w http.ResponseWriter, r *http.Request) {
@@ -146,9 +144,12 @@ func (h *AdminHandler) HandleAdminUpdateAgent(w http.ResponseWriter, r *http.Req
 	}
 
 	var req struct {
-		AgentID  string `json:"agent_id"`
-		Action   string `json:"action"`
-		Password string `json:"password,omitempty"`
+		AgentID                   string `json:"agent_id"`
+		Action                    string `json:"action"`
+		Password                  string `json:"password,omitempty"`
+		MaxSessionDurationMinutes int    `json:"max_session_duration_minutes,omitempty"`
+		MaxDailySessions          int    `json:"max_daily_sessions,omitempty"`
+		MaxConcurrentSessions     int    `json:"max_concurrent_sessions,omitempty"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
 		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
@@ -170,6 +171,11 @@ func (h *AdminHandler) HandleAdminUpdateAgent(w http.ResponseWriter, r *http.Req
 	case "delete":
 		if err := h.svc.DeleteAgent(ctx, req.AgentID); err != nil {
 			httpapi.WriteError(w, http.StatusNotFound, err.Error())
+			return
+		}
+	case "update_limits":
+		if err := h.svc.SetAgentLimits(ctx, req.AgentID, req.MaxSessionDurationMinutes, req.MaxDailySessions, req.MaxConcurrentSessions); err != nil {
+			httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	case "reset_password":

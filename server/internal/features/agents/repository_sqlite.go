@@ -18,6 +18,7 @@ type Repository interface {
 	UpdateAgentPassword(ctx context.Context, id, passwordHash string) error
 	AllAgents(ctx context.Context) ([]Account, error)
 	UpdateAgentStatus(ctx context.Context, id string, disabled bool) error
+	UpdateAgentLimits(ctx context.Context, id string, limits AgentLimits) error
 	DeleteAgent(ctx context.Context, id string) error
 	BeginTx(ctx context.Context) (*sql.Tx, error)
 }
@@ -39,7 +40,10 @@ func (r *SQLiteRepository) CreateAgent(ctx context.Context, username, passwordHa
 }
 
 func (r *SQLiteRepository) CreateAgentTx(ctx context.Context, tx *sql.Tx, username, passwordHash, prefix string) (Account, error) {
-	query := `INSERT INTO agents (id, username, password, prefix, created_at, disabled) VALUES (?, ?, ?, ?, ?, 0)`
+	query := `INSERT INTO agents (
+		id, username, password, prefix, created_at, disabled,
+		max_session_duration_minutes, max_daily_sessions, max_concurrent_sessions
+	) VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0)`
 	now := time.Now()
 	var id string
 	var err error
@@ -78,9 +82,14 @@ func (r *SQLiteRepository) CreateAgentTx(ctx context.Context, tx *sql.Tx, userna
 }
 
 func (r *SQLiteRepository) GetAgent(ctx context.Context, id string) (*Account, error) {
-	query := `SELECT id, username, password, prefix, created_at, disabled FROM agents WHERE id = ?`
+	query := `SELECT id, username, password, prefix, created_at, disabled,
+		max_session_duration_minutes, max_daily_sessions, max_concurrent_sessions
+		FROM agents WHERE id = ?`
 	var a Account
-	err := r.db.QueryRowContext(ctx, query, id).Scan(&a.ID, &a.Username, &a.Password, &a.Prefix, &a.CreatedAt, &a.Disabled)
+	err := r.db.QueryRowContext(ctx, query, id).Scan(
+		&a.ID, &a.Username, &a.Password, &a.Prefix, &a.CreatedAt, &a.Disabled,
+		&a.MaxSessionDurationMinutes, &a.MaxDailySessions, &a.MaxConcurrentSessions,
+	)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -119,7 +128,9 @@ func (r *SQLiteRepository) UpdateAgentPassword(ctx context.Context, id, password
 }
 
 func (r *SQLiteRepository) AllAgents(ctx context.Context) ([]Account, error) {
-	query := `SELECT id, username, password, prefix, created_at, disabled FROM agents ORDER BY created_at DESC`
+	query := `SELECT id, username, password, prefix, created_at, disabled,
+		max_session_duration_minutes, max_daily_sessions, max_concurrent_sessions
+		FROM agents ORDER BY created_at DESC`
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -129,7 +140,10 @@ func (r *SQLiteRepository) AllAgents(ctx context.Context) ([]Account, error) {
 	var res []Account
 	for rows.Next() {
 		var a Account
-		if err := rows.Scan(&a.ID, &a.Username, &a.Password, &a.Prefix, &a.CreatedAt, &a.Disabled); err != nil {
+		if err := rows.Scan(
+			&a.ID, &a.Username, &a.Password, &a.Prefix, &a.CreatedAt, &a.Disabled,
+			&a.MaxSessionDurationMinutes, &a.MaxDailySessions, &a.MaxConcurrentSessions,
+		); err != nil {
 			return nil, err
 		}
 		res = append(res, a)
@@ -143,6 +157,22 @@ func (r *SQLiteRepository) UpdateAgentStatus(ctx context.Context, id string, dis
 		disabledInt = 1
 	}
 	res, err := r.db.ExecContext(ctx, `UPDATE agents SET disabled = ? WHERE id = ?`, disabledInt, id)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrAgentNotFound
+	}
+	return nil
+}
+
+func (r *SQLiteRepository) UpdateAgentLimits(ctx context.Context, id string, limits AgentLimits) error {
+	res, err := r.db.ExecContext(ctx, `UPDATE agents SET max_session_duration_minutes = ?, max_daily_sessions = ?, max_concurrent_sessions = ? WHERE id = ?`,
+		limits.MaxSessionDurationMinutes, limits.MaxDailySessions, limits.MaxConcurrentSessions, id)
 	if err != nil {
 		return err
 	}

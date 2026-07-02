@@ -112,7 +112,14 @@ type sqliteTx struct {
 }
 
 func (t *sqliteTx) GetCard(ctx context.Context, code string) (CardSnapshot, error) {
-	row := t.tx.QueryRowContext(ctx, "SELECT code, status, note, machine_id, agent_id, created_at, activated_at, expires_at, max_sessions FROM cards WHERE code = ?", code)
+	row := t.tx.QueryRowContext(ctx, `
+		SELECT code, status, note, machine_id, agent_id, created_at, activated_at, expires_at, max_sessions
+		FROM cards
+		WHERE code = ?
+		   OR REPLACE(REPLACE(UPPER(code), '-', ''), ' ', '') = ?
+		ORDER BY CASE WHEN code = ? THEN 0 ELSE 1 END
+		LIMIT 1
+	`, code, code, code)
 
 	var c CardSnapshot
 	var createdStr, expiresStr, activatedStr, machineID, agentID, note sql.NullString
@@ -138,10 +145,10 @@ func (t *sqliteTx) GetCard(ctx context.Context, code string) (CardSnapshot, erro
 	c.MachineID = machineID.String
 	c.AgentID = agentID.String
 	c.Note = note.String
-	c.CreatedAt, _ = time.Parse(time.RFC3339, createdStr.String)
-	c.ExpiresAt, _ = time.Parse(time.RFC3339, expiresStr.String)
+	c.CreatedAt = parseDBTime(createdStr.String)
+	c.ExpiresAt = parseDBTime(expiresStr.String)
 	if activatedStr.Valid && activatedStr.String != "" {
-		activated, _ := time.Parse(time.RFC3339, activatedStr.String)
+		activated := parseDBTime(activatedStr.String)
 		c.ActivatedAt = &activated
 	}
 	return c, nil
@@ -245,12 +252,36 @@ func scanSession(row scanner) (Session, error) {
 	s.Fingerprint = fingerprint.String
 	s.ClientVersion = clientVersion.String
 	s.RemoteAddr = remoteAddr.String
-	s.CreatedAt, _ = time.Parse(time.RFC3339, createdStr.String)
-	s.LastSeen, _ = time.Parse(time.RFC3339, lastSeenStr.String)
-	s.ExpiresAt, _ = time.Parse(time.RFC3339, expiresStr.String)
+	s.CreatedAt = parseDBTime(createdStr.String)
+	s.LastSeen = parseDBTime(lastSeenStr.String)
+	s.ExpiresAt = parseDBTime(expiresStr.String)
 	return s, nil
 }
 
 func scanSessionRows(rows *sql.Rows) (Session, error) {
 	return scanSession(rows)
+}
+
+func parseDBTime(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	if i := strings.Index(value, " m="); i >= 0 {
+		value = value[:i]
+	}
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999 -0700 MST",
+		"2006-01-02 15:04:05.999999999 -0700",
+		"2006-01-02 15:04:05 -0700 MST",
+		"2006-01-02 15:04:05 -0700",
+		"2006-01-02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, value); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }

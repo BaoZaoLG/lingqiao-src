@@ -7,32 +7,43 @@ import (
 
 // Event ...
 type Event struct {
-	Time    time.Time `json:"time"`
-	Action  string    `json:"action"`
-	ActorID string    `json:"actor_id,omitempty"`
-	Card    string    `json:"card,omitempty"`
-	AgentID string    `json:"agent_id,omitempty"`
-	Machine string    `json:"machine,omitempty"`
-	IP      string    `json:"ip,omitempty"`
-	Detail  string    `json:"detail,omitempty"`
+	Time         time.Time `json:"time"`
+	Action       string    `json:"action"`
+	ActorType    string    `json:"actor_type,omitempty"`
+	ActorID      string    `json:"actor_id,omitempty"`
+	ResourceType string    `json:"resource_type,omitempty"`
+	ResourceID   string    `json:"resource_id,omitempty"`
+	Before       string    `json:"before,omitempty"`
+	After        string    `json:"after,omitempty"`
+	UserAgent    string    `json:"user_agent,omitempty"`
+	RequestID    string    `json:"request_id,omitempty"`
+	Card         string    `json:"card,omitempty"`
+	AgentID      string    `json:"agent_id,omitempty"`
+	Machine      string    `json:"machine,omitempty"`
+	IP           string    `json:"ip,omitempty"`
+	Detail       string    `json:"detail,omitempty"`
 }
 
 // Filter ...
 type Filter struct {
-	Action  string
-	ActorID string
-	Card    string
-	AgentID string
-	Machine string
-	IP      string
-	From    time.Time
-	To      time.Time
+	Action       string
+	ActorType    string
+	ActorID      string
+	ResourceType string
+	ResourceID   string
+	Card         string
+	AgentID      string
+	Machine      string
+	IP           string
+	From         time.Time
+	To           time.Time
+	Query        string // Used for detail matching
 }
 
 // Repository defines the storage interface for audit events.
 type Repository interface {
 	Insert(ctx context.Context, event Event) error
-	List(ctx context.Context, limit int) ([]Event, error)
+	List(ctx context.Context, filter Filter, limit int) ([]Event, error)
 }
 
 // Recorder ...
@@ -59,9 +70,9 @@ func (r *Recorder) Append(event Event) error {
 }
 
 // Query ...
-func (r *Recorder) Query(ctx context.Context, limit int) ([]Event, error) {
+func (r *Recorder) Query(ctx context.Context, filter Filter, limit int) ([]Event, error) {
 	if r.repo != nil {
-		return r.repo.List(ctx, limit)
+		return r.repo.List(ctx, filter, limit)
 	}
 	return nil, nil
 }

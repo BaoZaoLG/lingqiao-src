@@ -3,10 +3,12 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"github.com/lingqiao/server/internal/features/cards"
 	"log"
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/lingqiao/server/internal/audit"
 	"github.com/lingqiao/server/internal/httpapi"
@@ -83,7 +85,27 @@ func (h *AdminHandler) HandleBlacklist(w http.ResponseWriter, r *http.Request) {
 // ── Audit Log ────────────────────────────────────────────────────────────────
 
 func (h *AdminHandler) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
-	entries, err := h.auditRecorder.Query(r.Context(), 10000)
+	q := r.URL.Query()
+	filter := audit.Filter{
+		Action:       q.Get("action"),
+		ActorType:    q.Get("actor_type"),
+		ActorID:      q.Get("actor_id"),
+		ResourceType: q.Get("resource_type"),
+		ResourceID:   q.Get("resource_id"),
+		Query:        q.Get("q"),
+	}
+	if from := q.Get("from"); from != "" {
+		if t, err := time.Parse(time.RFC3339, from); err == nil {
+			filter.From = t
+		}
+	}
+	if to := q.Get("to"); to != "" {
+		if t, err := time.Parse(time.RFC3339, to); err == nil {
+			filter.To = t
+		}
+	}
+
+	entries, err := h.auditRecorder.Query(r.Context(), filter, 10000)
 	if err != nil {
 		httpapi.WriteError(w, http.StatusInternalServerError, "failed to query audit log: "+err.Error())
 		return
@@ -91,18 +113,6 @@ func (h *AdminHandler) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Time.After(entries[j].Time)
 	})
-
-	q := r.URL.Query()
-	if action := q.Get("action"); action != "" {
-		filtered := make([]audit.Event, 0)
-		for _, e := range entries {
-			if e.Action == action {
-				filtered = append(filtered, e)
-			}
-		}
-		entries = filtered
-	}
-	entries = filterAuditEntries(entries, q.Get("q"), q.Get("from"), q.Get("to"))
 
 	if q.Get("export") == "csv" {
 		writeAuditCSV(w, entries)
@@ -208,7 +218,7 @@ func (h *AdminHandler) recordAnnouncementAudit(action string, a *Announcement) e
 
 func (h *AdminHandler) HandleAdminMachines(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
-		httpapi.WriteOK(w, map[string]interface{}{"machines": []MachineInfo{}})
+		httpapi.WriteOK(w, map[string]interface{}{"machines": []cards.MachineInfo{}})
 		return
 	}
 
@@ -229,9 +239,9 @@ func (h *AdminHandler) HandleAdminMachines(w http.ResponseWriter, r *http.Reques
 	}
 	defer rows.Close()
 
-	var machines []MachineInfo
+	var machines []cards.MachineInfo
 	for rows.Next() {
-		var m MachineInfo
+		var m cards.MachineInfo
 		var lastSeen sql.NullTime
 		if err := rows.Scan(&m.MachineID, &m.CardCount, &lastSeen); err != nil {
 			httpapi.WriteError(w, http.StatusInternalServerError, "failed to scan machine row: "+err.Error())

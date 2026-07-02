@@ -108,19 +108,6 @@ func paginate(length, page, perPage int) (start, end int) {
 	return
 }
 
-func validateImportCardCode(code string) (string, error) {
-	normalized := normalizeCardCode(code)
-	if len(normalized) != 18 {
-		return "", fmt.Errorf("card code must contain 18 base32 characters")
-	}
-	for i := 0; i < len(normalized); i++ {
-		if crockfordDecode[normalized[i]] < 0 {
-			return "", fmt.Errorf("card code contains invalid character %q", normalized[i])
-		}
-	}
-	return normalized, nil
-}
-
 func spreadsheetSafeCSVCell(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {

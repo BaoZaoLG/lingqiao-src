@@ -108,89 +108,13 @@
     void startHeartbeatTimer() {
         m_heartbeatRunning = true;
         QTimer* t = new QTimer(this);
-        connect(t, &QTimer::timeout, this, [this]() { performHeartbeat(); fetchAnnouncement(); });
+        connect(t, &QTimer::timeout, this, [this]() {
+            if (m_sessionController && m_activated && !m_sessionToken.isEmpty()) {
+                m_sessionController->performHeartbeat(GetClientVersion());
+            }
+            fetchAnnouncement();
+        });
         t->start(55000);
-    }
-
-    void performHeartbeat() {
-        if (!m_activated || m_sessionToken.isEmpty() || m_heartbeatInProgress) return;
-        m_heartbeatInProgress = true;
-        QThread* thread = new QThread();
-        HeartbeatWorker* w = new HeartbeatWorker();
-        w->sessionToken  = m_sessionToken;
-        w->machineID     = m_machineID;
-        w->clientVersion = GetClientVersion();
-        w->moveToThread(thread);
-        connect(thread, &QThread::started, w, &HeartbeatWorker::process);
-        connect(w, &HeartbeatWorker::heartbeatOk, this, [this,thread,w](qint64 exp) {
-            m_heartbeatInProgress = false;
-            m_heartbeatFailCount = 0;
-            setConnDot("ok");
-            if (exp > 0 && exp <= QDateTime::currentSecsSinceEpoch()) {
-                resetToInactiveState("Heartbeat returned expired card",
-                    QString::fromUtf8(_S("卡密已过期，请输入新卡密")),
-                    true);
-                thread->quit(); w->deleteLater(); thread->deleteLater();
-                return;
-            }
-            CheckEnterpriseUpdateAsync();
-            if (exp > 0) {
-                m_cardExpiresAt = exp;
-                setExpiryStatus(QString::fromUtf8(_S("到期：%1"))
-                    .arg(QDateTime::fromSecsSinceEpoch(exp).toString("yyyy-MM-dd hh:mm")));
-            }
-            thread->quit(); w->deleteLater(); thread->deleteLater();
-        });
-        connect(w, &HeartbeatWorker::heartbeatFail, this, [this,thread,w]() {
-            m_heartbeatInProgress = false;
-            m_heartbeatFailCount++;
-            setConnDot("error");
-            logEvent("HEARTBEAT", QString("Failed (attempt %1)").arg(m_heartbeatFailCount));
-            // Auto-reconnect after 3 consecutive failures
-            if (m_heartbeatFailCount >= 3) {
-                logEvent("HEARTBEAT", "3 consecutive failures, attempting auto-reconnect");
-                m_heartbeatFailCount = 0;
-                // Try to re-activate with saved card code
-                QSettings s(_S("LingQiao"), _S("Injector"));
-                QString savedCard = s.value("card_code").toString();
-                qint64 savedExp = s.value("card_expires_at").toLongLong();
-                if (savedExp > 0 && savedExp < QDateTime::currentSecsSinceEpoch()) {
-                    resetToInactiveState("Heartbeat failed and saved card is expired",
-                        QString::fromUtf8(_S("卡密已过期，请输入新卡密")),
-                        true);
-                } else if (!savedCard.isEmpty()) {
-                    m_sessionToken.clear();
-                    m_machineID.clear();
-                    m_cardExpiresAt = 0;
-                    m_activated = false;
-                    m_cardInput->setText(savedCard);
-                    setStatus("idle", QString::fromUtf8(_S("连接中断，正在重新激活...")));
-                    onActivate();
-                } else {
-                    resetToInactiveState("Heartbeat failed without saved card",
-                        QString::fromUtf8(_S("会话已失效，请输入新卡密")),
-                        true);
-                }
-            }
-            thread->quit(); w->deleteLater(); thread->deleteLater();
-        });
-        connect(w, &HeartbeatWorker::heartbeatRejected, this, [this,thread,w](const QString& message) {
-            m_heartbeatInProgress = false;
-            resetToInactiveState("Heartbeat rejected: " + message,
-                message.isEmpty() ? QString::fromUtf8(_S("会话已失效，请输入新卡密")) : message,
-                true);
-            thread->quit(); w->deleteLater(); thread->deleteLater();
-        });
-        connect(w, &HeartbeatWorker::updateAvailable, this, [this,thread](const QString& latest, const QString& url, bool force, const QString& sha256) {
-            Q_UNUSED(thread);
-            handleUpdateCheck(latest, url, force, sha256);
-        }, Qt::QueuedConnection);
-        connect(w, &HeartbeatWorker::versionRejected, this, [this,thread,w](const QString& msg, const QString& dlUrl, const QString& sha256) {
-            m_heartbeatInProgress = false;
-            applyForceUpdateBlock(ExtractVersionFromMsg(msg), dlUrl, sha256);
-            thread->quit(); w->deleteLater(); thread->deleteLater();
-        }, Qt::QueuedConnection);
-        thread->start();
     }
 
     void fetchAnnouncement() {

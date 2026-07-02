@@ -11,6 +11,7 @@ const (
 	StatusActive   Status = "active"
 	StatusDisabled Status = "disabled"
 	StatusExpired  Status = "expired"
+	StatusUnused   Status = "unused"
 )
 
 type Card struct {

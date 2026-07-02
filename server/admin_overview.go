@@ -1,9 +1,6 @@
 package main
 
 import (
-	"github.com/lingqiao/server/internal/httpapi"
-
-	"context"
 	"fmt"
 	"net/http"
 	"sort"
@@ -12,9 +9,8 @@ import (
 	"github.com/lingqiao/server/internal/audit"
 	"github.com/lingqiao/server/internal/features/cards"
 	"github.com/lingqiao/server/internal/features/sessions"
+	"github.com/lingqiao/server/internal/httpapi"
 )
-
-// ── Dashboard & Stats ────────────────────────────────────────────────────────
 
 func (h *AdminHandler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	cardsList, err := h.cardsSvc.AllCards(r.Context())
@@ -75,7 +71,7 @@ func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request)
 		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards: "+err.Error())
 		return
 	}
-	auditLog, err := h.auditRecorder.Query(r.Context(), 10000)
+	auditLog, err := h.auditRecorder.Query(r.Context(), audit.Filter{}, 10000)
 	if err != nil {
 		httpapi.WriteError(w, http.StatusInternalServerError, "failed to query audit log: "+err.Error())
 		return
@@ -92,7 +88,6 @@ func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
-	// auditRecorder.Query returns ordered descending by Time, so we just take first 8
 	for i := 0; i < len(auditLog) && i < 8; i++ {
 		recentAudit = append(recentAudit, auditLog[i])
 	}
@@ -114,36 +109,34 @@ func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request)
 		activeSessions = res.Total
 	}
 
-	// For risky machines, we can query DB
-	riskyMachines := make([]MachineInfo, 0)
+	riskyMachines := make([]cards.MachineInfo, 0)
 	if h.db != nil {
-		query := `
+		rows, err := h.db.QueryContext(r.Context(), `
 			SELECT c.machine_id, COUNT(c.code) as card_count
 			FROM cards c
 			WHERE c.machine_id != ''
 			GROUP BY c.machine_id
 			HAVING card_count > 1
-		`
-		if rows, err := h.db.QueryContext(r.Context(), query); err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var m MachineInfo
-				if err := rows.Scan(&m.MachineID, &m.CardCount); err != nil {
-					httpapi.WriteError(w, http.StatusInternalServerError, "failed to scan risky machine row: "+err.Error())
-					return
-				}
-				riskyMachines = append(riskyMachines, m)
-			}
-			if err := rows.Err(); err != nil {
-				httpapi.WriteError(w, http.StatusInternalServerError, "error iterating risky machine rows: "+err.Error())
-				return
-			}
-		} else {
+		`)
+		if err != nil {
 			httpapi.WriteError(w, http.StatusInternalServerError, "failed to query risky machines: "+err.Error())
 			return
 		}
+		defer rows.Close()
+		for rows.Next() {
+			var m cards.MachineInfo
+			if err := rows.Scan(&m.MachineID, &m.CardCount); err != nil {
+				httpapi.WriteError(w, http.StatusInternalServerError, "failed to scan risky machine row: "+err.Error())
+				return
+			}
+			riskyMachines = append(riskyMachines, m)
+		}
+		if err := rows.Err(); err != nil {
+			httpapi.WriteError(w, http.StatusInternalServerError, "error iterating risky machine rows: "+err.Error())
+			return
+		}
 	}
-	// Also add blacklisted machines
+
 	blacklisted, err := h.blacklistSvc.List(r.Context())
 	if err != nil {
 		httpapi.WriteError(w, http.StatusInternalServerError, "failed to query blacklist: "+err.Error())
@@ -151,45 +144,32 @@ func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request)
 	}
 	blacklistSet := make(map[string]bool)
 	for _, b := range blacklisted {
-		if b.Type == "machine" {
-			blacklistSet[b.Value] = true
-			found := false
-			for _, m := range riskyMachines {
-				if m.MachineID == b.Value {
-					found = true
-					break
-				}
-			}
-			if !found {
-				riskyMachines = append(riskyMachines, MachineInfo{MachineID: b.Value, CardCount: 0})
+		if b.Type != "machine" {
+			continue
+		}
+		blacklistSet[b.Value] = true
+		found := false
+		for _, m := range riskyMachines {
+			if m.MachineID == b.Value {
+				found = true
+				break
 			}
 		}
-	}
-
-	// Annotate if we need a custom json output, but the old code just returned Machine (which had IsBlacklisted bool).
-	// We'll map MachineInfo to include IsBlacklisted.
-	type riskyMachine struct {
-		MachineID     string `json:"machine_id"`
-		CardCount     int    `json:"card_count"`
-		IsBlacklisted bool   `json:"is_blacklisted"`
-	}
-	var outRisky []riskyMachine
-	for _, m := range riskyMachines {
-		outRisky = append(outRisky, riskyMachine{
-			MachineID:     m.MachineID,
-			CardCount:     m.CardCount,
-			IsBlacklisted: blacklistSet[m.MachineID],
-		})
-	}
-
-	sort.Slice(outRisky, func(i, j int) bool {
-		if outRisky[i].IsBlacklisted != outRisky[j].IsBlacklisted {
-			return outRisky[i].IsBlacklisted
+		if !found {
+			riskyMachines = append(riskyMachines, cards.MachineInfo{MachineID: b.Value})
 		}
-		return outRisky[i].CardCount > outRisky[j].CardCount
+	}
+	for i := range riskyMachines {
+		riskyMachines[i].IsBlacklisted = blacklistSet[riskyMachines[i].MachineID]
+	}
+	sort.Slice(riskyMachines, func(i, j int) bool {
+		if riskyMachines[i].IsBlacklisted != riskyMachines[j].IsBlacklisted {
+			return riskyMachines[i].IsBlacklisted
+		}
+		return riskyMachines[i].CardCount > riskyMachines[j].CardCount
 	})
-	if len(outRisky) > 10 {
-		outRisky = outRisky[:10]
+	if len(riskyMachines) > 10 {
+		riskyMachines = riskyMachines[:10]
 	}
 
 	accs, err := h.agentsSvc.AllAgents(r.Context())
@@ -197,14 +177,14 @@ func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request)
 		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load agents: "+err.Error())
 		return
 	}
-	agentStats := buildAgentLeaderboard(cardsList, accs, now)
+
 	httpapi.WriteOK(w, map[string]interface{}{
 		"today_activations":  todayActivations,
 		"today_new_machines": len(newMachines),
 		"active_sessions":    activeSessions,
 		"expiring_cards":     expiring,
-		"risky_machines":     outRisky,
-		"agent_leaderboard":  agentStats,
+		"risky_machines":     riskyMachines,
+		"agent_leaderboard":  buildAgentLeaderboard(cardsList, accs, now),
 		"recent_audit":       recentAudit,
 	})
 }
@@ -219,294 +199,58 @@ type moduleOverviewItem struct {
 }
 
 func (h *AdminHandler) HandleModulesOverview(w http.ResponseWriter, r *http.Request) {
-	modules := []moduleOverviewItem{
-		h.cardsModuleOverview(),
-		h.agentsModuleOverview(r.Context()),
-		h.invitesModuleOverview(),
-		releasesModuleOverview(r),
-		scriptsModuleOverview(),
-		h.payloadsModuleOverview(),
-		h.announcementModuleOverview(),
-		h.auditModuleOverview(r),
-	}
-	httpapi.WriteOK(w, map[string]interface{}{
-		"generated_at": time.Now().UTC(),
-		"modules":      modules,
-	})
-}
-
-func (h *AdminHandler) cardsModuleOverview() moduleOverviewItem {
-	now := time.Now()
-	cardsList, err := h.cardsSvc.AllCards(context.Background())
-	if err != nil {
-		return moduleOverviewItem{
-			Key:     "cards",
-			Name:    "卡密授权",
-			Status:  "error",
-			Summary: "failed to load cards: " + err.Error(),
-		}
-	}
-	activeCards := 0
-	expiredCards := 0
+	cardsList, cardErr := h.cardsSvc.AllCards(r.Context())
 	activeSessions := 0
-	for _, card := range cardsList {
-		if card.Status == cards.StatusActive && card.ExpiresAt.After(now) {
-			activeCards++
-		}
-		if now.After(card.ExpiresAt) || card.Status == cards.StatusExpired {
-			expiredCards++
-		}
-	}
-	if res, err := h.sessionsSvc.List(context.Background(), sessions.ListFilter{ActiveOnly: true}); err == nil {
+	if res, err := h.sessionsSvc.List(r.Context(), sessions.ListFilter{ActiveOnly: true}); err == nil {
 		activeSessions = res.Total
 	}
-	status := "warning"
-	if len(cardsList) > 0 {
-		status = "ready"
+	cardStatus := "ready"
+	cardSummary := fmt.Sprintf("%d total cards", len(cardsList))
+	if cardErr != nil {
+		cardStatus = "error"
+		cardSummary = cardErr.Error()
 	}
-	return moduleOverviewItem{
-		Key:     "cards",
-		Name:    "卡密授权",
-		Status:  status,
-		Summary: fmt.Sprintf("%d total, %d active", len(cardsList), activeCards),
-		Metrics: map[string]interface{}{
-			"total_cards":     len(cardsList),
-			"active_cards":    activeCards,
-			"expired_cards":   expiredCards,
-			"active_sessions": activeSessions,
+
+	agentsList, agentErr := h.agentsSvc.AllAgents(r.Context())
+	agentStatus := "ready"
+	agentSummary := fmt.Sprintf("%d agents", len(agentsList))
+	if agentErr != nil {
+		agentStatus = "error"
+		agentSummary = agentErr.Error()
+	}
+
+	auditEvents, auditErr := h.auditRecorder.Query(r.Context(), audit.Filter{}, 10000)
+	auditStatus := "ready"
+	auditSummary := fmt.Sprintf("%d retained events", len(auditEvents))
+	if auditErr != nil {
+		auditStatus = "error"
+		auditSummary = auditErr.Error()
+	}
+
+	httpapi.WriteOK(w, map[string]interface{}{
+		"generated_at": time.Now().UTC(),
+		"modules": []moduleOverviewItem{
+			{
+				Key:     "cards",
+				Name:    "卡密授权",
+				Status:  cardStatus,
+				Summary: cardSummary,
+				Metrics: map[string]interface{}{"total_cards": len(cardsList), "active_sessions": activeSessions},
+			},
+			{
+				Key:     "agents",
+				Name:    "代理渠道",
+				Status:  agentStatus,
+				Summary: agentSummary,
+				Metrics: map[string]interface{}{"total_agents": len(agentsList)},
+			},
+			{
+				Key:     "audit",
+				Name:    "审计日志",
+				Status:  auditStatus,
+				Summary: auditSummary,
+				Metrics: map[string]interface{}{"total_events": len(auditEvents)},
+			},
 		},
-	}
-}
-
-func (h *AdminHandler) agentsModuleOverview(ctx context.Context) moduleOverviewItem {
-	accs, err := h.agentsSvc.AllAgents(ctx)
-	if err != nil {
-		return moduleOverviewItem{
-			Key:     "agents",
-			Name:    "代理渠道",
-			Status:  "error",
-			Summary: "failed to load agents: " + err.Error(),
-		}
-	}
-	disabled := 0
-	for _, agent := range accs {
-		if agent.Disabled {
-			disabled++
-		}
-	}
-	totalCards := 0
-	cardsList, err := h.cardsSvc.AllCards(ctx)
-	if err != nil {
-		return moduleOverviewItem{
-			Key:     "agents",
-			Name:    "代理渠道",
-			Status:  "error",
-			Summary: "failed to load cards: " + err.Error(),
-		}
-	}
-	for _, card := range cardsList {
-		if card.AgentID != "" {
-			totalCards++
-		}
-	}
-	status := "warning"
-	if len(accs) > 0 {
-		status = "ready"
-	}
-	return moduleOverviewItem{
-		Key:     "agents",
-		Name:    "代理渠道",
-		Status:  status,
-		Summary: fmt.Sprintf("%d agents, %d cards", len(accs), totalCards),
-		Metrics: map[string]interface{}{
-			"total_agents":    len(accs),
-			"disabled_agents": disabled,
-			"agent_cards":     totalCards,
-		},
-	}
-}
-
-func (h *AdminHandler) invitesModuleOverview() moduleOverviewItem {
-	invites, err := h.inviteSvc.List()
-	if err != nil {
-		return moduleOverviewItem{
-			Key:     "invites",
-			Name:    "邀请码",
-			Status:  "error",
-			Summary: "failed to load invites: " + err.Error(),
-		}
-	}
-	available := 0
-	for _, invite := range invites {
-		if invite.MaxUses == 0 || invite.UseCount < invite.MaxUses {
-			available++
-		}
-	}
-	status := "warning"
-	if available > 0 {
-		status = "ready"
-	}
-	return moduleOverviewItem{
-		Key:     "invites",
-		Name:    "邀请码",
-		Status:  status,
-		Summary: fmt.Sprintf("%d available / %d total", available, len(invites)),
-		Metrics: map[string]interface{}{
-			"total_invites":     len(invites),
-			"available_invites": available,
-		},
-	}
-}
-
-func releasesModuleOverview(r *http.Request) moduleOverviewItem {
-	item := moduleOverviewItem{
-		Key:     "releases",
-		Name:    "客户端发布",
-		Status:  "warning",
-		Summary: "release service unavailable",
-		Metrics: map[string]interface{}{},
-	}
-	svc := currentReleaseService()
-	if svc == nil {
-		return item
-	}
-	releases, err := svc.store.ListReleases(r.Context())
-	if err != nil {
-		item.Summary = err.Error()
-		return item
-	}
-	counts := map[string]int{}
-	var latestPublished *time.Time
-	latestVersion := ""
-	for _, release := range releases {
-		status := string(release.Status)
-		counts[status]++
-		if status == "published" {
-			publishedAt := release.CreatedAt
-			if release.PublishedAt != nil {
-				publishedAt = *release.PublishedAt
-			}
-			if latestPublished == nil || publishedAt.After(*latestPublished) {
-				t := publishedAt
-				latestPublished = &t
-				latestVersion = release.Version
-			}
-		}
-	}
-	if counts["published"] > 0 {
-		item.Status = "ready"
-		item.Summary = fmt.Sprintf("v%s published", latestVersion)
-		item.UpdatedAt = latestPublished
-	} else {
-		item.Summary = "no published release"
-	}
-	item.Metrics = map[string]interface{}{
-		"total_releases":       len(releases),
-		"published_releases":   counts["published"],
-		"draft_releases":       counts["draft"],
-		"paused_releases":      counts["paused"],
-		"rolled_back_releases": counts["rolled_back"],
-	}
-	return item
-}
-
-func scriptsModuleOverview() moduleOverviewItem {
-	scripts, activeID, err := ListScriptModules()
-	item := moduleOverviewItem{
-		Key:     "scripts",
-		Name:    "脚本模块",
-		Status:  "warning",
-		Summary: "no active script",
-		Metrics: map[string]interface{}{"total_scripts": 0},
-	}
-	if err != nil {
-		item.Summary = err.Error()
-		return item
-	}
-	item.Metrics["total_scripts"] = len(scripts)
-	item.Metrics["active_id"] = activeID
-	for _, script := range scripts {
-		if script.ID == activeID {
-			item.Status = "ready"
-			item.Summary = "active v" + script.Version
-			t := script.UpdatedAt
-			item.UpdatedAt = &t
-			return item
-		}
-	}
-	return item
-}
-
-func (h *AdminHandler) payloadsModuleOverview() moduleOverviewItem {
-	storage := NewJSONStorage(dataDir())
-	store := NewPayloadStore(storage)
-	payloads := store.List()
-	active := store.Active()
-	item := moduleOverviewItem{
-		Key:     "payloads",
-		Name:    "载荷模块",
-		Status:  "warning",
-		Summary: "no active payload",
-		Metrics: map[string]interface{}{"total_payloads": len(payloads)},
-	}
-	if active != nil {
-		item.Status = "ready"
-		item.Summary = "active " + active.PayloadID
-		item.Metrics["active_payload_id"] = active.PayloadID
-		item.Metrics["active_payload_size"] = active.TotalSize
-	}
-	return item
-}
-
-func (h *AdminHandler) announcementModuleOverview() moduleOverviewItem {
-	announcement := GetAnnouncement()
-	item := moduleOverviewItem{
-		Key:     "announcement",
-		Name:    "公告",
-		Status:  "warning",
-		Summary: "no active announcement",
-		Metrics: map[string]interface{}{},
-	}
-	revisions, activeID, _ := ListAnnouncementRevisions()
-	item.Metrics["total_announcements"] = len(revisions)
-	item.Metrics["active_id"] = activeID
-	if announcement != nil {
-		item.Status = "ready"
-		item.Summary = fmt.Sprintf("active announcement, %d bytes", len([]byte(announcement.Content)))
-		t := announcement.UpdatedAt
-		item.UpdatedAt = &t
-	}
-	return item
-}
-
-func (h *AdminHandler) auditModuleOverview(r *http.Request) moduleOverviewItem {
-	auditLog, err := h.auditRecorder.Query(r.Context(), 10000)
-	if err != nil {
-		return moduleOverviewItem{
-			Key:     "audit",
-			Name:    "审计日志",
-			Status:  "error",
-			Summary: "database query failed",
-			Metrics: map[string]interface{}{"total_events": 0},
-		}
-	}
-	item := moduleOverviewItem{
-		Key:     "audit",
-		Name:    "审计日志",
-		Status:  "warning",
-		Summary: "no audit events",
-		Metrics: map[string]interface{}{"total_events": len(auditLog)},
-	}
-	if len(auditLog) > 0 {
-		item.Status = "ready"
-		item.Summary = fmt.Sprintf("%d retained events", len(auditLog))
-		latest := auditLog[0].Time
-		for _, entry := range auditLog[1:] {
-			if entry.Time.After(latest) {
-				latest = entry.Time
-			}
-		}
-		item.UpdatedAt = &latest
-	}
-	return item
+	})
 }

@@ -60,7 +60,10 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 			published_at TEXT NOT NULL DEFAULT '',
 			paused_at TEXT NOT NULL DEFAULT '',
 			rolled_back_at TEXT NOT NULL DEFAULT '',
-			rolled_back_to TEXT NOT NULL DEFAULT ''
+			rolled_back_to TEXT NOT NULL DEFAULT '',
+			script_id TEXT NOT NULL DEFAULT '',
+			script_version TEXT NOT NULL DEFAULT '',
+			script_sha256 TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_releases_channel_status ON releases(channel, status)`,
 		`CREATE TABLE IF NOT EXISTS release_packages (
@@ -94,6 +97,10 @@ func (s *SQLiteStore) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	// Add script binding columns (ignore errors if they already exist)
+	s.db.ExecContext(ctx, `ALTER TABLE releases ADD COLUMN script_version TEXT NOT NULL DEFAULT ''`)
+	s.db.ExecContext(ctx, `ALTER TABLE releases ADD COLUMN script_id TEXT NOT NULL DEFAULT ''`)
+	s.db.ExecContext(ctx, `ALTER TABLE releases ADD COLUMN script_sha256 TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 
@@ -123,8 +130,8 @@ func (s *SQLiteStore) SaveRelease(ctx context.Context, release Release) error {
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO releases (
 		id, version, channel, status, min_version, force_update, rollout_percent, notes,
-		targeting_json, created_at, published_at, paused_at, rolled_back_at, rolled_back_to
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		targeting_json, script_id, script_version, script_sha256, created_at, published_at, paused_at, rolled_back_at, rolled_back_to
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		version = excluded.version,
 		channel = excluded.channel,
@@ -134,6 +141,9 @@ func (s *SQLiteStore) SaveRelease(ctx context.Context, release Release) error {
 		rollout_percent = excluded.rollout_percent,
 		notes = excluded.notes,
 		targeting_json = excluded.targeting_json,
+		script_id = excluded.script_id,
+		script_version = excluded.script_version,
+		script_sha256 = excluded.script_sha256,
 		created_at = excluded.created_at,
 		published_at = excluded.published_at,
 		paused_at = excluded.paused_at,
@@ -141,7 +151,7 @@ func (s *SQLiteStore) SaveRelease(ctx context.Context, release Release) error {
 		rolled_back_to = excluded.rolled_back_to`,
 		release.ID, release.Version, string(release.Channel), string(release.Status),
 		release.MinVersion, boolInt(release.ForceUpdate), release.RolloutPercent, release.Notes,
-		string(targeting), formatTime(release.CreatedAt), formatTimePtr(release.PublishedAt),
+		string(targeting), release.ScriptID, release.ScriptVersion, release.ScriptSHA256, formatTime(release.CreatedAt), formatTimePtr(release.PublishedAt),
 		formatTimePtr(release.PausedAt), formatTimePtr(release.RolledBackAt), release.RolledBackTo)
 	return err
 }
@@ -149,7 +159,7 @@ func (s *SQLiteStore) SaveRelease(ctx context.Context, release Release) error {
 // GetRelease ...
 func (s *SQLiteStore) GetRelease(ctx context.Context, id string) (Release, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, version, channel, status, min_version, force_update,
-		rollout_percent, notes, targeting_json, created_at, published_at, paused_at, rolled_back_at, rolled_back_to
+		rollout_percent, notes, targeting_json, script_id, script_version, script_sha256, created_at, published_at, paused_at, rolled_back_at, rolled_back_to
 		FROM releases WHERE id = ?`, id)
 	return scanRelease(row)
 }
@@ -157,7 +167,7 @@ func (s *SQLiteStore) GetRelease(ctx context.Context, id string) (Release, error
 // ListReleases ...
 func (s *SQLiteStore) ListReleases(ctx context.Context) ([]Release, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, version, channel, status, min_version, force_update,
-		rollout_percent, notes, targeting_json, created_at, published_at, paused_at, rolled_back_at, rolled_back_to
+		rollout_percent, notes, targeting_json, script_id, script_version, script_sha256, created_at, published_at, paused_at, rolled_back_at, rolled_back_to
 		FROM releases ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -169,7 +179,7 @@ func (s *SQLiteStore) ListReleases(ctx context.Context) ([]Release, error) {
 // ListPublishedReleases ...
 func (s *SQLiteStore) ListPublishedReleases(ctx context.Context, channel Channel) ([]Release, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, version, channel, status, min_version, force_update,
-		rollout_percent, notes, targeting_json, created_at, published_at, paused_at, rolled_back_at, rolled_back_to
+		rollout_percent, notes, targeting_json, script_id, script_version, script_sha256, created_at, published_at, paused_at, rolled_back_at, rolled_back_to
 		FROM releases WHERE channel = ? AND status = ? ORDER BY published_at DESC, created_at DESC`,
 		string(channel), string(StatusPublished))
 	if err != nil {
@@ -326,7 +336,7 @@ func scanRelease(row releaseScanner) (Release, error) {
 	var channel, status, targeting, createdAt, publishedAt, pausedAt, rolledBackAt string
 	var force int
 	if err := row.Scan(&release.ID, &release.Version, &channel, &status, &release.MinVersion, &force,
-		&release.RolloutPercent, &release.Notes, &targeting, &createdAt, &publishedAt, &pausedAt,
+		&release.RolloutPercent, &release.Notes, &targeting, &release.ScriptID, &release.ScriptVersion, &release.ScriptSHA256, &createdAt, &publishedAt, &pausedAt,
 		&rolledBackAt, &release.RolledBackTo); err != nil {
 		return release, err
 	}

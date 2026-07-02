@@ -20,6 +20,7 @@
      - `-SkipGo`: 跳过 Go 后端编译
      - `-SkipCpp`: 跳过 C++ 客户端编译
      - `-SkipWix`: 跳过 MSI/Bundle 安装包打包
+   - **附带行为**：该脚本会自动执行 `packages/autoexam/build.ps1`，将 `AutoExam.js` 编译为用于注入的 C Header 并生成对应的 Script Release 产物。若配置了环境变量 `SIGNING_CERT_THUMBPRINT`，则会自动对生成的 MSI 进行签名。
 
 3. **`installer/build_installer.ps1` (底层安装包脚本)**
    - **位置**：`installer/build_installer.ps1`
@@ -46,18 +47,20 @@
 > **注意：** 此脚本要求机器上已配置好 Node.js、Go、CMake、Visual Studio 2022 (MSVC)、以及 WiX Toolset v4/v5。
 
 ### 3. 获取发布产物
-流水线执行成功后，所有可供发布的产物会输出到 `dist/` 目录下：
+流水线执行成功后，所有可供发布的产物会输出到 `dist/` 或 `dist/release/` 目录下：
 - 服务端独立程序：`dist/server/lingqiao-server.exe`
-- 客户端安装包：`dist/installer/LingqiaoSetup-x.x.x.exe`
-- 客户端 MSI 文件：`dist/installer/Lingqiao-x.x.x.msi`
-- 发版元数据与校验和：`dist/installer/release-info.json`
+- 客户端 MSI 文件：`dist/release/LingqiaoSetup.msi`
+- 发版元数据与校验和：`dist/release/release-info.json`
+- 独立外置脚本与清单：`packages/autoexam/dist/`
+- 安装包与脚本的聚合校验和：`dist/release/checksums.txt`
 
 ### 4. 系统内建发布与更新 (灰度与全量)
 拿到产物后，通过管理后台进行发布：
 1. 以超级管理员身份登录。
-2. 前往 **发布管理**，创建新的 Release 记录，填写发版说明与版本号。
-3. 上传刚生成的 `LingqiaoSetup-x.x.x.exe`。
-4. 可以先配置 `Rollout Percent` 为较小数值进行灰度发布，观察日志后再逐步调到 100%。
+2. 前往 **脚本管理**，上传刚生成的 `autoexam.bundle.js`，并将其激活 (Activate)。
+3. 前往 **发布管理**，创建新的 Release 记录，填写发版说明与版本号。该操作会自动将刚才激活的脚本固化绑定到当前 Release 中。
+4. 上传刚生成的 `LingqiaoSetup.msi`。
+5. 可以先配置 `Rollout Percent` 为较小数值进行灰度发布，观察日志后再逐步调到 100%。
 
 ---
 

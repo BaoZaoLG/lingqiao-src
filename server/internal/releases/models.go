@@ -50,6 +50,9 @@ type Release struct {
 	RolloutPercent int            `json:"rollout_percent"`
 	Notes          string         `json:"notes,omitempty"`
 	Targeting      TargetingRules `json:"targeting"`
+	ScriptID       string         `json:"script_id,omitempty"`
+	ScriptVersion  string         `json:"script_version,omitempty"`
+	ScriptSHA256   string         `json:"script_sha256,omitempty"`
 	CreatedAt      time.Time      `json:"created_at"`
 	PublishedAt    *time.Time     `json:"published_at,omitempty"`
 	PausedAt       *time.Time     `json:"paused_at,omitempty"`
@@ -97,6 +100,9 @@ type Manifest struct {
 	PackageURL     string    `json:"package_url"`
 	PackageSize    int64     `json:"package_size"`
 	PackageSHA256  string    `json:"package_sha256"`
+	ScriptID       string    `json:"script_id,omitempty"`
+	ScriptVersion  string    `json:"script_version,omitempty"`
+	ScriptSHA256   string    `json:"script_sha256,omitempty"`
 	RolloutPercent int       `json:"rollout_percent"`
 	CreatedAt      time.Time `json:"created_at"`
 }

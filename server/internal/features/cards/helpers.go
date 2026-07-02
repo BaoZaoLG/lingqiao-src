@@ -1,4 +1,4 @@
-package main
+package cards
 
 import (
 	"crypto/rand"
@@ -48,8 +48,8 @@ func compareVersion(client, latest string) bool {
 	return false
 }
 
-// generateCardCode creates an 18-char Crockford Base32 card code in XXXXXX-XXXXXX-XXXXXX format.
-func generateCardCode() (string, error) {
+// GenerateCardCode creates an 18-char Crockford Base32 card code in XXXXXX-XXXXXX-XXXXXX format.
+func GenerateCardCode() (string, error) {
 	buf := make([]byte, 15)
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
@@ -80,7 +80,7 @@ func generateSessionToken() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:])
 }
 
-func normalizeCardCode(code string) string {
+func NormalizeCode(code string) string {
 	code = strings.ToUpper(code)
 	code = strings.ReplaceAll(code, "-", "")
 	code = strings.ReplaceAll(code, " ", "")
@@ -88,7 +88,7 @@ func normalizeCardCode(code string) string {
 }
 
 func FormatCardCode(code string) string {
-	code = normalizeCardCode(code)
+	code = NormalizeCode(code)
 	if len(code) != 18 {
 		return code
 	}
@@ -99,4 +99,17 @@ func generateShortID() string {
 	buf := make([]byte, 6)
 	rand.Read(buf)
 	return fmt.Sprintf("%x", buf)
+}
+
+func ValidateImportCardCode(code string) (string, error) {
+	normalized := NormalizeCode(code)
+	if len(normalized) != 18 {
+		return "", fmt.Errorf("card code must contain 18 base32 characters")
+	}
+	for i := 0; i < len(normalized); i++ {
+		if crockfordDecode[normalized[i]] < 0 {
+			return "", fmt.Errorf("card code contains invalid character %q", normalized[i])
+		}
+	}
+	return normalized, nil
 }

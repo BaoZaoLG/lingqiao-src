@@ -1,8 +1,7 @@
-package main
+package releases
 
 import (
-	"github.com/lingqiao/server/internal/httpapi"
-
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -16,8 +15,25 @@ import (
 	"time"
 
 	"github.com/lingqiao/server/internal/audit"
+	"github.com/lingqiao/server/internal/auth"
+	"github.com/lingqiao/server/internal/features/sessions"
+	"github.com/lingqiao/server/internal/httpapi"
 	releasesvc "github.com/lingqiao/server/internal/releases"
 )
+
+type Handler struct {
+	svc           *releaseService
+	sessionsSvc   *sessions.Service
+	auditRecorder *audit.Recorder
+}
+
+func NewHandler(svc *releaseService, sessionsSvc *sessions.Service, auditRecorder *audit.Recorder) *Handler {
+	return &Handler{
+		svc:           svc,
+		sessionsSvc:   sessionsSvc,
+		auditRecorder: auditRecorder,
+	}
+}
 
 type updateCheckRequest struct {
 	ClientVersion string             `json:"client_version"`
@@ -29,7 +45,7 @@ type updateCheckRequest struct {
 	AgentID       string             `json:"agent_id"`
 }
 
-func (h *APIHandler) HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -38,7 +54,7 @@ func (h *APIHandler) HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := verifyRequestHMAC(r, string(body)); err != nil {
+	if err := auth.VerifyRequest(r, string(body)); err != nil {
 		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -57,7 +73,7 @@ func (h *APIHandler) HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	svc := currentReleaseService()
+	svc := h.svc
 	if svc == nil {
 		httpapi.WriteError(w, http.StatusServiceUnavailable, "release service unavailable")
 		return
@@ -89,12 +105,12 @@ func (h *APIHandler) HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	manifestHMAC := ""
-	derivedKey, err := getDerivedKey(r.Header.Get("X-Client-ID"))
+	derivedKey, err := auth.GetDerivedKey(r.Header.Get("X-Client-ID"))
 	if err != nil {
 		httpapi.WriteError(w, http.StatusUnauthorized, "client key unavailable")
 		return
 	}
-	manifestHMAC = SignHMAC(string(derivedKey), string(manifestPayload))
+	manifestHMAC = auth.SignHMAC(string(derivedKey), string(manifestPayload))
 	_ = svc.store.RecordEvent(r.Context(), releasesvc.ReleaseEvent{
 		ReleaseID: selected.Release.ID,
 		Version:   selected.Release.Version,
@@ -114,6 +130,42 @@ func (h *APIHandler) HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) CheckVersion(w http.ResponseWriter, req sessions.ClientRequest) (bool, map[string]interface{}) {
+	if req.ClientVersion == "" || h == nil || h.svc == nil {
+		return false, nil
+	}
+	selected, err := releasesvc.NewSelector(h.svc.store).Select(context.Background(), releasesvc.ClientContext{
+		Version:   req.ClientVersion,
+		Channel:   releasesvc.ChannelStable,
+		MachineID: req.MachineID,
+		CardCode:  req.Card,
+		AgentID:   "",
+	})
+	if err != nil || selected == nil {
+		return false, nil
+	}
+
+	manifest := manifestFromSelection(*selected)
+	info := map[string]interface{}{
+		"update_available": true,
+		"latest_version":   selected.Release.Version,
+		"force_update":     selected.Release.ForceUpdate,
+		"download_url":     manifest.PackageURL,
+		"sha256":           manifest.PackageSHA256,
+	}
+
+	if selected.Release.MinVersion != "" && versionOlder(req.ClientVersion, selected.Release.MinVersion) {
+		httpapi.WriteJSON(w, http.StatusForbidden, map[string]interface{}{
+			"status":       "error",
+			"message":      fmt.Sprintf("版本过低，请更新到 v%s 或更高版本", selected.Release.MinVersion),
+			"download_url": manifest.PackageURL,
+			"sha256":       manifest.PackageSHA256,
+		})
+		return true, nil
+	}
+	return false, info
+}
+
 func manifestFromSelection(selected releasesvc.SelectedRelease) releasesvc.Manifest {
 	return releasesvc.Manifest{
 		ReleaseID:      selected.Release.ID,
@@ -127,12 +179,54 @@ func manifestFromSelection(selected releasesvc.SelectedRelease) releasesvc.Manif
 		PackageURL:     "/api/v1/update/package/" + selected.Package.ID,
 		PackageSize:    selected.Package.FileSize,
 		PackageSHA256:  selected.Package.SHA256,
+		ScriptID:       selected.Release.ScriptID,
+		ScriptSHA256:   selected.Release.ScriptSHA256,
 		RolloutPercent: selected.Release.RolloutPercent,
 		CreatedAt:      selected.Release.CreatedAt,
 	}
 }
 
-func (h *APIHandler) HandleUpdateEvent(w http.ResponseWriter, r *http.Request) {
+func versionOlder(client, latest string) bool {
+	parse := func(s string) []int {
+		parts := strings.Split(strings.TrimPrefix(s, "v"), ".")
+		nums := make([]int, len(parts))
+		for i, p := range parts {
+			n := 0
+			for _, c := range p {
+				if c < '0' || c > '9' {
+					break
+				}
+				n = n*10 + int(c-'0')
+			}
+			nums[i] = n
+		}
+		return nums
+	}
+	cv := parse(client)
+	lv := parse(latest)
+	maxLen := len(cv)
+	if len(lv) > maxLen {
+		maxLen = len(lv)
+	}
+	for i := 0; i < maxLen; i++ {
+		a, b := 0, 0
+		if i < len(cv) {
+			a = cv[i]
+		}
+		if i < len(lv) {
+			b = lv[i]
+		}
+		if a < b {
+			return true
+		}
+		if a > b {
+			return false
+		}
+	}
+	return false
+}
+
+func (h *Handler) HandleUpdateEvent(w http.ResponseWriter, r *http.Request) {
 	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -141,7 +235,7 @@ func (h *APIHandler) HandleUpdateEvent(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := verifyRequestHMAC(r, string(body)); err != nil {
+	if err := auth.VerifyRequest(r, string(body)); err != nil {
 		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -159,7 +253,7 @@ func (h *APIHandler) HandleUpdateEvent(w http.ResponseWriter, r *http.Request) {
 	if len(event.Detail) > 500 {
 		event.Detail = event.Detail[:500]
 	}
-	svc := currentReleaseService()
+	svc := h.svc
 	if svc == nil {
 		httpapi.WriteError(w, http.StatusServiceUnavailable, "release service unavailable")
 		return
@@ -171,11 +265,11 @@ func (h *APIHandler) HandleUpdateEvent(w http.ResponseWriter, r *http.Request) {
 	httpapi.WriteOK(w, nil)
 }
 
-func (h *APIHandler) HandleUpdatePackageDownload(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) HandleUpdatePackageDownload(w http.ResponseWriter, r *http.Request) {
 	if !httpapi.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
-	if err := verifyRequestHMAC(r, r.URL.Path); err != nil {
+	if err := auth.VerifyRequest(r, r.URL.Path); err != nil {
 		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -192,7 +286,7 @@ func (h *APIHandler) HandleUpdatePackageDownload(w http.ResponseWriter, r *http.
 		httpapi.WriteError(w, http.StatusBadRequest, "invalid package id")
 		return
 	}
-	svc := currentReleaseService()
+	svc := h.svc
 	if svc == nil {
 		httpapi.WriteError(w, http.StatusServiceUnavailable, "release service unavailable")
 		return
@@ -246,8 +340,8 @@ func (s *releaseService) resolvePackagePath(pkg releasesvc.ReleasePackage) (stri
 	return pathAbs, nil
 }
 
-func (h *AdminHandler) HandleReleases(w http.ResponseWriter, r *http.Request) {
-	svc := currentReleaseService()
+func (h *Handler) HandleReleases(w http.ResponseWriter, r *http.Request) {
+	svc := h.svc
 	if svc == nil {
 		httpapi.WriteError(w, http.StatusServiceUnavailable, "release service unavailable")
 		return
@@ -262,7 +356,7 @@ func (h *AdminHandler) HandleReleases(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *AdminHandler) writeReleaseList(w http.ResponseWriter, r *http.Request, svc *releaseService) {
+func (h *Handler) writeReleaseList(w http.ResponseWriter, r *http.Request, svc *releaseService) {
 	releases, err := svc.store.ListReleases(r.Context())
 	if err != nil {
 		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
@@ -281,7 +375,7 @@ func (h *AdminHandler) writeReleaseList(w http.ResponseWriter, r *http.Request, 
 	httpapi.WriteOK(w, map[string]interface{}{"releases": items, "public_key": svc.signer.PublicKeyHex()})
 }
 
-func (h *AdminHandler) createRelease(w http.ResponseWriter, r *http.Request, svc *releaseService) {
+func (h *Handler) createRelease(w http.ResponseWriter, r *http.Request, svc *releaseService) {
 	var req struct {
 		Version        string                    `json:"version"`
 		Channel        releasesvc.Channel        `json:"channel"`
@@ -305,6 +399,15 @@ func (h *AdminHandler) createRelease(w http.ResponseWriter, r *http.Request, svc
 	if req.RolloutPercent == 0 {
 		req.RolloutPercent = 100
 	}
+	
+	var scriptID, scriptVersion, scriptSHA256 string
+	id, version, sha256, err := h.getActiveScript()
+	if err == nil && id != "" {
+		scriptID = id
+		scriptVersion = version
+		scriptSHA256 = sha256
+	}
+
 	release := releasesvc.Release{
 		ID:             newReleaseID(req.Version, req.Channel),
 		Version:        req.Version,
@@ -315,6 +418,9 @@ func (h *AdminHandler) createRelease(w http.ResponseWriter, r *http.Request, svc
 		RolloutPercent: req.RolloutPercent,
 		Notes:          req.Notes,
 		Targeting:      req.Targeting,
+		ScriptID:       scriptID,
+		ScriptVersion:  scriptVersion,
+		ScriptSHA256:   scriptSHA256,
 		CreatedAt:      time.Now().UTC(),
 	}
 	if err := svc.store.SaveRelease(r.Context(), release); err != nil {
@@ -333,8 +439,8 @@ func newReleaseID(version string, channel releasesvc.Channel) string {
 	return fmt.Sprintf("rel-%s-%s-%d", channel, clean, time.Now().UnixNano())
 }
 
-func (h *AdminHandler) HandleReleaseRoute(w http.ResponseWriter, r *http.Request) {
-	svc := currentReleaseService()
+func (h *Handler) HandleReleaseRoute(w http.ResponseWriter, r *http.Request) {
+	svc := h.svc
 	if svc == nil {
 		httpapi.WriteError(w, http.StatusServiceUnavailable, "release service unavailable")
 		return
@@ -362,7 +468,7 @@ func (h *AdminHandler) HandleReleaseRoute(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func (h *AdminHandler) updateReleaseStatus(w http.ResponseWriter, r *http.Request, svc *releaseService, releaseID string, status releasesvc.ReleaseStatus) {
+func (h *Handler) updateReleaseStatus(w http.ResponseWriter, r *http.Request, svc *releaseService, releaseID string, status releasesvc.ReleaseStatus) {
 	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -375,6 +481,14 @@ func (h *AdminHandler) updateReleaseStatus(w http.ResponseWriter, r *http.Reques
 	release.Status = status
 	switch status {
 	case releasesvc.StatusPublished:
+		id, version, sha256, err := h.getActiveScript()
+		if err != nil || id == "" {
+			httpapi.WriteError(w, http.StatusBadRequest, "Cannot publish release: no active script available")
+			return
+		}
+		release.ScriptID = id
+		release.ScriptVersion = version
+		release.ScriptSHA256 = sha256
 		release.PublishedAt = &now
 		release.PausedAt = nil
 	case releasesvc.StatusPaused:
@@ -398,7 +512,7 @@ func (h *AdminHandler) updateReleaseStatus(w http.ResponseWriter, r *http.Reques
 	httpapi.WriteOK(w, map[string]interface{}{"release": release})
 }
 
-func (h *AdminHandler) rollbackRelease(w http.ResponseWriter, r *http.Request, svc *releaseService, releaseID string) {
+func (h *Handler) rollbackRelease(w http.ResponseWriter, r *http.Request, svc *releaseService, releaseID string) {
 	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -428,7 +542,7 @@ func (h *AdminHandler) rollbackRelease(w http.ResponseWriter, r *http.Request, s
 	httpapi.WriteOK(w, map[string]interface{}{"release": release})
 }
 
-func (h *AdminHandler) releaseEvents(w http.ResponseWriter, r *http.Request, svc *releaseService, releaseID string) {
+func (h *Handler) releaseEvents(w http.ResponseWriter, r *http.Request, svc *releaseService, releaseID string) {
 	if !httpapi.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
@@ -445,7 +559,7 @@ func (h *AdminHandler) releaseEvents(w http.ResponseWriter, r *http.Request, svc
 	httpapi.WriteOK(w, map[string]interface{}{"events": events, "metrics": metrics})
 }
 
-func (h *AdminHandler) uploadReleasePackage(w http.ResponseWriter, r *http.Request, svc *releaseService, releaseID string) {
+func (h *Handler) uploadReleasePackage(w http.ResponseWriter, r *http.Request, svc *releaseService, releaseID string) {
 	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
 	}
@@ -516,7 +630,7 @@ func (h *AdminHandler) uploadReleasePackage(w http.ResponseWriter, r *http.Reque
 	httpapi.WriteOK(w, map[string]interface{}{"package": pkg})
 }
 
-func (h *AdminHandler) recordReleaseAudit(action string, release releasesvc.Release, extra string) error {
+func (h *Handler) recordReleaseAudit(action string, release releasesvc.Release, extra string) error {
 	if h == nil || h.auditRecorder == nil {
 		return nil
 	}
@@ -536,3 +650,21 @@ func sanitizePackageFilename(filename, version string) string {
 	base = strings.NewReplacer("/", "-", "\\", "-", " ", "-").Replace(base)
 	return base + ext
 }
+
+func (h *Handler) getActiveScript() (string, string, string, error) {
+	scriptPath := filepath.Join(h.svc.dataDir, "scripts", "active.json")
+	data, err := os.ReadFile(scriptPath)
+	if err != nil {
+		return "", "", "", err
+	}
+	var script struct {
+		ID      string `json:"id"`
+		Version string `json:"version"`
+		SHA256  string `json:"sha256"`
+	}
+	if err := json.Unmarshal(data, &script); err != nil {
+		return "", "", "", err
+	}
+	return script.ID, script.Version, script.SHA256, nil
+}
+

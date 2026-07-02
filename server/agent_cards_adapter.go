@@ -37,6 +37,34 @@ func (a *agentCardManagerAdapter) AgentCards(agentID string) []agents.CardSnapsh
 	return result
 }
 
+func (a *agentCardManagerAdapter) checkLimits(agent *agents.Account, count, durationMinutes, maxSessions int) error {
+	if agent.MaxSessionDurationMinutes > 0 && durationMinutes > agent.MaxSessionDurationMinutes {
+		return fmt.Errorf("duration exceeds maximum allowed (%d minutes)", agent.MaxSessionDurationMinutes)
+	}
+	if agent.MaxConcurrentSessions > 0 && maxSessions > agent.MaxConcurrentSessions {
+		return fmt.Errorf("sessions per card exceeds maximum allowed (%d)", agent.MaxConcurrentSessions)
+	}
+	if agent.MaxDailySessions > 0 {
+		cardsList, err := a.cardsSvc.AgentCards(context.Background(), agent.ID)
+		if err != nil {
+			return err
+		}
+		
+		today := time.Now().UTC().Truncate(24 * time.Hour)
+		dailySessions := 0
+		for _, c := range cardsList {
+			if c.CreatedAt.UTC().Truncate(24 * time.Hour).Equal(today) {
+				dailySessions += c.MaxSessions
+			}
+		}
+		
+		if dailySessions+(count*maxSessions) > agent.MaxDailySessions {
+			return fmt.Errorf("exceeds maximum daily sessions limit (%d)", agent.MaxDailySessions)
+		}
+	}
+	return nil
+}
+
 func (a *agentCardManagerAdapter) AgentStats(agentID string) (total, active, expired int) {
 	t, act, exp, err := a.cardsSvc.AgentStats(context.Background(), agentID)
 	if err != nil {
@@ -57,6 +85,9 @@ func (a *agentCardManagerAdapter) GenerateCard(duration time.Duration, note stri
 		}
 		if agent.Disabled {
 			return agents.CardSnapshot{}, fmt.Errorf("agent is disabled")
+		}
+		if err := a.checkLimits(agent, 1, int(duration.Minutes()), maxSessions); err != nil {
+			return agents.CardSnapshot{}, err
 		}
 	}
 
@@ -89,6 +120,9 @@ func (a *agentCardManagerAdapter) BatchGenerateCards(count int, duration time.Du
 		}
 		if agent.Disabled {
 			return nil, fmt.Errorf("agent is disabled")
+		}
+		if err := a.checkLimits(agent, count, int(duration.Minutes()), maxSessions); err != nil {
+			return nil, err
 		}
 	}
 

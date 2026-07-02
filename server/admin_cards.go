@@ -147,13 +147,13 @@ func (h *AdminHandler) importCardsFromRecords(ctx context.Context, records [][]s
 		if len(record) > 1 && strings.TrimSpace(record[1]) != "" {
 			note = strings.TrimSpace(record[1])
 		}
-		normalized, err := validateImportCardCode(code)
+		normalized, err := cards.ValidateImportCardCode(code)
 		if err != nil {
 			report.Invalid++
 			report.Items = append(report.Items, cardImportItem{Row: rowNumber, Code: code, Note: note, Status: "invalid", Message: err.Error()})
 			continue
 		}
-		formatted := FormatCardCode(normalized)
+		formatted := cards.FormatCardCode(normalized)
 		if _, exists := seen[normalized]; exists {
 			report.Duplicates++
 			report.Items = append(report.Items, cardImportItem{Row: rowNumber, Code: formatted, Note: note, Status: "duplicate", Message: "card already exists"})

@@ -19,7 +19,7 @@ func (m *mockRepo) Insert(ctx context.Context, event Event) error {
 	return m.err
 }
 
-func (m *mockRepo) List(ctx context.Context, limit int) ([]Event, error) {
+func (m *mockRepo) List(ctx context.Context, filter Filter, limit int) ([]Event, error) {
 	return nil, nil
 }
 

@@ -24,7 +24,10 @@ func setupTestDBAndServices(t *testing.T) (*sql.DB, *cards.Service, *agents.Serv
 		password TEXT NOT NULL,
 		prefix TEXT,
 		created_at DATETIME NOT NULL,
-		disabled INTEGER NOT NULL DEFAULT 0
+		disabled INTEGER NOT NULL DEFAULT 0,
+		max_session_duration_minutes INTEGER NOT NULL DEFAULT 0,
+		max_daily_sessions INTEGER NOT NULL DEFAULT 0,
+		max_concurrent_sessions INTEGER NOT NULL DEFAULT 0
 	);
 	CREATE UNIQUE INDEX idx_agents_username ON agents(username);
 

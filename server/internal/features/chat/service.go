@@ -1,18 +1,16 @@
-package main
+package chat
 
 import (
-	"github.com/lingqiao/server/internal/httpapi"
-
 	"crypto/sha256"
 	"encoding/hex"
 
 	"fmt"
 
-	"net/http"
-
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lingqiao/server/internal/storage"
 	"unicode/utf8"
 
 	"github.com/lingqiao/server/internal/features/sessions"
@@ -58,9 +56,9 @@ type ChatProfile struct {
 }
 
 // ChatStore ...
-type ChatStore struct {
+type Service struct {
 	mu       sync.Mutex
-	storage  *JSONStorage
+	storage  storage.Store
 	now      func() time.Time
 	nextID   int64
 	messages []ChatMessage
@@ -77,12 +75,12 @@ type ChatMute struct {
 	Expires  time.Time `json:"expires_at"`
 }
 
-// NewChatStore ...
-func NewChatStore(storage *JSONStorage, now func() time.Time) *ChatStore {
+// NewService ...
+func NewService(storage storage.Store, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	s := &ChatStore{
+	s := &Service{
 		storage:  storage,
 		now:      now,
 		nextID:   1,
@@ -97,7 +95,7 @@ func NewChatStore(storage *JSONStorage, now func() time.Time) *ChatStore {
 }
 
 // Add ...
-func (s *ChatStore) Add(session *sessions.Session, content string, replyToID ...int64) (ChatMessage, error) {
+func (s *Service) Add(session *sessions.Session, content string, replyToID ...int64) (ChatMessage, error) {
 	if session == nil {
 		return ChatMessage{}, fmt.Errorf("session is required")
 	}
@@ -140,7 +138,7 @@ func (s *ChatStore) Add(session *sessions.Session, content string, replyToID ...
 }
 
 // Profile ...
-func (s *ChatStore) Profile(session *sessions.Session) (ChatProfile, error) {
+func (s *Service) Profile(session *sessions.Session) (ChatProfile, error) {
 	if session == nil {
 		return ChatProfile{}, fmt.Errorf("session is required")
 	}
@@ -160,7 +158,7 @@ func (s *ChatStore) Profile(session *sessions.Session) (ChatProfile, error) {
 }
 
 // SetProfile ...
-func (s *ChatStore) SetProfile(session *sessions.Session, nickname string) (ChatProfile, error) {
+func (s *Service) SetProfile(session *sessions.Session, nickname string) (ChatProfile, error) {
 	if session == nil {
 		return ChatProfile{}, fmt.Errorf("session is required")
 	}
@@ -189,7 +187,7 @@ func (s *ChatStore) SetProfile(session *sessions.Session, nickname string) (Chat
 }
 
 // AddSystem ...
-func (s *ChatStore) AddSystem(content string) (ChatMessage, error) {
+func (s *Service) AddSystem(content string) (ChatMessage, error) {
 	content = normalizeChatContent(content)
 	if content == "" {
 		return ChatMessage{}, fmt.Errorf("message is required")
@@ -213,7 +211,7 @@ func (s *ChatStore) AddSystem(content string) (ChatMessage, error) {
 }
 
 // Delete ...
-func (s *ChatStore) Delete(id int64) bool {
+func (s *Service) Delete(id int64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -228,7 +226,7 @@ func (s *ChatStore) Delete(id int64) bool {
 }
 
 // React ...
-func (s *ChatStore) React(session *sessions.Session, messageID int64, reaction string) (ChatMessage, error) {
+func (s *Service) React(session *sessions.Session, messageID int64, reaction string) (ChatMessage, error) {
 	if session == nil {
 		return ChatMessage{}, fmt.Errorf("session is required")
 	}
@@ -266,7 +264,7 @@ func (s *ChatStore) React(session *sessions.Session, messageID int64, reaction s
 }
 
 // TouchPresence ...
-func (s *ChatStore) TouchPresence(session *sessions.Session) (int, error) {
+func (s *Service) TouchPresence(session *sessions.Session) (int, error) {
 	if session == nil {
 		return 0, fmt.Errorf("session is required")
 	}
@@ -279,7 +277,7 @@ func (s *ChatStore) TouchPresence(session *sessions.Session) (int, error) {
 }
 
 // Mute ...
-func (s *ChatStore) Mute(authorID string, duration time.Duration, reason string) (ChatMute, error) {
+func (s *Service) Mute(authorID string, duration time.Duration, reason string) (ChatMute, error) {
 	authorID = strings.TrimSpace(authorID)
 	if authorID == "" {
 		return ChatMute{}, fmt.Errorf("author_id is required")
@@ -302,7 +300,7 @@ func (s *ChatStore) Mute(authorID string, duration time.Duration, reason string)
 }
 
 // List ...
-func (s *ChatStore) List(afterID int64, currentSession ...*sessions.Session) []ChatMessage {
+func (s *Service) List(afterID int64, currentSession ...*sessions.Session) []ChatMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -324,7 +322,7 @@ func (s *ChatStore) List(afterID int64, currentSession ...*sessions.Session) []C
 }
 
 // AdminList ...
-func (s *ChatStore) AdminList() []ChatMessage {
+func (s *Service) AdminList() []ChatMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -338,7 +336,7 @@ func (s *ChatStore) AdminList() []ChatMessage {
 	return result
 }
 
-func (s *ChatStore) onlineLocked(now time.Time) int {
+func (s *Service) onlineLocked(now time.Time) int {
 	cutoff := now.Add(-chatPresenceAge)
 	online := 0
 	for authorID, seenAt := range s.presence {
@@ -351,7 +349,7 @@ func (s *ChatStore) onlineLocked(now time.Time) int {
 	return online
 }
 
-func (s *ChatStore) isMutedLocked(authorID string, now time.Time) bool {
+func (s *Service) isMutedLocked(authorID string, now time.Time) bool {
 	mute, ok := s.mutes[authorID]
 	if !ok {
 		return false
@@ -363,7 +361,7 @@ func (s *ChatStore) isMutedLocked(authorID string, now time.Time) bool {
 	return true
 }
 
-func (s *ChatStore) load() {
+func (s *Service) load() {
 	if s.storage == nil {
 		return
 	}
@@ -400,7 +398,7 @@ func (s *ChatStore) load() {
 	}
 }
 
-func (s *ChatStore) saveLocked() {
+func (s *Service) saveLocked() {
 	if s.storage == nil {
 		return
 	}
@@ -420,7 +418,7 @@ func (s *ChatStore) saveLocked() {
 	}
 }
 
-func (s *ChatStore) pruneLocked(now time.Time) {
+func (s *Service) pruneLocked(now time.Time) {
 	cutoff := now.Add(-chatMaxAge)
 	start := 0
 	for start < len(s.messages) && s.messages[start].CreatedAt.Before(cutoff) {
@@ -513,7 +511,7 @@ func validChatReaction(reaction string) bool {
 	}
 }
 
-func (s *ChatStore) nicknameLocked(session *sessions.Session) string {
+func (s *Service) nicknameLocked(session *sessions.Session) string {
 	if profile, ok := s.profiles[chatAuthorID(session)]; ok && profile.Nickname != "" {
 		return profile.Nickname
 	}
@@ -547,11 +545,11 @@ func cloneActiveChatMutes(mutes map[string]ChatMute, now time.Time) map[string]C
 	return cloned
 }
 
-func (s *ChatStore) publicChatMessageLocked(msg ChatMessage) ChatMessage {
+func (s *Service) publicChatMessageLocked(msg ChatMessage) ChatMessage {
 	return s.publicChatMessageForAuthorLocked(msg, "")
 }
 
-func (s *ChatStore) publicChatMessageForAuthorLocked(msg ChatMessage, currentAuthorID string) ChatMessage {
+func (s *Service) publicChatMessageForAuthorLocked(msg ChatMessage, currentAuthorID string) ChatMessage {
 	if msg.Type == "" {
 		msg.Type = "user"
 	}
@@ -616,135 +614,4 @@ func removeString(values []string, target string) []string {
 		}
 	}
 	return result
-}
-
-// HandleChatSend ...
-func (h *APIHandler) HandleChatSend(w http.ResponseWriter, r *http.Request) {
-	if !httpapi.RequireMethod(w, r, http.MethodPost) {
-		return
-	}
-	req, err := h.readSignedRequest(r)
-	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
-	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	msg, err := h.chat.Add(&domainSession, req.Content, req.ReplyToID)
-	if err != nil {
-		if err.Error() == "muted" {
-			httpapi.WriteError(w, http.StatusForbidden, "你已被禁言，暂时无法发送消息")
-			return
-		}
-		if err.Error() == "rate limited" {
-			httpapi.WriteError(w, http.StatusTooManyRequests, "发送过于频繁，请稍后再试")
-			return
-		}
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	httpapi.WriteOK(w, map[string]interface{}{"message": msg})
-}
-
-// HandleChatProfile ...
-func (h *APIHandler) HandleChatProfile(w http.ResponseWriter, r *http.Request) {
-	if !httpapi.RequireMethod(w, r, http.MethodPost) {
-		return
-	}
-	req, err := h.readSignedRequest(r)
-	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
-	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	var profile ChatProfile
-	if req.Nickname != "" {
-		profile, err = h.chat.SetProfile(&domainSession, req.Nickname)
-	} else {
-		profile, err = h.chat.Profile(&domainSession)
-	}
-	if err != nil {
-		if err.Error() == "muted" {
-			httpapi.WriteError(w, http.StatusForbidden, "你已被禁言，暂时无法修改昵称")
-			return
-		}
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	httpapi.WriteOK(w, map[string]interface{}{"profile": profile})
-}
-
-// HandleChatReact ...
-func (h *APIHandler) HandleChatReact(w http.ResponseWriter, r *http.Request) {
-	if !httpapi.RequireMethod(w, r, http.MethodPost) {
-		return
-	}
-	req, err := h.readSignedRequest(r)
-	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
-	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	msg, err := h.chat.React(&domainSession, req.MessageID, req.Reaction)
-	if err != nil {
-		if err.Error() == "muted" {
-			httpapi.WriteError(w, http.StatusForbidden, "你已被禁言，暂时无法添加表情")
-			return
-		}
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	httpapi.WriteOK(w, map[string]interface{}{"message": msg})
-}
-
-// HandleChatPresence ...
-func (h *APIHandler) HandleChatPresence(w http.ResponseWriter, r *http.Request) {
-	if !httpapi.RequireMethod(w, r, http.MethodPost) {
-		return
-	}
-	req, err := h.readSignedRequest(r)
-	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
-	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	online, err := h.chat.TouchPresence(&domainSession)
-	if err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	httpapi.WriteOK(w, map[string]interface{}{"online": online})
-}
-
-// HandleChatMessages ...
-func (h *APIHandler) HandleChatMessages(w http.ResponseWriter, r *http.Request) {
-	if !httpapi.RequireMethod(w, r, http.MethodPost) {
-		return
-	}
-	req, err := h.readSignedRequest(r)
-	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
-	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	httpapi.WriteOK(w, map[string]interface{}{"messages": h.chat.List(req.AfterID, &domainSession)})
 }
