@@ -82,6 +82,65 @@ func TestHandlerUpdateCard_NotFound(t *testing.T) {
 	}
 }
 
+func TestHandlerListCards_NormalizesExpiredByTime(t *testing.T) {
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	repo := newMemoryRepo()
+	service := NewService(repo, nil, func() time.Time { return now })
+	h := NewHandler(service, repo)
+	repo.Save(context.Background(), Card{Code: "ACTIVE-FUTURE", Status: StatusActive, ExpiresAt: now.Add(time.Hour)})
+	repo.Save(context.Background(), Card{Code: "ACTIVE-PAST", Status: StatusActive, ExpiresAt: now.Add(-time.Hour)})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/cards", nil)
+	w := httptest.NewRecorder()
+	h.HandleListCards(w, req)
+
+	resp := parseResponse(t, w)
+	cards := resp["cards"].([]interface{})
+	statusByCode := map[string]string{}
+	for _, item := range cards {
+		card := item.(map[string]interface{})
+		statusByCode[card["code"].(string)] = card["status"].(string)
+	}
+	if statusByCode["ACTIVE-PAST"] != string(StatusExpired) {
+		t.Fatalf("expected ACTIVE-PAST to be returned as expired, got %q", statusByCode["ACTIVE-PAST"])
+	}
+
+	reqActive := httptest.NewRequest(http.MethodGet, "/api/cards?status=active", nil)
+	wActive := httptest.NewRecorder()
+	h.HandleListCards(wActive, reqActive)
+	activeResp := parseResponse(t, wActive)
+	activeCards := activeResp["cards"].([]interface{})
+	if len(activeCards) != 1 || activeCards[0].(map[string]interface{})["code"] != "ACTIVE-FUTURE" {
+		t.Fatalf("active filter should only return unexpired active cards, got %#v", activeCards)
+	}
+
+	reqExpired := httptest.NewRequest(http.MethodGet, "/api/cards?status=expired", nil)
+	wExpired := httptest.NewRecorder()
+	h.HandleListCards(wExpired, reqExpired)
+	expiredResp := parseResponse(t, wExpired)
+	expiredCards := expiredResp["cards"].([]interface{})
+	if len(expiredCards) != 1 || expiredCards[0].(map[string]interface{})["code"] != "ACTIVE-PAST" {
+		t.Fatalf("expired filter should include active cards past expires_at, got %#v", expiredCards)
+	}
+}
+
+func TestHandlerUpdateCard_Delete(t *testing.T) {
+	h, repo := setupHandlerTest(t)
+	repo.Save(context.Background(), Card{Code: "DELETE-ME", Status: StatusActive, ExpiresAt: time.Now().Add(time.Hour)})
+
+	body := []byte(`{"code": "DELETE-ME", "action": "delete"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/card/update", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+	h.HandleUpdateCard(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+	if _, err := repo.Get(context.Background(), "DELETE-ME"); err == nil {
+		t.Fatal("card was not deleted")
+	}
+}
+
 func TestHandlerBulkUpdateCardsDetailed_DryRun(t *testing.T) {
 	h, repo := setupHandlerTest(t)
 	repo.Save(context.Background(), Card{Code: "C1", Status: StatusActive})
@@ -102,6 +161,32 @@ func TestHandlerBulkUpdateCardsDetailed_DryRun(t *testing.T) {
 	}
 	if result["skipped"].(float64) != 1 { // C2 not found
 		t.Errorf("Expected result.skipped=1, got %v", result["skipped"])
+	}
+}
+
+func TestHandlerBulkUpdateCardsDetailed_Delete(t *testing.T) {
+	h, repo := setupHandlerTest(t)
+	repo.Save(context.Background(), Card{Code: "C1", Status: StatusActive})
+	repo.Save(context.Background(), Card{Code: "C2", Status: StatusActive})
+
+	body := []byte(`{"codes": ["C1", "C2"], "action": "delete"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/cards/bulk", bytes.NewBuffer(body))
+	w := httptest.NewRecorder()
+	h.HandleBulkCards(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+	resp := parseResponse(t, w)
+	result := resp["result"].(map[string]interface{})
+	if result["updated"].(float64) != 2 {
+		t.Fatalf("expected 2 deleted items, got %#v", result)
+	}
+	if _, err := repo.Get(context.Background(), "C1"); err == nil {
+		t.Fatal("C1 was not deleted")
+	}
+	if _, err := repo.Get(context.Background(), "C2"); err == nil {
+		t.Fatal("C2 was not deleted")
 	}
 }
 

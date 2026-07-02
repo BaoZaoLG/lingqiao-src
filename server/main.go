@@ -22,6 +22,7 @@ import (
 	"github.com/lingqiao/server/internal/auth"
 	"github.com/lingqiao/server/internal/config"
 	"github.com/lingqiao/server/internal/features/agents"
+	authorizations "github.com/lingqiao/server/internal/features/authorizations"
 	"github.com/lingqiao/server/internal/features/cards"
 	"github.com/lingqiao/server/internal/features/chat"
 	"github.com/lingqiao/server/internal/features/payloads"
@@ -151,6 +152,17 @@ func main() {
 			log.Printf("[AUDIT] Failed to record audit for session %s: %v", cardCode, err)
 		}
 	})
+	authorizationsSvc := authorizations.NewService(cardsRepo, sessionsRepo, time.Now)
+	authorizationsHandler := authorizations.NewHandler(authorizationsSvc)
+	authorizationsHandler.SetAuditSink(func(action, cardCode, detail string) {
+		if err := auditRecorder.Append(audit.Event{
+			Action: action,
+			Card:   cardCode,
+			Detail: detail,
+		}); err != nil {
+			log.Printf("[AUDIT] Failed to record audit for authorization %s: %v", cardCode, err)
+		}
+	})
 
 	inviteSvc := agents.NewInviteService(db)
 	agentsRepo := agents.NewSQLiteRepository(db)
@@ -203,7 +215,7 @@ func main() {
 	defer cancel()
 	go api.SessionCleanupTask(ctx)
 
-	adminServer := buildAdminServer(cfg.AdminAddr, api, admin, payload, cardsHandler, agentAdmin, chatHandler, releaseHandler, scriptsHandler)
+	adminServer := buildAdminServer(cfg.AdminAddr, api, admin, payload, cardsHandler, authorizationsHandler, agentAdmin, chatHandler, releaseHandler, scriptsHandler)
 	agentServer := buildAgentServer(cfg.AgentAddr, agent)
 
 	startServers(adminServer, agentServer)
@@ -252,7 +264,7 @@ func handleCLIGenerate(cardsSvc *cards.Service, auditRecorder *audit.Recorder) b
 
 // ── Server Construction ──────────────────────────────────────────────────────
 
-func buildAdminServer(addr string, api *APIHandler, admin *AdminHandler, payload *payloads.Handler, cardsHandler *cards.Handler, agentAdmin *agents.AdminHandler, chatHandler *chat.Handler, releaseHandler *releases.Handler, scriptsHandler *scripts.Handler) *http.Server {
+func buildAdminServer(addr string, api *APIHandler, admin *AdminHandler, payload *payloads.Handler, cardsHandler *cards.Handler, authorizationsHandler *authorizations.Handler, agentAdmin *agents.AdminHandler, chatHandler *chat.Handler, releaseHandler *releases.Handler, scriptsHandler *scripts.Handler) *http.Server {
 	mux := http.NewServeMux()
 	activateLimiter := httpapi.NewRateLimiter(1*time.Minute, 20)
 
@@ -285,7 +297,7 @@ func buildAdminServer(addr string, api *APIHandler, admin *AdminHandler, payload
 	mux.HandleFunc("/api/health", healthHandler)
 
 	// Admin routes (authenticated)
-	registerAdminRoutes(mux, admin, payload, cardsHandler, agentAdmin, chatHandler, releaseHandler, scriptsHandler)
+	registerAdminRoutes(mux, admin, payload, cardsHandler, authorizationsHandler, agentAdmin, chatHandler, releaseHandler, scriptsHandler)
 
 	// Serve admin panel HTML
 	adminSubFS, _ := fs.Sub(webDistFS, "web-dist/admin")
@@ -340,7 +352,7 @@ func handleChunkAuth(w http.ResponseWriter, r *http.Request, payload *payloads.H
 	payload.HandleChunkDownload(w, r)
 }
 
-func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *payloads.Handler, cardsHandler *cards.Handler, agentAdmin *agents.AdminHandler, chatHandler *chat.Handler, releaseHandler *releases.Handler, scriptsHandler *scripts.Handler) {
+func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *payloads.Handler, cardsHandler *cards.Handler, authorizationsHandler *authorizations.Handler, agentAdmin *agents.AdminHandler, chatHandler *chat.Handler, releaseHandler *releases.Handler, scriptsHandler *scripts.Handler) {
 	auth := h.adminAuth
 	authP := func(perm string, handler http.HandlerFunc) http.HandlerFunc {
 		return auth(h.RequirePermission(perm, handler))
@@ -375,6 +387,10 @@ func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *payloads.
 	mux.HandleFunc("/admin/api/cards/bulk", authP("cards.bulk", cardsHandler.HandleBulkCards))
 	mux.HandleFunc("/admin/api/cards/export", authP("cards.read", h.HandleExportCards))
 	mux.HandleFunc("/admin/api/cards/import", authP("cards.write", h.HandleImportCards))
+	mux.HandleFunc("/admin/api/control/authorizations", authP("cards.read", authorizationsHandler.Handle))
+	mux.HandleFunc("/admin/api/control/authorizations/", authP("cards.read", authorizationsHandler.Handle))
+	mux.HandleFunc("/admin/api/control/authorizations/bulk/impact", authP("cards.bulk", authorizationsHandler.HandleBulkImpact))
+	mux.HandleFunc("/admin/api/control/authorizations/bulk/actions", authP("cards.bulk", authorizationsHandler.HandleBulkAction))
 
 	// Sessions & blacklist
 	mux.HandleFunc("/admin/api/sessions", authP("sessions.read", h.HandleListSessions))
@@ -385,17 +401,17 @@ func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *payloads.
 	// Announcement
 	mux.HandleFunc("/admin/api/announcement", auth(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			h.HandleAnnouncementSet(w, r)
+			h.RequirePermission("announcement.write", h.HandleAnnouncementSet)(w, r)
 		} else {
-			h.HandleAnnouncementGet(w, r)
+			h.RequirePermission("announcement.read", h.HandleAnnouncementGet)(w, r)
 		}
 	}))
 
 	// Community chat
-	mux.HandleFunc("/admin/api/chat/messages", auth(chatHandler.HandleAdminChatMessages))
-	mux.HandleFunc("/admin/api/chat/delete", auth(chatHandler.HandleChatDelete))
-	mux.HandleFunc("/admin/api/chat/system", auth(chatHandler.HandleChatSystem))
-	mux.HandleFunc("/admin/api/chat/mute", auth(chatHandler.HandleChatMute))
+	mux.HandleFunc("/admin/api/chat/messages", authP("chat.read", chatHandler.HandleAdminChatMessages))
+	mux.HandleFunc("/admin/api/chat/delete", authP("chat.write", chatHandler.HandleChatDelete))
+	mux.HandleFunc("/admin/api/chat/system", authP("chat.write", chatHandler.HandleChatSystem))
+	mux.HandleFunc("/admin/api/chat/mute", authP("chat.write", chatHandler.HandleChatMute))
 
 	// Machines
 	mux.HandleFunc("/admin/api/machines", authP("agents.read", h.HandleAdminMachines))

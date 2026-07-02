@@ -68,9 +68,20 @@ Write-Host "Generating Release Artifacts..." -ForegroundColor Cyan
 $ReleaseDir = "dist/release"
 if (-not (Test-Path $ReleaseDir)) { New-Item -ItemType Directory -Path $ReleaseDir | Out-Null }
 
+$ClientCMake = Get-Content "client/CMakeLists.txt" -Raw
+if ($ClientCMake -notmatch 'set\(APP_VERSION\s+"([^"]+)"\)') {
+    throw "APP_VERSION was not found in client/CMakeLists.txt"
+}
+$ClientVersion = $Matches[1]
+$ScriptBundlePath = "packages/autoexam/dist/autoexam.bundle.js"
+$ScriptManifestPath = "packages/autoexam/dist/autoexam.manifest.json"
+if (-not (Test-Path $ScriptBundlePath)) { throw "AutoExam bundle not found: $ScriptBundlePath" }
+if (-not (Test-Path $ScriptManifestPath)) { throw "AutoExam manifest not found: $ScriptManifestPath" }
+
 $MsiPath = "installer/Output/LingqiaoSetup.msi"
 if (Test-Path $MsiPath) {
     Copy-Item $MsiPath -Destination "$ReleaseDir\LingqiaoSetup.msi" -Force
+    Copy-Item $ScriptBundlePath -Destination "$ReleaseDir\autoexam.bundle.js" -Force
     
     # Optional code signing
     if ($env:SIGNING_CERT_THUMBPRINT) {
@@ -79,26 +90,32 @@ if (Test-Path $MsiPath) {
     }
 
     $MsiHash = (Get-FileHash "$ReleaseDir\LingqiaoSetup.msi" -Algorithm SHA256).Hash.ToLower()
-    $ScriptManifest = Get-Content "packages/autoexam/dist/autoexam.manifest.json" | ConvertFrom-Json
+    $ScriptHash = (Get-FileHash "$ReleaseDir\autoexam.bundle.js" -Algorithm SHA256).Hash.ToLower()
+    $ScriptManifest = Get-Content $ScriptManifestPath | ConvertFrom-Json
+    if ($ScriptManifest.sha256 -and $ScriptManifest.sha256.ToLower() -ne $ScriptHash) {
+        throw "AutoExam bundle hash does not match manifest"
+    }
     
     $CommitHash = ""
     try { $CommitHash = (git rev-parse HEAD).Trim() } catch { }
 
     $ReleaseInfo = @{
-        version = (Get-Content client/version.txt -ErrorAction SilentlyContinue) # Or a standard version fetch
+        version = $ClientVersion
         msi_sha256 = $MsiHash
         script_version = $ScriptManifest.version
-        script_sha256 = $ScriptManifest.sha256
+        script_sha256 = $ScriptHash
         built_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
         source_commit = $CommitHash
     }
     $ReleaseInfo | ConvertTo-Json | Out-File -FilePath "$ReleaseDir\release-info.json" -Encoding utf8 -Force
     
-    $Checksums = @"
+$Checksums = @"
 $MsiHash *LingqiaoSetup.msi
-$($ScriptManifest.sha256) *autoexam.bundle.js
+$ScriptHash *autoexam.bundle.js
 "@
     Set-Content -Path "$ReleaseDir\checksums.txt" -Value $Checksums -Encoding utf8
+} elseif (-not $SkipWix) {
+    throw "MSI not found: $MsiPath"
 }
 
 Write-Host "Pipeline Completed Successfully!" -ForegroundColor Green

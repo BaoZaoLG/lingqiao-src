@@ -33,14 +33,19 @@ func (h *AdminHandler) HandleExportCards(w http.ResponseWriter, r *http.Request)
 	writer := csv.NewWriter(w)
 	writer.UseCRLF = true
 	_ = writer.Write([]string{"code", "status", "note", "max_sessions", "machine_id", "created_at", "activated_at", "expires_at"})
+	now := time.Now()
 	for _, c := range cardsList {
 		activatedAt := ""
 		if c.ActivatedAt != nil {
 			activatedAt = c.ActivatedAt.Format("2006-01-02 15:04:05")
 		}
+		status := c.Status
+		if !c.ExpiresAt.IsZero() && !now.Before(c.ExpiresAt) {
+			status = cards.StatusExpired
+		}
 		_ = writer.Write([]string{
 			spreadsheetSafeCSVCell(c.Code),
-			spreadsheetSafeCSVCell(string(c.Status)),
+			spreadsheetSafeCSVCell(string(status)),
 			spreadsheetSafeCSVCell(c.Note),
 			strconv.Itoa(c.MaxSessions),
 			spreadsheetSafeCSVCell(c.MachineID),

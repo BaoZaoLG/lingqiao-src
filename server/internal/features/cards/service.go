@@ -123,6 +123,10 @@ func (s *Service) UpdateStatus(ctx context.Context, code string, status Status) 
 	return s.repo.Save(ctx, card)
 }
 
+func (s *Service) Delete(ctx context.Context, code string) error {
+	return s.repo.Delete(ctx, code)
+}
+
 func (s *Service) Extend(ctx context.Context, code string, extendHours int) error {
 	if extendHours <= 0 {
 		return errors.New("extendHours must be positive")
@@ -247,6 +251,8 @@ func (s *Service) BulkUpdateCardsDetailed(ctx context.Context, codes []string, a
 				card.ActivatedAt = nil
 				changed = true
 			}
+		case cardops.BulkDelete:
+			changed = true
 		}
 
 		if !changed {
@@ -258,7 +264,12 @@ func (s *Service) BulkUpdateCardsDetailed(ctx context.Context, codes []string, a
 		}
 
 		if !dryRun {
-			if err := s.repo.Save(ctx, card); err != nil {
+			if bulkAction == cardops.BulkDelete {
+				err = s.repo.Delete(ctx, code)
+			} else {
+				err = s.repo.Save(ctx, card)
+			}
+			if err != nil {
 				result.AddItem(cardops.BulkItemResult{
 					Code:    code,
 					Status:  cardops.BulkItemFailed,

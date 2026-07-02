@@ -45,6 +45,11 @@ type updateCheckRequest struct {
 	AgentID       string             `json:"agent_id"`
 }
 
+type updateEventRequest struct {
+	releasesvc.ReleaseEvent
+	SessionToken string `json:"session_token"`
+}
+
 func (h *Handler) HandleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
@@ -180,6 +185,7 @@ func manifestFromSelection(selected releasesvc.SelectedRelease) releasesvc.Manif
 		PackageSize:    selected.Package.FileSize,
 		PackageSHA256:  selected.Package.SHA256,
 		ScriptID:       selected.Release.ScriptID,
+		ScriptVersion:  selected.Release.ScriptVersion,
 		ScriptSHA256:   selected.Release.ScriptSHA256,
 		RolloutPercent: selected.Release.RolloutPercent,
 		CreatedAt:      selected.Release.CreatedAt,
@@ -239,16 +245,31 @@ func (h *Handler) HandleUpdateEvent(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	var event releasesvc.ReleaseEvent
-	if err := json.Unmarshal(body, &event); err != nil {
+	var req updateEventRequest
+	if err := json.Unmarshal(body, &req); err != nil {
 		httpapi.WriteError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
+	event := req.ReleaseEvent
 	// Validate required fields — reject empty/malformed events
 	if event.ReleaseID == "" || event.Type == "" {
 		httpapi.WriteError(w, http.StatusBadRequest, "release_id and type are required")
 		return
 	}
+	token := firstNonEmptyString(r.Header.Get("X-Session-Token"), req.SessionToken)
+	machineID := firstNonEmptyString(r.Header.Get("X-Machine-ID"), event.MachineID)
+	cardCode := firstNonEmptyString(r.Header.Get("X-Card-Code"), event.CardCode)
+	if h.sessionsSvc == nil {
+		httpapi.WriteError(w, http.StatusServiceUnavailable, "session service unavailable")
+		return
+	}
+	session, err := h.sessionsSvc.ValidateBound(r.Context(), token, machineID, cardCode)
+	if err != nil {
+		httpapi.WriteError(w, http.StatusUnauthorized, "invalid or expired session")
+		return
+	}
+	event.MachineID = session.MachineID
+	event.CardCode = session.CardCode
 	// Sanitize: cap detail length to prevent abuse
 	if len(event.Detail) > 500 {
 		event.Detail = event.Detail[:500]
@@ -399,14 +420,16 @@ func (h *Handler) createRelease(w http.ResponseWriter, r *http.Request, svc *rel
 	if req.RolloutPercent == 0 {
 		req.RolloutPercent = 100
 	}
-	
+
 	var scriptID, scriptVersion, scriptSHA256 string
 	id, version, sha256, err := h.getActiveScript()
-	if err == nil && id != "" {
-		scriptID = id
-		scriptVersion = version
-		scriptSHA256 = sha256
+	if err != nil || id == "" {
+		httpapi.WriteError(w, http.StatusBadRequest, "active script is required before creating release")
+		return
 	}
+	scriptID = id
+	scriptVersion = version
+	scriptSHA256 = sha256
 
 	release := releasesvc.Release{
 		ID:             newReleaseID(req.Version, req.Channel),
@@ -484,6 +507,10 @@ func (h *Handler) updateReleaseStatus(w http.ResponseWriter, r *http.Request, sv
 		id, version, sha256, err := h.getActiveScript()
 		if err != nil || id == "" {
 			httpapi.WriteError(w, http.StatusBadRequest, "Cannot publish release: no active script available")
+			return
+		}
+		if err := svc.ensurePublishablePackage(r.Context(), release.ID); err != nil {
+			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		release.ScriptID = id
@@ -668,3 +695,31 @@ func (h *Handler) getActiveScript() (string, string, string, error) {
 	return script.ID, script.Version, script.SHA256, nil
 }
 
+func (s *releaseService) ensurePublishablePackage(ctx context.Context, releaseID string) error {
+	packages, err := s.store.ListPackages(ctx, releaseID)
+	if err != nil {
+		return err
+	}
+	if len(packages) == 0 {
+		return fmt.Errorf("Cannot publish release: no update package uploaded")
+	}
+	for _, pkg := range packages {
+		path, err := s.resolvePackagePath(pkg)
+		if err != nil {
+			return err
+		}
+		if stat, err := os.Stat(path); err == nil && !stat.IsDir() {
+			return nil
+		}
+	}
+	return fmt.Errorf("Cannot publish release: package file not found")
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}

@@ -11,6 +11,7 @@ const (
 	StatusActive   Status = "active"
 	StatusDisabled Status = "disabled"
 	StatusExpired  Status = "expired"
+	StatusArchived Status = "archived"
 	StatusUnused   Status = "unused"
 )
 

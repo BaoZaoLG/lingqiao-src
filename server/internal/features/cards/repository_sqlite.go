@@ -255,8 +255,15 @@ func (r *SQLiteRepository) ExtendBulk(ctx context.Context, codes []string, exten
 }
 
 func (r *SQLiteRepository) Delete(ctx context.Context, code string) error {
-	_, err := r.db.ExecContext(ctx, "DELETE FROM cards WHERE code = ?", code)
-	return err
+	res, err := r.db.ExecContext(ctx, "DELETE FROM cards WHERE code = ?", code)
+	if err != nil {
+		return err
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (r *SQLiteRepository) Count(ctx context.Context, filter ListFilter) (int, error) {

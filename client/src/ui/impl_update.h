@@ -259,6 +259,7 @@
         event["version"] = version;
         event["machine_id"] = machine;
         event["card_code"] = card;
+        event["session_token"] = m_sessionToken;
         event["type"] = type;
         if (!errorCode.isEmpty()) event["error_code"] = errorCode;
         if (!detail.isEmpty()) event["detail"] = detail.left(300);

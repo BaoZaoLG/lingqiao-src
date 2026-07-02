@@ -7,6 +7,10 @@ import { ToastHost } from '../../shared/src/toast';
 interface Card extends JsonRecord {
   code: string;
   status: string;
+  effective_status?: string;
+  stored_status?: string;
+  active_sessions?: number;
+  last_seen?: string;
   max_sessions?: number;
   created_at?: string;
   activated_at?: string;
@@ -261,6 +265,16 @@ async function loadDashboard(): Promise<void> {
     stat('运行时长', formatUptime(Number(stats.uptime_seconds ?? 0)))
   ].join('');
   await loadOpsOverview();
+  await loadControlPlaneOverview();
+}
+
+interface ImpactPreview extends JsonRecord {
+  action: string;
+  target_count: number;
+  active_sessions: number;
+  machines?: string[];
+  reversible: boolean;
+  warnings?: string[];
 }
 
 async function loadOpsOverview(): Promise<void> {
@@ -278,20 +292,61 @@ async function loadOpsOverview(): Promise<void> {
   bindDashboardActions();
 }
 
+async function loadControlPlaneOverview(): Promise<void> {
+  const [scriptResult, releaseResult, payloadResult] = await Promise.allSettled([
+    api.get<JsonRecord>('/admin/api/script'),
+    api.get<JsonRecord>('/admin/api/releases'),
+    api.get<JsonRecord>('/admin/api/payloads')
+  ]);
+
+  if (scriptResult.status === 'fulfilled') {
+    const script = scriptResult.value.script as JsonRecord | null | undefined;
+    const version = String(scriptResult.value.version ?? script?.version ?? '');
+    const id = String(scriptResult.value.active_id ?? script?.id ?? '');
+    const sha = String(scriptResult.value.sha256 ?? script?.sha256 ?? '');
+    const size = Number(scriptResult.value.size ?? script?.size ?? 0);
+    qs<HTMLElement>('#dashboardScriptStatus').innerHTML = version
+      ? compactStatus('已启用', `v${version}`, `${formatBytes(size)} · ${shortHash(sha)}`, id)
+      : compactStatus('未启用', '暂无在线脚本', '客户端无法从后台拉取业务 JS', '');
+  } else {
+    qs<HTMLElement>('#dashboardScriptStatus').innerHTML = compactStatus('异常', '脚本接口不可用', messageOf(scriptResult.reason), '');
+  }
+
+  if (releaseResult.status === 'fulfilled') {
+    const items = (releaseResult.value.releases as JsonRecord[] | undefined) ?? [];
+    const releases = items.map((item) => (item.release as JsonRecord | undefined) ?? {});
+    const published = releases.find((release) => release.status === 'published');
+    qs<HTMLElement>('#dashboardReleaseStatus').innerHTML = published
+      ? compactStatus('已发布', `v${published.version ?? '-'}`, `${published.channel ?? 'stable'} · 灰度 ${published.rollout_percent ?? 0}%`, String(published.id ?? ''))
+      : compactStatus('未发布', `${releases.length} 个草稿/历史版本`, '发布前需有在线脚本和安装包', '');
+  } else {
+    qs<HTMLElement>('#dashboardReleaseStatus').innerHTML = compactStatus('异常', '发布接口不可用', messageOf(releaseResult.reason), '');
+  }
+
+  if (payloadResult.status === 'fulfilled') {
+    const active = payloadResult.value.active as JsonRecord | null | undefined;
+    qs<HTMLElement>('#dashboardPayloadStatus').innerHTML = active?.payload_id
+      ? compactStatus('已启用', String(active.payload_id), `${formatBytes(Number(active.total_size ?? 0))} · ${shortHash(String(active.exe_hash ?? ''))}`, '')
+      : compactStatus('未启用', '暂无当前载荷', '客户端只能按显式 payload_id 获取', '');
+  } else {
+    qs<HTMLElement>('#dashboardPayloadStatus').innerHTML = compactStatus('异常', '载荷接口不可用', messageOf(payloadResult.reason), '');
+  }
+}
+
 async function loadCards(): Promise<void> {
   const params = new URLSearchParams();
   const status = qs<HTMLSelectElement>('#cardStatusFilter').value;
   const search = qs<HTMLInputElement>('#cardSearch').value;
-  if (status) params.set('status', status);
+  if (status) params.set('effective_status', status);
   if (search) params.set('search', search);
-  if (cardMachineFilter) params.set('machine', cardMachineFilter);
+  if (cardMachineFilter) params.set('machine_id', cardMachineFilter);
   setParam(params, 'agent_id', qs<HTMLInputElement>('#cardAgentFilter').value.trim());
   setParam(params, 'bound', qs<HTMLSelectElement>('#cardBoundFilter').value);
   setParam(params, 'expires_after', dateToRFC3339(qs<HTMLInputElement>('#cardExpiresAfter').value));
   setParam(params, 'expires_before', dateToRFC3339(qs<HTMLInputElement>('#cardExpiresBefore').value, true));
   setParam(params, 'max_sessions', qs<HTMLInputElement>('#cardMaxSessionsFilter').value.trim());
-  const response = await api.get<{ cards?: Card[] }>(`/admin/api/cards${params.size ? `?${params}` : ''}`);
-  cards = response.cards ?? [];
+  const response = await api.get<{ authorizations?: Card[] }>(`/admin/api/control/authorizations${params.size ? `?${params}` : ''}`);
+  cards = response.authorizations ?? [];
   renderCards();
 }
 
@@ -316,26 +371,48 @@ function filteredCards(): Card[] {
   return cards.filter((card) => !query || card.code.includes(query) || String(card.note ?? '').toUpperCase().includes(query));
 }
 
+function effectiveCardStatus(card: Card): string {
+  if (card.effective_status) return card.effective_status;
+  if (card.expires_at && new Date(card.expires_at).getTime() <= Date.now()) return 'expired';
+  return card.status;
+}
+
 function renderCardRow(card: Card): string {
-  const status = card.status === 'active' && new Date(card.expires_at) > new Date() ? 'active' : card.status;
-  const label = status === 'active' ? '有效' : status === 'disabled' ? '已禁用' : '已过期';
+  const status = effectiveCardStatus(card);
+  const label = authorizationStatusLabel(status);
   return `<tr>
     <td><input type="checkbox" data-card-check value="${escapeHtml(card.code)}"></td>
     <td><span class="mono">${escapeHtml(card.code)}</span></td>
     <td><span class="badge badge-${escapeHtml(status)}">${label}</span></td>
-    <td>${card.max_sessions ?? 1}</td>
+    <td>${card.active_sessions ?? 0}/${card.max_sessions ?? 1}</td>
     <td>${formatDate(card.created_at ?? '')}</td>
     <td>${card.activated_at ? formatDate(card.activated_at) : '-'}</td>
     <td>${formatDate(card.expires_at)}</td>
     <td>${card.machine_id ? `<span class="mono">${escapeHtml(card.machine_id).slice(0, 14)}...</span>` : '-'}</td>
     <td>${escapeHtml(card.note ?? '-')}</td>
     <td>
+      <button class="btn btn-sm btn-ghost" data-card-code="${escapeHtml(card.code)}" data-card-action="detail">查看</button>
       <button class="btn btn-sm btn-ghost" data-card-code="${escapeHtml(card.code)}" data-card-action="edit">编辑</button>
       <button class="btn btn-sm btn-ghost" data-card-code="${escapeHtml(card.code)}" data-card-action="extend">延期</button>
-      <button class="btn btn-sm btn-ghost" data-card-code="${escapeHtml(card.code)}" data-card-action="${status === 'disabled' ? 'enable' : 'disable'}">${status === 'disabled' ? '启用' : '禁用'}</button>
-      <button class="btn btn-sm btn-ghost" data-card-code="${escapeHtml(card.code)}" data-card-action="unbind">解绑</button>
+      <button class="btn btn-sm btn-ghost" data-card-code="${escapeHtml(card.code)}" data-card-action="${status === 'frozen' || status === 'archived' ? 'restore' : 'freeze'}">${status === 'frozen' || status === 'archived' ? '恢复' : '冻结'}</button>
+      <button class="btn btn-sm btn-ghost" data-card-code="${escapeHtml(card.code)}" data-card-action="unbind_machine">解绑</button>
+      <button class="btn btn-sm btn-danger" data-card-code="${escapeHtml(card.code)}" data-card-action="archive_delete">归档</button>
     </td>
   </tr>`;
+}
+
+function authorizationStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    issued: '待激活',
+    activated: '已激活',
+    in_use: '使用中',
+    expired: '已过期',
+    frozen: '已冻结',
+    archived: '已归档',
+    active: '有效',
+    disabled: '已禁用'
+  };
+  return labels[status] ?? status;
 }
 
 function showGenerate(batch: boolean): void {
@@ -367,12 +444,43 @@ async function generateCard(): Promise<void> {
 }
 
 async function handleCardAction(code: string, action: string): Promise<void> {
+  if (action === 'detail') return showAuthorizationDetail(code);
   if (action === 'edit') return showEditCard(code);
   if (action === 'extend') return showExtendModal(code);
-  if ((action === 'disable' || action === 'unbind') && !confirm(`确认${action === 'disable' ? '禁用' : '解绑'} ${code}？`)) return;
-  await api.post('/admin/api/card/update', { code, action });
-  toast.show('操作已完成');
+  const preview = await previewAuthorizationAction(code, action);
+  if (!confirmAuthorizationImpact(preview)) return;
+  await api.post(`/admin/api/control/authorizations/${encodeURIComponent(code)}/actions`, { action });
+  toast.show(action === 'archive_delete' ? '授权已归档' : '操作已完成');
   await loadCards();
+}
+
+async function showAuthorizationDetail(code: string): Promise<void> {
+  const response = await api.get<{ authorization?: Card & { sessions?: SessionRecord[] } }>(`/admin/api/control/authorizations/${encodeURIComponent(code)}`);
+  const auth = response.authorization;
+  if (!auth) return;
+  qs<HTMLElement>('#authorizationDetailCode').textContent = code;
+  const sessions = auth.sessions ?? [];
+  qs<HTMLElement>('#authorizationDetailContent').innerHTML = `
+    <div class="detail-grid">
+      <div class="status-summary">
+        <span class="badge badge-${escapeHtml(effectiveCardStatus(auth))}">${escapeHtml(authorizationStatusLabel(effectiveCardStatus(auth)))}</span>
+        <strong>${escapeHtml(auth.code)}</strong>
+        <span>在线 ${auth.active_sessions ?? sessions.length}/${auth.max_sessions ?? 1}</span>
+        <span>到期 ${formatDate(auth.expires_at)}</span>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Token</th><th>机器</th><th>版本</th><th>IP</th><th>最后活跃</th><th>会话到期</th></tr></thead><tbody>${sessions.length ? sessions.map((session) => `<tr><td><span class="mono">${escapeHtml(session.token).slice(0, 16)}...</span></td><td><span class="mono">${escapeHtml(session.machine_id).slice(0, 16)}...</span></td><td>${escapeHtml(session.client_version ?? '-')}</td><td>${escapeHtml(session.remote_addr ?? '-')}</td><td>${formatDate(session.last_seen)}</td><td>${formatDate(session.expires_at)}</td></tr>`).join('') : emptyRow(6, '当前无在线会话')}</tbody></table></div>
+    </div>`;
+  showModal('authorizationDetailModal');
+}
+
+async function previewAuthorizationAction(code: string, action: string, extend_hours = 0): Promise<ImpactPreview> {
+  const response = await api.post<{ preview?: ImpactPreview }>(`/admin/api/control/authorizations/${encodeURIComponent(code)}/impact`, { action, extend_hours });
+  return response.preview ?? { action, target_count: 0, active_sessions: 0, reversible: true };
+}
+
+function confirmAuthorizationImpact(preview: ImpactPreview): boolean {
+  const warnings = (preview.warnings ?? []).length ? `\n${(preview.warnings ?? []).join('\n')}` : '';
+  return confirm(`操作：${bulkActionLabel(preview.action)}\n影响授权：${preview.target_count}\n在线会话：${preview.active_sessions}\n关联机器：${(preview.machines ?? []).length}${warnings}\n确认执行？`);
 }
 
 function showEditCard(code: string): void {
@@ -406,12 +514,14 @@ function showExtendModal(code: string): void {
 async function confirmExtend(): Promise<void> {
   const extend_hours = Number(qs<HTMLInputElement>('#extendHours').value || 720);
   if (extendCode) {
-    await api.post('/admin/api/card/update', { code: extendCode, action: 'extend', extend_hours });
+    const preview = await previewAuthorizationAction(extendCode, 'extend', extend_hours);
+    if (!confirmAuthorizationImpact(preview)) return;
+    await api.post(`/admin/api/control/authorizations/${encodeURIComponent(extendCode)}/actions`, { action: 'extend', extend_hours });
   } else {
     const codes = Array.from(selectedCards);
-    const preview = await api.post<JsonRecord>('/admin/api/cards/bulk', { codes, action: 'extend', extend_hours, dry_run: true });
-    if (!confirmBulkPreview('extend', preview.result as JsonRecord | undefined)) return;
-    await api.post('/admin/api/cards/bulk', { codes, action: 'extend', extend_hours });
+    const preview = await api.post<{ preview?: ImpactPreview }>('/admin/api/control/authorizations/bulk/impact', { codes, action: 'extend', extend_hours });
+    if (!confirmAuthorizationImpact(preview.preview ?? { action: 'extend', target_count: 0, active_sessions: 0, reversible: true })) return;
+    await api.post('/admin/api/control/authorizations/bulk/actions', { codes, action: 'extend', extend_hours });
     selectedCards.clear();
   }
   closeModal('extendModal');
@@ -423,30 +533,27 @@ async function bulkAction(action: string): Promise<void> {
   if (!selectedCards.size) return toast.show('请先选择卡密', 'warning');
   if (action === 'extend') return showExtendModal('');
   const codes = Array.from(selectedCards);
-  const preview = await api.post<JsonRecord>('/admin/api/cards/bulk', { codes, action, dry_run: true });
-  if (!confirmBulkPreview(action, preview.result as JsonRecord | undefined)) return;
-  const response = await api.post<JsonRecord>('/admin/api/cards/bulk', { codes, action });
+  const preview = await api.post<{ preview?: ImpactPreview }>('/admin/api/control/authorizations/bulk/impact', { codes, action });
+  if (!confirmAuthorizationImpact(preview.preview ?? { action, target_count: 0, active_sessions: 0, reversible: true })) return;
+  const response = await api.post<JsonRecord>('/admin/api/control/authorizations/bulk/actions', { codes, action });
   const result = response.result as JsonRecord | undefined;
   toast.show(`批量完成：更新 ${result?.updated ?? response.affected ?? 0} 项，跳过 ${result?.skipped ?? 0} 项`);
   selectedCards.clear();
   await loadCards();
 }
 
-function confirmBulkPreview(action: string, result?: JsonRecord): boolean {
-  const updated = Number(result?.updated ?? 0);
-  const skipped = Number(result?.skipped ?? 0);
-  const failed = Number(result?.failed ?? 0);
-  const label = bulkActionLabel(action);
-  return confirm(`批量${label}预览：预计影响 ${updated} 张，跳过 ${skipped} 张，失败 ${failed} 张。\n确认执行？`);
-}
-
 function bulkActionLabel(action: string): string {
   const labels: Record<string, string> = {
     disable: '禁用',
+    freeze: '冻结',
     enable: '启用',
+    restore: '恢复',
     expire: '过期',
     extend: '延期',
-    unbind: '解绑'
+    unbind: '解绑',
+    unbind_machine: '解绑',
+    delete: '删除',
+    archive_delete: '归档'
   };
   return labels[action] ?? action;
 }
@@ -767,8 +874,14 @@ async function loadScriptModule(): Promise<void> {
   qs<HTMLInputElement>('#scriptNote').value = String(script?.note ?? '');
   qs<HTMLTextAreaElement>('#scriptContent').value = content;
   qs<HTMLElement>('#scriptCurrentInfo').innerHTML = hasScript
-    ? `当前脚本：<b>v${escapeHtml(version)}</b> · ${formatBytes(size)} · ${formatDate(updatedAt)}<br><span class="mono">${escapeHtml(sha)}</span>`
-    : '暂无发布脚本，客户端会使用 DLL 内嵌降级脚本';
+    ? `<div class="status-summary">
+        <span class="badge badge-active">当前启用</span>
+        <strong>v${escapeHtml(version)}</strong>
+        <span>${formatBytes(size)} · ${formatDate(updatedAt)}</span>
+        <span class="mono">${escapeHtml(selectedScriptID)}</span>
+        <span class="mono">${escapeHtml(sha)}</span>
+      </div>`
+    : '<div class="empty-state">暂无启用脚本，客户端无法从后台拉取业务 JS</div>';
   renderScriptList();
 }
 
@@ -788,7 +901,6 @@ async function saveScriptModuleWithAction(action: string): Promise<void> {
   const response = await api.post<JsonRecord>('/admin/api/script', { version, content, note, action });
   qs<HTMLInputElement>('#scriptVersion').value = String(response.version ?? version);
   qs<HTMLInputElement>('#scriptSha').value = String(response.sha256 ?? '');
-  qs<HTMLElement>('#scriptCurrentInfo').innerHTML = `当前脚本：<b>v${escapeHtml(response.version ?? version)}</b> · ${formatBytes(Number(response.size ?? 0))} · ${formatDate(String(response.updated_at ?? ''))}<br><span class="mono">${escapeHtml(response.sha256 ?? '')}</span>`;
   toast.show(action === 'save' ? '脚本已保存，可在列表中启用' : '脚本模块已发布');
   await loadScriptModule();
 }
@@ -797,13 +909,23 @@ function renderScriptList(): void {
   qs<HTMLElement>('#scriptList').innerHTML = scripts.length ? scripts.map((script) => {
     const id = String(script.id ?? '');
     const active = Boolean(script.active);
-    return `<div class="list-item ${active ? 'success-item' : ''}">
-      <strong>${escapeHtml(script.name ?? script.version ?? id)}</strong>
-      <span>v${escapeHtml(script.version ?? '-')} · ${formatBytes(Number(script.size ?? 0))}</span>
-      <em>${active ? '当前启用' : formatDate(String(script.updated_at ?? ''))}</em>
-      <button class="btn btn-sm btn-ghost" data-load-script="${escapeHtml(id)}">编辑</button>
-      <button class="btn btn-sm btn-success" data-activate-script="${escapeHtml(id)}" ${active ? 'disabled' : ''}>启用</button>
-      <button class="btn btn-sm btn-danger" data-delete-script="${escapeHtml(id)}" ${active ? 'disabled' : ''}>删除</button>
+    const version = String(script.version ?? '-');
+    const sha = String(script.sha256 ?? '');
+    return `<div class="script-row ${active ? 'success-item' : ''}">
+      <div>
+        <strong>${escapeHtml(script.name ?? `JS ${version}`)}</strong>
+        <div class="muted">v${escapeHtml(version)} · ${formatBytes(Number(script.size ?? 0))} · ${formatDate(String(script.updated_at ?? ''))}</div>
+        <div class="mono muted">${escapeHtml(id)}</div>
+      </div>
+      <div>
+        <span class="badge ${active ? 'badge-active' : 'badge-expired'}">${active ? '当前启用' : '历史版本'}</span>
+        <div class="mono muted">${escapeHtml(sha)}</div>
+      </div>
+      <div class="row-actions">
+        <button class="btn btn-sm btn-ghost" data-load-script="${escapeHtml(id)}">查看/编辑</button>
+        <button class="btn btn-sm btn-success" data-activate-script="${escapeHtml(id)}" ${active ? 'disabled' : ''}>启用</button>
+        <button class="btn btn-sm btn-danger" data-delete-script="${escapeHtml(id)}" ${active ? 'disabled' : ''}>删除</button>
+      </div>
     </div>`;
   }).join('') : emptyBlock('暂无脚本版本');
   qsa<HTMLElement>('[data-load-script]').forEach((button) => on(button, 'click', () => void loadScriptDetail(String(button.dataset.loadScript))));
@@ -1147,15 +1269,26 @@ async function updateServerStatus(): Promise<void> {
   try {
     await api.get('/api/health');
     qs<HTMLElement>('#serverDot').style.background = 'var(--success)';
+    qs<HTMLElement>('#topbarDot').style.background = 'var(--success)';
     qs<HTMLElement>('#serverStatusText').textContent = '服务器运行中';
   } catch {
     qs<HTMLElement>('#serverDot').style.background = 'var(--danger)';
+    qs<HTMLElement>('#topbarDot').style.background = 'var(--danger)';
     qs<HTMLElement>('#serverStatusText').textContent = '服务器离线';
   }
 }
 
 function stat(label: string, value: unknown, tone = 'accent'): string {
   return `<div class="stat-card"><div class="label">${label}</div><div class="value ${tone}">${escapeHtml(value)}</div></div>`;
+}
+
+function compactStatus(state: string, title: string, detail: string, id: string): string {
+  return `<div class="compact-status">
+    <span class="badge ${state === '异常' ? 'badge-disabled' : state.startsWith('已') ? 'badge-active' : 'badge-expired'}">${escapeHtml(state)}</span>
+    <strong>${escapeHtml(title)}</strong>
+    <span>${escapeHtml(detail)}</span>
+    ${id ? `<span class="mono">${escapeHtml(id)}</span>` : ''}
+  </div>`;
 }
 
 function table(headers: string[], rows: string[][], emptyText: string): string {
@@ -1215,6 +1348,7 @@ function actionLabel(action: string): string {
     card_status_changed: '状态变更',
     card_extended: '延期',
     card_unbound: '解绑',
+    card_deleted: '删除卡密',
     cards_batch_generated: '批量生成卡密',
     cards_bulk_updated: '批量更新卡密',
     cards_import_completed: '导入卡密',
@@ -1252,6 +1386,10 @@ function formatBytes(bytes: number): string {
   if (!bytes) return '0 B';
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function shortHash(hash: string): string {
+  return hash ? `${hash.slice(0, 12)}...` : '-';
 }
 
 function renderExpiringCards(items: JsonRecord[] = []): string {

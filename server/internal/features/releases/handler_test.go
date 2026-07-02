@@ -1,6 +1,9 @@
 package releases
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +22,9 @@ func TestManifestFromSelectionMapsReleaseAndPackage(t *testing.T) {
 			ForceUpdate:    true,
 			Notes:          "Important update",
 			RolloutPercent: 25,
+			ScriptID:       "script-1",
+			ScriptVersion:  "2026.07.03",
+			ScriptSHA256:   "script-sha",
 			CreatedAt:      now,
 		},
 		Package: releasesvc.ReleasePackage{
@@ -49,7 +55,28 @@ func TestManifestFromSelectionMapsReleaseAndPackage(t *testing.T) {
 	if manifest.PackageSHA256 != "abc123" {
 		t.Fatalf("PackageSHA256 = %q", manifest.PackageSHA256)
 	}
+	if manifest.ScriptVersion != "2026.07.03" {
+		t.Fatalf("ScriptVersion = %q", manifest.ScriptVersion)
+	}
 	if manifest.RolloutPercent != 25 {
 		t.Fatalf("RolloutPercent = %d, want 25", manifest.RolloutPercent)
+	}
+}
+
+func TestCreateReleaseRequiresActiveScript(t *testing.T) {
+	store, err := releasesvc.OpenSQLiteStore(t.TempDir() + "/releases.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	h := NewHandler(&releaseService{store: store, dataDir: t.TempDir()}, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/releases", strings.NewReader(`{"version":"3.0.0"}`))
+	rr := httptest.NewRecorder()
+
+	h.createRelease(rr, req, h.svc)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
 	}
 }

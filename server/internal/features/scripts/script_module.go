@@ -385,17 +385,12 @@ func (h *Handler) HandleScriptDownload(w http.ResponseWriter, r *http.Request) {
 	if !httpapi.RequireMethod(w, r, http.MethodGet) {
 		return
 	}
-	if r.Header.Get("X-HMAC-Signature") != "" {
-		if err := auth.VerifyRequest(r, r.URL.Path); err != nil {
-			httpapi.WriteError(w, http.StatusUnauthorized, "signature verification failed")
-			return
-		}
+	if err := auth.VerifyRequest(r, r.URL.Path); err != nil {
+		httpapi.WriteError(w, http.StatusUnauthorized, "signature verification failed")
+		return
 	}
 
 	token := r.Header.Get("X-Session-Token")
-	if token == "" {
-		token = r.URL.Query().Get("token")
-	}
 	if token == "" {
 		httpapi.WriteError(w, http.StatusBadRequest, "token is required")
 		return
@@ -416,13 +411,14 @@ func (h *Handler) HandleScriptDownload(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteError(w, http.StatusNotFound, "script module not published")
 		return
 	}
-	
+
 	w.Header().Set("X-Script-ID", module.ID)
 	w.Header().Set("X-Script-Version", module.Version)
 	w.Header().Set("X-Script-SHA256", module.SHA256)
 	w.Header().Set("X-Script-Hash", module.SHA256)
+	w.Header().Set("X-Script-Size", fmt.Sprintf("%d", module.Size))
 
-	if r.Header.Get("Accept") == "application/json" || r.URL.Query().Get("format") == "json" {
+	if strings.Contains(r.Header.Get("Accept"), "application/json") || r.URL.Query().Get("format") == "json" {
 		httpapi.WriteOK(w, map[string]interface{}{
 			"version":    module.Version,
 			"sha256":     module.SHA256,

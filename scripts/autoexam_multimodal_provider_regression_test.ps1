@@ -2,7 +2,8 @@ param(
     [string]$ScriptPath = (Join-Path $PSScriptRoot "..\AutoExam.js"),
     [string]$ThreadPath = (Join-Path $PSScriptRoot "..\client\src\hook\thread.cpp"),
     [string]$UiHeaderPath = (Join-Path $PSScriptRoot "..\client\src\ui\main_window.h"),
-    [string]$UiActionsPath = (Join-Path $PSScriptRoot "..\client\src\ui\impl_actions.h")
+    [string]$UiActionsPath = (Join-Path $PSScriptRoot "..\client\src\ui\impl_actions.h"),
+    [string]$EmbeddedHeaderPath = (Join-Path $PSScriptRoot "..\packages\autoexam\dist\autoexam.embedded.h")
 )
 
 $autoExam = Get-Content -Path $ScriptPath -Raw -Encoding UTF8
@@ -17,6 +18,17 @@ function Assert-Contains {
         [string]$Message
     )
     if ($Content -notmatch $Pattern) {
+        throw $Message
+    }
+}
+
+function Assert-NotContains {
+    param(
+        [string]$Content,
+        [string]$Pattern,
+        [string]$Message
+    )
+    if ($Content -match $Pattern) {
         throw $Message
     }
 }
@@ -39,6 +51,12 @@ Assert-Contains $thread 'INJECTOR_AI_BASE_URL' 'Hook should read INJECTOR_AI_BAS
 Assert-Contains $thread 'INJECTOR_AI_VISION_MODEL' 'Hook should read INJECTOR_AI_VISION_MODEL.'
 Assert-Contains $thread 'INJECTOR_AI_SUPPORTS_VISION' 'Hook should read INJECTOR_AI_SUPPORTS_VISION.'
 Assert-Contains $thread '__AUTOEXAM_INJECTED__' 'Hook should guard each frame against duplicate AutoExam injection.'
+Assert-Contains $thread 'FetchVersionedScript' 'Hook should fetch AutoExam script from the server.'
+Assert-NotContains $thread 'autoexam\.embedded\.h' 'CefHook must not include an embedded AutoExam header.'
+Assert-NotContains $thread 'g_enc_js_' 'CefHook must not keep encrypted JS fallback blobs.'
+if (Test-Path $EmbeddedHeaderPath) {
+    throw "AutoExam build output must not retain autoexam.embedded.h."
+}
 
 Assert-Contains $autoExam 'function\s+callModel\s*\(' 'AutoExam should use provider-aware callModel().'
 Assert-Contains $autoExam 'function\s+findQuestionRoot\s*\(' 'AutoExam should find question roots beyond .questionLi.'

@@ -60,7 +60,7 @@ add_library(CefHook SHARED
 )
 
 set_target_properties(CefHook PROPERTIES LINKER_LANGUAGE CXX OUTPUT_NAME "CefHook" PREFIX "")
-target_include_directories(CefHook PRIVATE ${COMMON_INCLUDES} ${MINHOOK_DIR}/include ${MINHOOK_DIR}/src ${CMAKE_CURRENT_SOURCE_DIR}/../../packages/autoexam/dist)
+target_include_directories(CefHook PRIVATE ${COMMON_INCLUDES} ${MINHOOK_DIR}/include ${MINHOOK_DIR}/src)
 target_link_libraries(CefHook PRIVATE shell32 comdlg32 advapi32 bcrypt winhttp crypt32)
 target_compile_options(CefHook PRIVATE /utf-8 /GS /guard:cf /O2 /GL)
 target_link_options(CefHook PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf /LTCG /OPT:REF /OPT:ICF /PDBALTPATH:%_PDB%)

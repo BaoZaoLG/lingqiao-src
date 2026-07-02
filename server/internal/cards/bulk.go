@@ -11,6 +11,7 @@ const (
 	BulkExpire  BulkAction = "expire"
 	BulkExtend  BulkAction = "extend"
 	BulkUnbind  BulkAction = "unbind"
+	BulkDelete  BulkAction = "delete"
 )
 
 // BulkItemStatus ...
@@ -40,7 +41,7 @@ type BulkResult struct {
 // ValidateBulkAction ...
 func ValidateBulkAction(action BulkAction) error {
 	switch action {
-	case BulkDisable, BulkEnable, BulkExpire, BulkExtend, BulkUnbind:
+	case BulkDisable, BulkEnable, BulkExpire, BulkExtend, BulkUnbind, BulkDelete:
 		return nil
 	default:
 		return fmt.Errorf("unknown action: %s", action)

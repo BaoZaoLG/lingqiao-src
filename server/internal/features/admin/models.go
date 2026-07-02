@@ -44,6 +44,8 @@ var RolePermissions = map[Role][]string{
 		"invites.write",
 		"releases.read", "releases.write",
 		"scripts.write", "payloads.write",
+		"announcement.read", "announcement.write",
+		"chat.read", "chat.write",
 		"audit.read", "system.read", "admins.write",
 	},
 	RoleOperator: {

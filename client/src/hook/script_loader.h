@@ -208,6 +208,33 @@ static bool HookJsonExtractString(const std::string& json, const char* key, std:
     return false;
 }
 
+static bool HookQueryHeaderString(HINTERNET hRequest, const wchar_t* headerName, std::string* out) {
+    DWORD size = 0;
+    WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CUSTOM, headerName, NULL, &size, WINHTTP_NO_HEADER_INDEX);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0) {
+        return false;
+    }
+
+    std::wstring value;
+    value.resize(size / sizeof(wchar_t));
+    if (!WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CUSTOM, headerName, &value[0], &size, WINHTTP_NO_HEADER_INDEX)) {
+        return false;
+    }
+    if (!value.empty() && value.back() == L'\0') {
+        value.pop_back();
+    }
+
+    int len = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, NULL, 0, NULL, NULL);
+    if (len <= 1) {
+        return false;
+    }
+    std::string utf8(len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, &utf8[0], len, NULL, NULL);
+    utf8.resize(len - 1);
+    *out = utf8;
+    return true;
+}
+
 static bool FetchVersionedScript(std::string* scriptOut, std::string* versionOut) {
     WCHAR sessionToken[256] = {0};
     GetEnvironmentVariableW(L"INJECTOR_SESSION_TOKEN", sessionToken, _countof(sessionToken));
@@ -270,20 +297,34 @@ static bool FetchVersionedScript(std::string* scriptOut, std::string* versionOut
             DWORD bytesRead = 0;
             while (WinHttpReadData(hRequest, buf, sizeof(buf), &bytesRead) && bytesRead > 0) {
                 body.append(buf, bytesRead);
-                if (body.size() > (2 << 20)) break;
+                if (body.size() > (2 << 20)) {
+                    body.clear();
+                    break;
+                }
             }
-            std::string content;
-            std::string sha;
-            std::string version;
-            char actualSha[65] = {0};
-            if (HookJsonExtractString(body, "content", &content) &&
-                HookJsonExtractString(body, "sha256", &sha) &&
-                HookSha256Hex(content.data(), (DWORD)content.size(), actualSha) &&
-                _stricmp(actualSha, sha.c_str()) == 0) {
-                HookJsonExtractString(body, "version", &version);
-                *scriptOut = content;
-                *versionOut = version;
-                ok = true;
+            if (!body.empty()) {
+                std::string sha;
+                std::string version;
+                char actualSha[65] = {0};
+                if (HookQueryHeaderString(hRequest, L"X-Script-SHA256", &sha) &&
+                    HookSha256Hex(body.data(), (DWORD)body.size(), actualSha) &&
+                    _stricmp(actualSha, sha.c_str()) == 0) {
+                    HookQueryHeaderString(hRequest, L"X-Script-Version", &version);
+                    *scriptOut = body;
+                    *versionOut = version;
+                    ok = true;
+                } else {
+                    std::string content;
+                    if (HookJsonExtractString(body, "content", &content) &&
+                        HookJsonExtractString(body, "sha256", &sha) &&
+                        HookSha256Hex(content.data(), (DWORD)content.size(), actualSha) &&
+                        _stricmp(actualSha, sha.c_str()) == 0) {
+                        HookJsonExtractString(body, "version", &version);
+                        *scriptOut = content;
+                        *versionOut = version;
+                        ok = true;
+                    }
+                }
             }
         }
     }
@@ -298,7 +339,7 @@ static bool FetchVersionedScript(std::string* scriptOut, std::string* versionOut
         sprintf_s(dbg, "[HOOK] Script fetched version=%s size=%zu\n", versionOut->c_str(), scriptOut->size());
         OutputDebugStringA(dbg);
     } else {
-        OutputDebugStringA("[HOOK] Script fetch failed; using embedded fallback\n");
+        OutputDebugStringA("[HOOK] Script fetch failed\n");
     }
     return ok;
 }

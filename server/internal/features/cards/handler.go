@@ -66,13 +66,23 @@ func writeCompatOK(w http.ResponseWriter, data map[string]interface{}) {
 	httpapi.WriteJSON(w, http.StatusOK, res)
 }
 
+func effectiveStatus(card Card, now time.Time) Status {
+	if !card.ExpiresAt.IsZero() && !now.Before(card.ExpiresAt) {
+		return StatusExpired
+	}
+	return card.Status
+}
+
 func (h *Handler) HandleListCards(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	requestedStatus := Status(q.Get("status"))
 	filter := ListFilter{
 		Query:     q.Get("search"),
-		Status:    Status(q.Get("status")),
 		MachineID: q.Get("machine"),
 		AgentID:   q.Get("agent_id"),
+	}
+	if requestedStatus != StatusActive && requestedStatus != StatusExpired {
+		filter.Status = requestedStatus
 	}
 
 	cards, err := h.repo.List(r.Context(), filter)
@@ -89,14 +99,15 @@ func (h *Handler) HandleListCards(w http.ResponseWriter, r *http.Request) {
 	maxSessStr := q.Get("max_sessions")
 
 	var filtered []Card
+	now := h.svc.now()
 	for _, c := range cards {
 		if agentID != "" && c.AgentID != agentID {
 			continue
 		}
-		if boundStr == "1" && c.MachineID == "" {
+		if (boundStr == "1" || boundStr == "true") && c.MachineID == "" {
 			continue
 		}
-		if boundStr == "0" && c.MachineID != "" {
+		if (boundStr == "0" || boundStr == "false") && c.MachineID != "" {
 			continue
 		}
 		if expiresBefore != "" {
@@ -119,6 +130,10 @@ func (h *Handler) HandleListCards(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 			}
+		}
+		c.Status = effectiveStatus(c, now)
+		if requestedStatus != "" && c.Status != requestedStatus {
+			continue
 		}
 		filtered = append(filtered, c)
 	}
@@ -231,6 +246,8 @@ func (h *Handler) HandleUpdateCard(w http.ResponseWriter, r *http.Request) {
 		err = h.svc.Extend(r.Context(), req.Code, req.ExtendHours)
 	case "unbind":
 		err = h.svc.Unbind(r.Context(), req.Code)
+	case "delete":
+		err = h.svc.Delete(r.Context(), req.Code)
 	default:
 		httpapi.WriteError(w, http.StatusBadRequest, "unknown action")
 		return
@@ -251,6 +268,8 @@ func (h *Handler) HandleUpdateCard(w http.ResponseWriter, r *http.Request) {
 		actionName = "card_extended"
 	case "unbind":
 		actionName = "card_unbound"
+	case "delete":
+		actionName = "card_deleted"
 	}
 	h.recordAudit(actionName, req.Code, fmt.Sprintf("Action: %s", req.Action))
 	writeCompatOK(w, nil)
