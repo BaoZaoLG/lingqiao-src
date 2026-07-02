@@ -1,9 +1,8 @@
 package main
 
 import (
-	"github.com/lingqiao/server/internal/httpapi"
-
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"log"
@@ -13,21 +12,26 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lingqiao/server/internal/audit"
 	"github.com/lingqiao/server/internal/features/agents"
 	"github.com/lingqiao/server/internal/features/cards"
+	"github.com/lingqiao/server/internal/features/security/blacklist"
 	"github.com/lingqiao/server/internal/features/sessions"
+	"github.com/lingqiao/server/internal/httpapi"
 )
 
 // AdminHandler handles the web admin panel.
 type AdminHandler struct {
-	cm              CardManager
 	cardsSvc        *cards.Service
 	sessionsSvc     *sessions.Service
 	sessionHandler  *sessions.Handler
 	agentsSvc       *agents.Service
 	inviteSvc       *agents.InviteService
+	blacklistSvc    *blacklist.Service
+	auditRecorder   *audit.Recorder
 	chat            *ChatStore
 	adminPassHash   string
+	db              *sql.DB
 	mu              sync.Mutex
 	sessions        map[string]time.Time
 	sessionTTL      time.Duration
@@ -35,22 +39,24 @@ type AdminHandler struct {
 	pwChangeLimiter *httpapi.RateLimiter
 }
 
-func NewAdminHandler(cm CardManager, cardsSvc *cards.Service, sessionsSvc *sessions.Service, agentsSvc *agents.Service, inviteSvc *agents.InviteService) *AdminHandler {
-	return NewAdminHandlerWithTTL(cm, cardsSvc, sessionsSvc, agentsSvc, inviteSvc, currentSessionTTL())
+func NewAdminHandler(cardsSvc *cards.Service, sessionsSvc *sessions.Service, agentsSvc *agents.Service, inviteSvc *agents.InviteService, blacklistSvc *blacklist.Service, auditRecorder *audit.Recorder, chatStorage *JSONStorage, db *sql.DB) *AdminHandler {
+	return NewAdminHandlerWithTTL(cardsSvc, sessionsSvc, agentsSvc, inviteSvc, blacklistSvc, auditRecorder, chatStorage, db, currentSessionTTL())
 }
 
-func NewAdminHandlerWithTTL(cm CardManager, cardsSvc *cards.Service, sessionsSvc *sessions.Service, agentsSvc *agents.Service, inviteSvc *agents.InviteService, sessionTTL time.Duration) *AdminHandler {
+func NewAdminHandlerWithTTL(cardsSvc *cards.Service, sessionsSvc *sessions.Service, agentsSvc *agents.Service, inviteSvc *agents.InviteService, blacklistSvc *blacklist.Service, auditRecorder *audit.Recorder, chatStorage *JSONStorage, db *sql.DB, sessionTTL time.Duration) *AdminHandler {
 	if sessionTTL <= 0 {
 		sessionTTL = 4 * time.Hour
 	}
 	h := &AdminHandler{
-		cm:              cm,
 		cardsSvc:        cardsSvc,
 		sessionsSvc:     sessionsSvc,
 		sessionHandler:  sessions.NewHandler(sessionsSvc, nil, nil, nil),
 		agentsSvc:       agentsSvc,
 		inviteSvc:       inviteSvc,
-		chat:            NewChatStore(cm.GetStorage(), time.Now),
+		blacklistSvc:    blacklistSvc,
+		auditRecorder:   auditRecorder,
+		chat:            NewChatStore(chatStorage, time.Now),
+		db:              db,
 		sessions:        make(map[string]time.Time),
 		sessionTTL:      sessionTTL,
 		loginLimiter:    httpapi.NewRateLimiter(15*time.Minute, 5),

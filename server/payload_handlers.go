@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/lingqiao/server/internal/audit"
 	"github.com/lingqiao/server/internal/features/sessions"
 	"github.com/lingqiao/server/internal/httpapi"
 
@@ -27,7 +28,7 @@ type PayloadHandler struct {
 	store       *PayloadStore
 	sessionsSvc *sessions.Service
 	uploadKey   string
-	audit       func(AuditEntry)
+	auditSink   func(audit.Event)
 }
 
 func NewPayloadHandler(store *PayloadStore, sessionsSvc *sessions.Service) *PayloadHandler {
@@ -46,11 +47,11 @@ func NewPayloadHandler(store *PayloadStore, sessionsSvc *sessions.Service) *Payl
 			log.Printf("[PAYLOAD] Generated upload key and saved to %s", dataPath("upload_key"))
 		}
 	}
-	return &PayloadHandler{store: store, uploadKey: key}
+	return &PayloadHandler{store: store, sessionsSvc: sessionsSvc, uploadKey: key}
 }
 
-func (h *PayloadHandler) SetAuditSink(audit func(AuditEntry)) {
-	h.audit = audit
+func (h *PayloadHandler) SetAuditSink(auditSink func(audit.Event)) {
+	h.auditSink = auditSink
 }
 
 // HandleUpload receives encrypted payload chunks from the pack script.
@@ -270,14 +271,14 @@ func (h *PayloadHandler) HandlePayloadInfo(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *PayloadHandler) recordPayloadAudit(action string, info *PayloadInfo, extra string) {
-	if h == nil || h.audit == nil || info == nil {
+	if h == nil || h.auditSink == nil || info == nil {
 		return
 	}
 	detail := fmt.Sprintf("id=%s sha256=%s chunks=%d size=%d", info.PayloadID, info.ExeHash, info.ChunkCount, info.TotalSize)
 	if extra != "" {
 		detail += " " + extra
 	}
-	h.audit(AuditEntry{
+	h.auditSink(audit.Event{
 		Action: action,
 		Detail: detail,
 	})

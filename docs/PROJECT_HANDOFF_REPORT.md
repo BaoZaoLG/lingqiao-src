@@ -90,3 +90,17 @@ Runtime flow:
 3. Service executes business rules and calls `sessions.Store`.
 4. SQLite repository updates existing `cards` and `sessions` tables in one transaction.
 5. Consumers such as chat, releases, payloads, scripts, and DLL download validate sessions through service methods.
+
+## Agents Module
+
+`server/internal/features/agents` owns agent authentication, registration, invite codes management, status setting, password resets, and account audits.
+
+Runtime flow:
+
+1. Admin or agent requests enter the admin handlers or agent handlers.
+2. Handler validates parameters (e.g. password limits) and delegates to `agents.Service`.
+3. Service executes business rules and coordinates transactional database operations (such as registration using atomic transaction on both `agents` and `invites` tables).
+4. SQLite repository executes queries or updates on SQLite tables.
+5. Verification logic (e.g. checking whether an agent is disabled) is queried from the SQLite database on each request to prevent session leaks.
+
+Legacy `internal/agents` directory was completely removed. All domain models (`Account`) and invitation logic (`InviteCode`, `InviteService`) have been consolidated directly into `internal/features/agents`, ensuring zero legacy footprint and strict package encapsulation. Invite codes now persist in SQLite `invites` table; JSON invites are import-only compatibility data.

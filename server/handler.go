@@ -14,6 +14,7 @@ import (
 	"time"
 
 	cardops "github.com/lingqiao/server/internal/cards"
+	"github.com/lingqiao/server/internal/features/security/blacklist"
 	"github.com/lingqiao/server/internal/features/sessions"
 	"github.com/lingqiao/server/internal/httpapi"
 	releasesvc "github.com/lingqiao/server/internal/releases"
@@ -21,14 +22,14 @@ import (
 
 // APIHandler handles all HTTP API requests.
 type APIHandler struct {
-	cm             CardManager
+	blacklistSvc   *blacklist.Service
 	sessionsSvc    *sessions.Service
 	sessionHandler *sessions.Handler
 	chat           *ChatStore
 }
 
-func NewAPIHandler(cm CardManager, sessionsSvc *sessions.Service) *APIHandler {
-	h := &APIHandler{cm: cm, sessionsSvc: sessionsSvc, chat: NewChatStore(cm.GetStorage(), time.Now)}
+func NewAPIHandler(blacklistSvc *blacklist.Service, storage *JSONStorage, sessionsSvc *sessions.Service) *APIHandler {
+	h := &APIHandler{blacklistSvc: blacklistSvc, sessionsSvc: sessionsSvc, chat: NewChatStore(storage, time.Now)}
 	h.sessionHandler = sessions.NewHandler(sessionsSvc, h, h, httpapi.GetClientIP)
 	return h
 }
@@ -91,7 +92,11 @@ func (h *APIHandler) readSignedRequest(r *http.Request) (*request, error) {
 		return nil, err
 	}
 
-	if h.cm.IsBlacklisted(req.MachineID) {
+	isBlacklisted, err := h.blacklistSvc.IsBlacklisted(r.Context(), req.MachineID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check blacklist status: %v", err)
+	}
+	if isBlacklisted {
 		return nil, fmt.Errorf("machine is blacklisted")
 	}
 	return &req, nil

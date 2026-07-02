@@ -1,13 +1,15 @@
 package main
 
 import (
-	"github.com/lingqiao/server/internal/httpapi"
-
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
 	"sort"
 	"strings"
+
+	"github.com/lingqiao/server/internal/audit"
+	"github.com/lingqiao/server/internal/httpapi"
 
 	agentsvc "github.com/lingqiao/server/internal/features/agents"
 )
@@ -43,10 +45,24 @@ func (h *AdminHandler) HandleBlacklist(w http.ResponseWriter, r *http.Request) {
 
 		switch req.Action {
 		case "add":
-			h.cm.AddBlacklist(req.Type, req.Value, req.Reason)
+			if err := h.blacklistSvc.Add(r.Context(), req.Type, req.Value, req.Reason); err != nil {
+				httpapi.WriteError(w, http.StatusInternalServerError, "failed to add to blacklist: "+err.Error())
+				return
+			}
+			if err := h.auditRecorder.Append(audit.Event{Action: "blacklist_added", Detail: fmt.Sprintf("Type: %s, Value: %s, Reason: %s", req.Type, req.Value, req.Reason)}); err != nil {
+				httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+				return
+			}
 			log.Printf("[ADMIN] Blacklisted %s: %s (reason: %s)", req.Type, req.Value, req.Reason)
 		case "remove":
-			h.cm.RemoveBlacklist(req.Value)
+			if err := h.blacklistSvc.Remove(r.Context(), req.Value); err != nil {
+				httpapi.WriteError(w, http.StatusInternalServerError, "failed to remove from blacklist: "+err.Error())
+				return
+			}
+			if err := h.auditRecorder.Append(audit.Event{Action: "blacklist_removed", Detail: fmt.Sprintf("Value: %s", req.Value)}); err != nil {
+				httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+				return
+			}
 			log.Printf("[ADMIN] Removed from blacklist: %s", req.Value)
 		default:
 			httpapi.WriteError(w, http.StatusBadRequest, "unknown action")
@@ -56,20 +72,29 @@ func (h *AdminHandler) HandleBlacklist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpapi.WriteOK(w, map[string]interface{}{"entries": h.cm.AllBlacklist()})
+	entries, err := h.blacklistSvc.List(r.Context())
+	if err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to list blacklist: "+err.Error())
+		return
+	}
+	httpapi.WriteOK(w, map[string]interface{}{"entries": entries})
 }
 
 // ── Audit Log ────────────────────────────────────────────────────────────────
 
 func (h *AdminHandler) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
-	entries := h.cm.AuditLog()
+	entries, err := h.auditRecorder.Query(r.Context(), 10000)
+	if err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to query audit log: "+err.Error())
+		return
+	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Time.After(entries[j].Time)
 	})
 
 	q := r.URL.Query()
 	if action := q.Get("action"); action != "" {
-		filtered := make([]AuditEntry, 0)
+		filtered := make([]audit.Event, 0)
 		for _, e := range entries {
 			if e.Action == action {
 				filtered = append(filtered, e)
@@ -129,7 +154,10 @@ func (h *AdminHandler) HandleAnnouncementSet(w http.ResponseWriter, r *http.Requ
 			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		h.recordAnnouncementAudit("announcement_saved", a)
+		if err := h.recordAnnouncementAudit("announcement_saved", a); err != nil {
+			httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+			return
+		}
 		httpapi.WriteOK(w, map[string]interface{}{"announcement": a, "id": a.ID})
 	case "publish":
 		a, err := PublishAnnouncementRevision(req.ID)
@@ -137,14 +165,20 @@ func (h *AdminHandler) HandleAnnouncementSet(w http.ResponseWriter, r *http.Requ
 			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		h.recordAnnouncementAudit("announcement_published", a)
+		if err := h.recordAnnouncementAudit("announcement_published", a); err != nil {
+			httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+			return
+		}
 		httpapi.WriteOK(w, map[string]interface{}{"announcement": a, "id": a.ID})
 	case "delete":
 		if err := DeleteAnnouncementRevision(req.ID); err != nil {
 			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		h.recordAnnouncementAudit("announcement_deleted", &Announcement{ID: req.ID})
+		if err := h.recordAnnouncementAudit("announcement_deleted", &Announcement{ID: req.ID}); err != nil {
+			httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+			return
+		}
 		httpapi.WriteOK(w, nil)
 	default:
 		a, err := SaveAnnouncementRevision(req.Content, true)
@@ -152,17 +186,19 @@ func (h *AdminHandler) HandleAnnouncementSet(w http.ResponseWriter, r *http.Requ
 			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		h.recordAnnouncementAudit("announcement_published", a)
-		log.Printf("[ADMIN] Announcement updated: content=%q", req.Content)
+		if err := h.recordAnnouncementAudit("announcement_published", a); err != nil {
+			httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+			return
+		}
 		httpapi.WriteOK(w, map[string]interface{}{"announcement": a, "id": a.ID})
 	}
 }
 
-func (h *AdminHandler) recordAnnouncementAudit(action string, a *Announcement) {
-	if h == nil || h.cm == nil || a == nil {
-		return
+func (h *AdminHandler) recordAnnouncementAudit(action string, a *Announcement) error {
+	if h == nil || h.auditRecorder == nil || a == nil {
+		return nil
 	}
-	h.cm.RecordAudit(AuditEntry{
+	return h.auditRecorder.Append(audit.Event{
 		Action: action,
 		Detail: fmt.Sprintf("id=%s status=%s size=%d", a.ID, a.Status, len([]byte(a.Content))),
 	})
@@ -170,11 +206,67 @@ func (h *AdminHandler) recordAnnouncementAudit(action string, a *Announcement) {
 
 // ── Machines ─────────────────────────────────────────────────────────────────
 
-func (h *AdminHandler) HandleMachines(w http.ResponseWriter, r *http.Request) {
-	machines := h.cm.GetUniqueMachines()
-	sort.Slice(machines, func(i, j int) bool {
-		return machines[i].CardCount > machines[j].CardCount
-	})
+func (h *AdminHandler) HandleAdminMachines(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		httpapi.WriteOK(w, map[string]interface{}{"machines": []MachineInfo{}})
+		return
+	}
+
+	query := `
+		SELECT 
+			c.machine_id, 
+			COUNT(c.code) as card_count, 
+			MAX(s.last_seen) as last_seen
+		FROM cards c
+		LEFT JOIN sessions s ON c.machine_id = s.machine_id
+		WHERE c.machine_id != ''
+		GROUP BY c.machine_id
+	`
+	rows, err := h.db.QueryContext(r.Context(), query)
+	if err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+
+	var machines []MachineInfo
+	for rows.Next() {
+		var m MachineInfo
+		var lastSeen sql.NullTime
+		if err := rows.Scan(&m.MachineID, &m.CardCount, &lastSeen); err != nil {
+			httpapi.WriteError(w, http.StatusInternalServerError, "failed to scan machine row: "+err.Error())
+			return
+		}
+		if lastSeen.Valid {
+			m.LastSeen = &lastSeen.Time
+		}
+		machines = append(machines, m)
+	}
+	if err := rows.Err(); err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "error iterating machine rows: "+err.Error())
+		return
+	}
+
+	// Annotate blacklisted machines
+	if h.blacklistSvc != nil {
+		blacklisted, err := h.blacklistSvc.List(r.Context())
+		if err != nil {
+			httpapi.WriteError(w, http.StatusInternalServerError, "failed to query blacklist: "+err.Error())
+			return
+		}
+		blacklistSet := make(map[string]bool)
+		for _, b := range blacklisted {
+			if b.Type == "machine" {
+				blacklistSet[b.Value] = true
+			}
+		}
+		for i := range machines {
+			if blacklistSet[machines[i].MachineID] {
+				machines[i].IsBlacklisted = true
+			}
+		}
+	}
+
 	httpapi.WriteOK(w, map[string]interface{}{"machines": machines})
 }
 
@@ -228,7 +320,10 @@ func (h *AdminHandler) HandleInviteCreate(w http.ResponseWriter, r *http.Request
 		}
 		created = append(created, invite)
 	}
-	h.recordInviteAudit("invite_created", created, fmt.Sprintf("count=%d max_uses=%d", len(created), req.MaxUses))
+	if err := h.recordInviteAudit("invite_created", created, fmt.Sprintf("count=%d max_uses=%d", len(created), req.MaxUses)); err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+		return
+	}
 	log.Printf("[ADMIN] Created %d invite codes (max_uses=%d)", len(created), req.MaxUses)
 	httpapi.WriteOK(w, map[string]interface{}{"invites": created, "count": len(created)})
 }
@@ -255,14 +350,17 @@ func (h *AdminHandler) HandleInviteDelete(w http.ResponseWriter, r *http.Request
 		httpapi.WriteError(w, http.StatusNotFound, "邀请码不存在")
 		return
 	}
-	h.recordInviteAudit("invite_deleted", []agentsvc.InviteCode{{Code: req.Code}}, "")
+	if err := h.recordInviteAudit("invite_deleted", []agentsvc.InviteCode{{Code: req.Code}}, ""); err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+		return
+	}
 	log.Printf("[ADMIN] Deleted invite code: %s", req.Code)
 	httpapi.WriteOK(w, nil)
 }
 
-func (h *AdminHandler) recordInviteAudit(action string, invites []agentsvc.InviteCode, extra string) {
-	if h == nil || h.cm == nil {
-		return
+func (h *AdminHandler) recordInviteAudit(action string, invites []agentsvc.InviteCode, extra string) error {
+	if h == nil || h.auditRecorder == nil {
+		return nil
 	}
 	codes := make([]string, 0, len(invites))
 	for _, invite := range invites {
@@ -274,5 +372,5 @@ func (h *AdminHandler) recordInviteAudit(action string, invites []agentsvc.Invit
 	if extra != "" {
 		detail += " " + extra
 	}
-	h.cm.RecordAudit(AuditEntry{Action: action, Detail: detail})
+	return h.auditRecorder.Append(audit.Event{Action: action, Detail: detail})
 }

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/lingqiao/server/internal/audit"
 	"github.com/lingqiao/server/internal/features/cards"
 	"github.com/lingqiao/server/internal/features/sessions"
 )
@@ -74,12 +75,16 @@ func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request)
 		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards: "+err.Error())
 		return
 	}
-	audit := h.cm.AuditLog()
+	auditLog, err := h.auditRecorder.Query(r.Context(), 10000)
+	if err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to query audit log: "+err.Error())
+		return
+	}
 
 	var todayActivations int
 	newMachines := make(map[string]struct{})
-	recentAudit := make([]AuditEntry, 0, 8)
-	for _, entry := range audit {
+	recentAudit := make([]audit.Event, 0, 8)
+	for _, entry := range auditLog {
 		if entry.Time.After(dayStart) && entry.Action == "card_activated" {
 			todayActivations++
 			if entry.Machine != "" {
@@ -87,9 +92,9 @@ func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
-	sort.Slice(audit, func(i, j int) bool { return audit[i].Time.After(audit[j].Time) })
-	for i := 0; i < len(audit) && i < 8; i++ {
-		recentAudit = append(recentAudit, audit[i])
+	// auditRecorder.Query returns ordered descending by Time, so we just take first 8
+	for i := 0; i < len(auditLog) && i < 8; i++ {
+		recentAudit = append(recentAudit, auditLog[i])
 	}
 
 	expiring := make([]cards.Card, 0)
@@ -109,20 +114,82 @@ func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request)
 		activeSessions = res.Total
 	}
 
+	// For risky machines, we can query DB
 	riskyMachines := make([]MachineInfo, 0)
-	for _, machine := range h.cm.GetUniqueMachines() {
-		if machine.IsBlacklisted || machine.CardCount > 1 {
-			riskyMachines = append(riskyMachines, machine)
+	if h.db != nil {
+		query := `
+			SELECT c.machine_id, COUNT(c.code) as card_count
+			FROM cards c
+			WHERE c.machine_id != ''
+			GROUP BY c.machine_id
+			HAVING card_count > 1
+		`
+		if rows, err := h.db.QueryContext(r.Context(), query); err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var m MachineInfo
+				if err := rows.Scan(&m.MachineID, &m.CardCount); err != nil {
+					httpapi.WriteError(w, http.StatusInternalServerError, "failed to scan risky machine row: "+err.Error())
+					return
+				}
+				riskyMachines = append(riskyMachines, m)
+			}
+			if err := rows.Err(); err != nil {
+				httpapi.WriteError(w, http.StatusInternalServerError, "error iterating risky machine rows: "+err.Error())
+				return
+			}
+		} else {
+			httpapi.WriteError(w, http.StatusInternalServerError, "failed to query risky machines: "+err.Error())
+			return
 		}
 	}
-	sort.Slice(riskyMachines, func(i, j int) bool {
-		if riskyMachines[i].IsBlacklisted != riskyMachines[j].IsBlacklisted {
-			return riskyMachines[i].IsBlacklisted
+	// Also add blacklisted machines
+	blacklisted, err := h.blacklistSvc.List(r.Context())
+	if err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to query blacklist: "+err.Error())
+		return
+	}
+	blacklistSet := make(map[string]bool)
+	for _, b := range blacklisted {
+		if b.Type == "machine" {
+			blacklistSet[b.Value] = true
+			found := false
+			for _, m := range riskyMachines {
+				if m.MachineID == b.Value {
+					found = true
+					break
+				}
+			}
+			if !found {
+				riskyMachines = append(riskyMachines, MachineInfo{MachineID: b.Value, CardCount: 0})
+			}
 		}
-		return riskyMachines[i].CardCount > riskyMachines[j].CardCount
+	}
+
+	// Annotate if we need a custom json output, but the old code just returned Machine (which had IsBlacklisted bool).
+	// We'll map MachineInfo to include IsBlacklisted.
+	type riskyMachine struct {
+		MachineID     string `json:"machine_id"`
+		CardCount     int    `json:"card_count"`
+		IsBlacklisted bool   `json:"is_blacklisted"`
+	}
+	var outRisky []riskyMachine
+	for _, m := range riskyMachines {
+		outRisky = append(outRisky, riskyMachine{
+			MachineID:     m.MachineID,
+			CardCount:     m.CardCount,
+			IsBlacklisted: blacklistSet[m.MachineID],
+		})
+	}
+
+	sort.Slice(outRisky, func(i, j int) bool {
+		if outRisky[i].IsBlacklisted != outRisky[j].IsBlacklisted {
+			return outRisky[i].IsBlacklisted
+		}
+		return outRisky[i].CardCount > outRisky[j].CardCount
 	})
-	if len(riskyMachines) > 10 {
-		riskyMachines = riskyMachines[:10]
+	if len(outRisky) > 10 {
+		outRisky = outRisky[:10]
 	}
 
 	accs, err := h.agentsSvc.AllAgents(r.Context())
@@ -136,7 +203,7 @@ func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request)
 		"today_new_machines": len(newMachines),
 		"active_sessions":    activeSessions,
 		"expiring_cards":     expiring,
-		"risky_machines":     riskyMachines,
+		"risky_machines":     outRisky,
 		"agent_leaderboard":  agentStats,
 		"recent_audit":       recentAudit,
 	})
@@ -159,8 +226,8 @@ func (h *AdminHandler) HandleModulesOverview(w http.ResponseWriter, r *http.Requ
 		releasesModuleOverview(r),
 		scriptsModuleOverview(),
 		h.payloadsModuleOverview(),
-		announcementModuleOverview(),
-		h.auditModuleOverview(),
+		h.announcementModuleOverview(),
+		h.auditModuleOverview(r),
 	}
 	httpapi.WriteOK(w, map[string]interface{}{
 		"generated_at": time.Now().UTC(),
@@ -371,10 +438,7 @@ func scriptsModuleOverview() moduleOverviewItem {
 }
 
 func (h *AdminHandler) payloadsModuleOverview() moduleOverviewItem {
-	storage := h.cm.GetStorage()
-	if storage == nil {
-		storage = NewJSONStorage(dataDir())
-	}
+	storage := NewJSONStorage(dataDir())
 	store := NewPayloadStore(storage)
 	payloads := store.List()
 	active := store.Active()
@@ -390,13 +454,11 @@ func (h *AdminHandler) payloadsModuleOverview() moduleOverviewItem {
 		item.Summary = "active " + active.PayloadID
 		item.Metrics["active_payload_id"] = active.PayloadID
 		item.Metrics["active_payload_size"] = active.TotalSize
-		t := active.CreatedAt
-		item.UpdatedAt = &t
 	}
 	return item
 }
 
-func announcementModuleOverview() moduleOverviewItem {
+func (h *AdminHandler) announcementModuleOverview() moduleOverviewItem {
 	announcement := GetAnnouncement()
 	item := moduleOverviewItem{
 		Key:     "announcement",
@@ -417,20 +479,29 @@ func announcementModuleOverview() moduleOverviewItem {
 	return item
 }
 
-func (h *AdminHandler) auditModuleOverview() moduleOverviewItem {
-	audit := h.cm.AuditLog()
+func (h *AdminHandler) auditModuleOverview(r *http.Request) moduleOverviewItem {
+	auditLog, err := h.auditRecorder.Query(r.Context(), 10000)
+	if err != nil {
+		return moduleOverviewItem{
+			Key:     "audit",
+			Name:    "审计日志",
+			Status:  "error",
+			Summary: "database query failed",
+			Metrics: map[string]interface{}{"total_events": 0},
+		}
+	}
 	item := moduleOverviewItem{
 		Key:     "audit",
 		Name:    "审计日志",
 		Status:  "warning",
 		Summary: "no audit events",
-		Metrics: map[string]interface{}{"total_events": len(audit)},
+		Metrics: map[string]interface{}{"total_events": len(auditLog)},
 	}
-	if len(audit) > 0 {
+	if len(auditLog) > 0 {
 		item.Status = "ready"
-		item.Summary = fmt.Sprintf("%d retained events", len(audit))
-		latest := audit[0].Time
-		for _, entry := range audit[1:] {
+		item.Summary = fmt.Sprintf("%d retained events", len(auditLog))
+		latest := auditLog[0].Time
+		for _, entry := range auditLog[1:] {
 			if entry.Time.After(latest) {
 				latest = entry.Time
 			}

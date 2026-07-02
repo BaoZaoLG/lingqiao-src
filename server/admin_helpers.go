@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lingqiao/server/internal/audit"
 	agentsvc "github.com/lingqiao/server/internal/features/agents"
 	"github.com/lingqiao/server/internal/features/cards"
 	"golang.org/x/crypto/bcrypt"
@@ -133,21 +134,22 @@ func spreadsheetSafeCSVCell(value string) string {
 	}
 }
 
-func writeAuditCSV(w http.ResponseWriter, entries []AuditEntry) {
+func writeAuditCSV(w http.ResponseWriter, entries []audit.Event) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition", "attachment; filename=audit_export.csv")
+	w.Write([]byte{0xEF, 0xBB, 0xBF}) // BOM
 	writer := csv.NewWriter(w)
 	writer.UseCRLF = true
-	_ = writer.Write([]string{"time", "action", "card", "machine", "agent_id", "detail", "addr"})
-	for _, entry := range entries {
+	_ = writer.Write([]string{"time", "action", "card", "machine", "agent", "ip", "detail"})
+	for _, e := range entries {
 		_ = writer.Write([]string{
-			entry.Time.Format(time.RFC3339),
-			spreadsheetSafeCSVCell(entry.Action),
-			spreadsheetSafeCSVCell(entry.Card),
-			spreadsheetSafeCSVCell(entry.Machine),
-			spreadsheetSafeCSVCell(entry.AgentID),
-			spreadsheetSafeCSVCell(entry.Detail),
-			spreadsheetSafeCSVCell(entry.Addr),
+			e.Time.Format("2006-01-02 15:04:05"),
+			spreadsheetSafeCSVCell(e.Action),
+			spreadsheetSafeCSVCell(e.Card),
+			spreadsheetSafeCSVCell(e.Machine),
+			spreadsheetSafeCSVCell(e.AgentID),
+			spreadsheetSafeCSVCell(e.IP),
+			spreadsheetSafeCSVCell(e.Detail),
 		})
 	}
 	writer.Flush()
@@ -198,29 +200,38 @@ func buildAgentLeaderboard(cardsList []cards.Card, accs []agentsvc.Account, now 
 	return result
 }
 
-func filterAuditEntries(entries []AuditEntry, query, from, to string) []AuditEntry {
-	fromTime, hasFrom := parseTimeQuery(from)
-	toTime, hasTo := parseTimeQuery(to)
-	query = strings.ToLower(strings.TrimSpace(query))
-	result := make([]AuditEntry, 0, len(entries))
-	for _, entry := range entries {
-		if hasFrom && entry.Time.Before(fromTime) {
+func filterAuditEntries(entries []audit.Event, q, fromStr, toStr string) []audit.Event {
+	from, hasFrom := parseTimeQuery(fromStr)
+	to, hasTo := parseTimeQuery(toStr)
+	if hasTo {
+		// If only date was provided (00:00), push to end of day
+		if to.Hour() == 0 && to.Minute() == 0 && to.Second() == 0 {
+			to = to.Add(24*time.Hour - time.Nanosecond)
+		}
+	}
+
+	filtered := make([]audit.Event, 0)
+	for _, e := range entries {
+		if hasFrom && e.Time.Before(from) {
 			continue
 		}
-		if hasTo && entry.Time.After(toTime) {
+		if hasTo && e.Time.After(to) {
 			continue
 		}
-		if query != "" {
-			haystack := strings.ToLower(strings.Join([]string{
-				entry.Action, entry.Card, entry.Machine, entry.AgentID, entry.Detail, entry.Addr,
-			}, " "))
-			if !strings.Contains(haystack, query) {
+		if q != "" {
+			qLower := strings.ToLower(q)
+			if !strings.Contains(strings.ToLower(e.Action), qLower) &&
+				!strings.Contains(strings.ToLower(e.Card), qLower) &&
+				!strings.Contains(strings.ToLower(e.Machine), qLower) &&
+				!strings.Contains(strings.ToLower(e.AgentID), qLower) &&
+				!strings.Contains(strings.ToLower(e.IP), qLower) &&
+				!strings.Contains(strings.ToLower(e.Detail), qLower) {
 				continue
 			}
 		}
-		result = append(result, entry)
+		filtered = append(filtered, e)
 	}
-	return result
+	return filtered
 }
 
 func parseTimeQuery(value string) (time.Time, bool) {

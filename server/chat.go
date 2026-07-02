@@ -18,21 +18,6 @@ import (
 	"github.com/lingqiao/server/internal/features/sessions"
 )
 
-// toLegacySession converts the domain Session to the legacy Session type
-func toLegacySession(s sessions.Session) *Session {
-	return &Session{
-		Token:         s.Token,
-		CardCode:      s.CardCode,
-		MachineID:     s.MachineID,
-		Fingerprint:   s.Fingerprint,
-		ClientVersion: s.ClientVersion,
-		CreatedAt:     s.CreatedAt,
-		LastSeen:      s.LastSeen,
-		ExpiresAt:     s.ExpiresAt,
-		RemoteAddr:    s.RemoteAddr,
-	}
-}
-
 const (
 	chatMaxMessages  = 200
 	chatMaxAge       = 24 * time.Hour
@@ -112,7 +97,7 @@ func NewChatStore(storage *JSONStorage, now func() time.Time) *ChatStore {
 }
 
 // Add ...
-func (s *ChatStore) Add(session *Session, content string, replyToID ...int64) (ChatMessage, error) {
+func (s *ChatStore) Add(session *sessions.Session, content string, replyToID ...int64) (ChatMessage, error) {
 	if session == nil {
 		return ChatMessage{}, fmt.Errorf("session is required")
 	}
@@ -155,7 +140,7 @@ func (s *ChatStore) Add(session *Session, content string, replyToID ...int64) (C
 }
 
 // Profile ...
-func (s *ChatStore) Profile(session *Session) (ChatProfile, error) {
+func (s *ChatStore) Profile(session *sessions.Session) (ChatProfile, error) {
 	if session == nil {
 		return ChatProfile{}, fmt.Errorf("session is required")
 	}
@@ -175,7 +160,7 @@ func (s *ChatStore) Profile(session *Session) (ChatProfile, error) {
 }
 
 // SetProfile ...
-func (s *ChatStore) SetProfile(session *Session, nickname string) (ChatProfile, error) {
+func (s *ChatStore) SetProfile(session *sessions.Session, nickname string) (ChatProfile, error) {
 	if session == nil {
 		return ChatProfile{}, fmt.Errorf("session is required")
 	}
@@ -243,7 +228,7 @@ func (s *ChatStore) Delete(id int64) bool {
 }
 
 // React ...
-func (s *ChatStore) React(session *Session, messageID int64, reaction string) (ChatMessage, error) {
+func (s *ChatStore) React(session *sessions.Session, messageID int64, reaction string) (ChatMessage, error) {
 	if session == nil {
 		return ChatMessage{}, fmt.Errorf("session is required")
 	}
@@ -281,7 +266,7 @@ func (s *ChatStore) React(session *Session, messageID int64, reaction string) (C
 }
 
 // TouchPresence ...
-func (s *ChatStore) TouchPresence(session *Session) (int, error) {
+func (s *ChatStore) TouchPresence(session *sessions.Session) (int, error) {
 	if session == nil {
 		return 0, fmt.Errorf("session is required")
 	}
@@ -317,7 +302,7 @@ func (s *ChatStore) Mute(authorID string, duration time.Duration, reason string)
 }
 
 // List ...
-func (s *ChatStore) List(afterID int64, currentSession ...*Session) []ChatMessage {
+func (s *ChatStore) List(afterID int64, currentSession ...*sessions.Session) []ChatMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -528,18 +513,18 @@ func validChatReaction(reaction string) bool {
 	}
 }
 
-func (s *ChatStore) nicknameLocked(session *Session) string {
+func (s *ChatStore) nicknameLocked(session *sessions.Session) string {
 	if profile, ok := s.profiles[chatAuthorID(session)]; ok && profile.Nickname != "" {
 		return profile.Nickname
 	}
 	return chatAuthor(session)
 }
 
-func chatAuthor(session *Session) string {
+func chatAuthor(session *sessions.Session) string {
 	return "用户-" + strings.ToUpper(chatAuthorID(session)[:4])
 }
 
-func chatAuthorID(session *Session) string {
+func chatAuthorID(session *sessions.Session) string {
 	sum := sha256.Sum256([]byte(session.CardCode + "|" + session.MachineID))
 	return hex.EncodeToString(sum[:])[:16]
 }
@@ -648,12 +633,7 @@ func (h *APIHandler) HandleChatSend(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	session := toLegacySession(domainSession)
-	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	msg, err := h.chat.Add(session, req.Content, req.ReplyToID)
+	msg, err := h.chat.Add(&domainSession, req.Content, req.ReplyToID)
 	if err != nil {
 		if err.Error() == "muted" {
 			httpapi.WriteError(w, http.StatusForbidden, "你已被禁言，暂时无法发送消息")
@@ -684,17 +664,11 @@ func (h *APIHandler) HandleChatProfile(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	session := toLegacySession(domainSession)
-	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-
 	var profile ChatProfile
 	if req.Nickname != "" {
-		profile, err = h.chat.SetProfile(session, req.Nickname)
+		profile, err = h.chat.SetProfile(&domainSession, req.Nickname)
 	} else {
-		profile, err = h.chat.Profile(session)
+		profile, err = h.chat.Profile(&domainSession)
 	}
 	if err != nil {
 		if err.Error() == "muted" {
@@ -722,12 +696,7 @@ func (h *APIHandler) HandleChatReact(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	session := toLegacySession(domainSession)
-	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	msg, err := h.chat.React(session, req.MessageID, req.Reaction)
+	msg, err := h.chat.React(&domainSession, req.MessageID, req.Reaction)
 	if err != nil {
 		if err.Error() == "muted" {
 			httpapi.WriteError(w, http.StatusForbidden, "你已被禁言，暂时无法添加表情")
@@ -754,12 +723,7 @@ func (h *APIHandler) HandleChatPresence(w http.ResponseWriter, r *http.Request) 
 		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	session := toLegacySession(domainSession)
-	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	online, err := h.chat.TouchPresence(session)
+	online, err := h.chat.TouchPresence(&domainSession)
 	if err != nil {
 		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
@@ -782,10 +746,5 @@ func (h *APIHandler) HandleChatMessages(w http.ResponseWriter, r *http.Request) 
 		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	session := toLegacySession(domainSession)
-	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
-		return
-	}
-	httpapi.WriteOK(w, map[string]interface{}{"messages": h.chat.List(req.AfterID, session)})
+	httpapi.WriteOK(w, map[string]interface{}{"messages": h.chat.List(req.AfterID, &domainSession)})
 }

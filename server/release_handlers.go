@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lingqiao/server/internal/audit"
 	releasesvc "github.com/lingqiao/server/internal/releases"
 )
 
@@ -320,7 +321,10 @@ func (h *AdminHandler) createRelease(w http.ResponseWriter, r *http.Request, svc
 		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.recordReleaseAudit("release_created", release, "")
+	if err := h.recordReleaseAudit("release_created", release, ""); err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+		return
+	}
 	httpapi.WriteOK(w, map[string]interface{}{"release": release})
 }
 
@@ -387,7 +391,10 @@ func (h *AdminHandler) updateReleaseStatus(w http.ResponseWriter, r *http.Reques
 	if status == releasesvc.StatusPaused {
 		action = "release_paused"
 	}
-	h.recordReleaseAudit(action, release, fmt.Sprintf("status=%s", status))
+	if err := h.recordReleaseAudit(action, release, fmt.Sprintf("status=%s", status)); err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+		return
+	}
 	httpapi.WriteOK(w, map[string]interface{}{"release": release})
 }
 
@@ -414,7 +421,10 @@ func (h *AdminHandler) rollbackRelease(w http.ResponseWriter, r *http.Request, s
 		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.recordReleaseAudit("release_rolled_back", release, fmt.Sprintf("target_release_id=%s", req.TargetReleaseID))
+	if err := h.recordReleaseAudit("release_rolled_back", release, fmt.Sprintf("target_release_id=%s", req.TargetReleaseID)); err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+		return
+	}
 	httpapi.WriteOK(w, map[string]interface{}{"release": release})
 }
 
@@ -499,19 +509,22 @@ func (h *AdminHandler) uploadReleasePackage(w http.ResponseWriter, r *http.Reque
 		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	h.recordReleaseAudit("release_package_uploaded", release, fmt.Sprintf("package_id=%s kind=%s sha256=%s size=%d", pkg.ID, pkg.Kind, pkg.SHA256, pkg.FileSize))
+	if err := h.recordReleaseAudit("release_package_uploaded", release, fmt.Sprintf("package_id=%s kind=%s sha256=%s size=%d", pkg.ID, pkg.Kind, pkg.SHA256, pkg.FileSize)); err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+		return
+	}
 	httpapi.WriteOK(w, map[string]interface{}{"package": pkg})
 }
 
-func (h *AdminHandler) recordReleaseAudit(action string, release releasesvc.Release, extra string) {
-	if h == nil || h.cm == nil {
-		return
+func (h *AdminHandler) recordReleaseAudit(action string, release releasesvc.Release, extra string) error {
+	if h == nil || h.auditRecorder == nil {
+		return nil
 	}
 	detail := fmt.Sprintf("id=%s version=%s channel=%s", release.ID, release.Version, release.Channel)
 	if extra != "" {
 		detail += " " + extra
 	}
-	h.cm.RecordAudit(AuditEntry{
+	return h.auditRecorder.Append(audit.Event{
 		Action: action,
 		Detail: detail,
 	})

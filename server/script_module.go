@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/lingqiao/server/internal/audit"
 	"github.com/lingqiao/server/internal/httpapi"
 
 	"crypto/sha256"
@@ -466,7 +467,10 @@ func (h *AdminHandler) HandleScriptAdmin(w http.ResponseWriter, r *http.Request)
 				return
 			}
 			module, _ := loadScriptModuleContent(req.ID)
-			h.recordScriptAudit("script_activated", module, fmt.Sprintf("previous_id=%s", previousActiveID))
+			if err := h.recordScriptAudit("script_activated", module, fmt.Sprintf("previous_id=%s", previousActiveID)); err != nil {
+				httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+				return
+			}
 			httpapi.WriteOK(w, nil)
 			return
 		case "delete":
@@ -475,7 +479,10 @@ func (h *AdminHandler) HandleScriptAdmin(w http.ResponseWriter, r *http.Request)
 				httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			h.recordScriptAudit("script_deleted", module, "")
+			if err := h.recordScriptAudit("script_deleted", module, ""); err != nil {
+				httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+				return
+			}
 			httpapi.WriteOK(w, nil)
 			return
 		case "save":
@@ -484,7 +491,10 @@ func (h *AdminHandler) HandleScriptAdmin(w http.ResponseWriter, r *http.Request)
 				httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			h.recordScriptAudit("script_saved", module, "")
+			if err := h.recordScriptAudit("script_saved", module, ""); err != nil {
+				httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+				return
+			}
 			httpapi.WriteOK(w, map[string]interface{}{"script": module, "id": module.ID, "version": module.Version, "sha256": module.SHA256, "content": module.Content, "size": module.Size, "updated_at": module.UpdatedAt})
 			return
 		}
@@ -497,7 +507,10 @@ func (h *AdminHandler) HandleScriptAdmin(w http.ResponseWriter, r *http.Request)
 			httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		h.recordScriptAudit("script_published", module, "")
+		if err := h.recordScriptAudit("script_published", module, ""); err != nil {
+			httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+			return
+		}
 		log.Printf("[SCRIPT] Published version=%s sha256=%s size=%d", module.Version, module.SHA256, module.Size)
 		httpapi.WriteOK(w, map[string]interface{}{
 			"id":         module.ID,
@@ -513,15 +526,15 @@ func (h *AdminHandler) HandleScriptAdmin(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-func (h *AdminHandler) recordScriptAudit(action string, module *ScriptModule, extra string) {
-	if h == nil || h.cm == nil || module == nil {
-		return
+func (h *AdminHandler) recordScriptAudit(action string, module *ScriptModule, extra string) error {
+	if h == nil || h.auditRecorder == nil || module == nil {
+		return nil
 	}
 	detail := fmt.Sprintf("id=%s version=%s sha256=%s size=%d", module.ID, module.Version, module.SHA256, module.Size)
 	if extra != "" {
 		detail += " " + extra
 	}
-	h.cm.RecordAudit(AuditEntry{
+	return h.auditRecorder.Append(audit.Event{
 		Action: action,
 		Detail: detail,
 	})

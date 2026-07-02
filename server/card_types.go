@@ -1,12 +1,6 @@
 package main
 
-import (
-	"sync"
-	"time"
-
-	auditsvc "github.com/lingqiao/server/internal/audit"
-	cardops "github.com/lingqiao/server/internal/cards"
-)
+import "time"
 
 const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
@@ -24,57 +18,8 @@ func init() {
 	}
 }
 
-type CardStatus string
-
-const (
-	CardActive   CardStatus = "active"
-	CardDisabled CardStatus = "disabled"
-	CardExpired  CardStatus = "expired"
-)
-
-type Card struct {
-	Code        string     `json:"code"`
-	MachineID   string     `json:"machine_id,omitempty"`
-	AgentID     string     `json:"agent_id,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	ActivatedAt *time.Time `json:"activated_at,omitempty"`
-	ExpiresAt   time.Time  `json:"expires_at"`
-	Status      CardStatus `json:"status"`
-	Note        string     `json:"note,omitempty"`
-	MaxSessions int        `json:"max_sessions"`
-}
-
-type Session struct {
-	Token         string    `json:"token"`
-	CardCode      string    `json:"card_code"`
-	MachineID     string    `json:"machine_id"`
-	Fingerprint   string    `json:"fingerprint"`
-	ClientVersion string    `json:"client_version,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	LastSeen      time.Time `json:"last_seen"`
-	ExpiresAt     time.Time `json:"expires_at"`
-	RemoteAddr    string    `json:"remote_addr"`
-}
-
-type AuditEntry struct {
-	Time    time.Time `json:"time"`
-	Action  string    `json:"action"`
-	Card    string    `json:"card,omitempty"`
-	Machine string    `json:"machine,omitempty"`
-	AgentID string    `json:"agent_id,omitempty"`
-	Detail  string    `json:"detail,omitempty"`
-	Addr    string    `json:"addr,omitempty"`
-}
-
-type Agent struct {
-	ID        string    `json:"id"`
-	Username  string    `json:"username"`
-	Password  string    `json:"password"` // SHA-256 hash
-	Prefix    string    `json:"prefix"`   // card code prefix for identification
-	CreatedAt time.Time `json:"created_at"`
-	Disabled  bool      `json:"disabled"`
-}
-
+// BlacklistEntry is a legacy JSON struct retained for the one-time
+// JSON→SQLite migration path in db.go.
 type BlacklistEntry struct {
 	Type      string    `json:"type"`
 	Value     string    `json:"value"`
@@ -82,170 +27,10 @@ type BlacklistEntry struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-type JSONCardManager struct {
-	mu        sync.RWMutex
-	cards     map[string]*Card
-	sessions  map[string]*Session
-	blacklist map[string]*BlacklistEntry
-	agents    map[string]*Agent
-	auditLog  []AuditEntry
-	recorder  *auditsvc.Recorder
-	storage   *JSONStorage
-}
-
-func cloneCard(c *Card) *Card {
-	if c == nil {
-		return nil
-	}
-	cp := *c
-	if c.ActivatedAt != nil {
-		t := *c.ActivatedAt
-		cp.ActivatedAt = &t
-	}
-	return &cp
-}
-
-func cloneSession(s *Session) *Session {
-	if s == nil {
-		return nil
-	}
-	cp := *s
-	return &cp
-}
-
-func cloneAgent(a *Agent) *Agent {
-	if a == nil {
-		return nil
-	}
-	cp := *a
-	return &cp
-}
-
-func cloneBlacklistEntry(e *BlacklistEntry) *BlacklistEntry {
-	if e == nil {
-		return nil
-	}
-	cp := *e
-	return &cp
-}
-
-func newCardLifecycleService() *cardops.LifecycleService {
-	return cardops.NewLifecycleService(generateCardCode, time.Now)
-}
-
-func lifecycleCardFromCard(card *Card) cardops.Card {
-	if card == nil {
-		return cardops.Card{}
-	}
-	return cardops.Card{
-		Code:        card.Code,
-		MachineID:   card.MachineID,
-		AgentID:     card.AgentID,
-		CreatedAt:   card.CreatedAt,
-		ActivatedAt: card.ActivatedAt,
-		ExpiresAt:   card.ExpiresAt,
-		Status:      cardops.Status(card.Status),
-		Note:        card.Note,
-		MaxSessions: card.MaxSessions,
-	}
-}
-
-func applyLifecycleCard(dst *Card, src cardops.Card) {
-	dst.Code = src.Code
-	dst.MachineID = src.MachineID
-	dst.AgentID = src.AgentID
-	dst.CreatedAt = src.CreatedAt
-	dst.ActivatedAt = src.ActivatedAt
-	dst.ExpiresAt = src.ExpiresAt
-	dst.Status = CardStatus(src.Status)
-	dst.Note = src.Note
-	dst.MaxSessions = src.MaxSessions
-}
-
-func cardFromLifecycleCard(card cardops.Card) *Card {
-	return &Card{
-		Code:        card.Code,
-		MachineID:   card.MachineID,
-		AgentID:     card.AgentID,
-		CreatedAt:   card.CreatedAt,
-		ActivatedAt: card.ActivatedAt,
-		ExpiresAt:   card.ExpiresAt,
-		Status:      CardStatus(card.Status),
-		Note:        card.Note,
-		MaxSessions: card.MaxSessions,
-	}
-}
-
-func newCardSessionService() *cardops.SessionService {
-	return cardops.NewSessionService(time.Now, currentSessionTTL())
-}
-
-func lifecycleSessionFromSession(session *Session) cardops.Session {
-	if session == nil {
-		return cardops.Session{}
-	}
-	return cardops.Session{
-		Token:         session.Token,
-		CardCode:      session.CardCode,
-		MachineID:     session.MachineID,
-		Fingerprint:   session.Fingerprint,
-		ClientVersion: session.ClientVersion,
-		CreatedAt:     session.CreatedAt,
-		LastSeen:      session.LastSeen,
-		ExpiresAt:     session.ExpiresAt,
-		RemoteAddr:    session.RemoteAddr,
-	}
-}
-
-func sessionFromLifecycleSession(session cardops.Session) *Session {
-	return &Session{
-		Token:         session.Token,
-		CardCode:      session.CardCode,
-		MachineID:     session.MachineID,
-		Fingerprint:   session.Fingerprint,
-		ClientVersion: session.ClientVersion,
-		CreatedAt:     session.CreatedAt,
-		LastSeen:      session.LastSeen,
-		ExpiresAt:     session.ExpiresAt,
-		RemoteAddr:    session.RemoteAddr,
-	}
-}
-
-func applyLifecycleSession(dst *Session, src cardops.Session) {
-	dst.Token = src.Token
-	dst.CardCode = src.CardCode
-	dst.MachineID = src.MachineID
-	dst.Fingerprint = src.Fingerprint
-	dst.ClientVersion = src.ClientVersion
-	dst.CreatedAt = src.CreatedAt
-	dst.LastSeen = src.LastSeen
-	dst.ExpiresAt = src.ExpiresAt
-	dst.RemoteAddr = src.RemoteAddr
-}
-
-type CardManager interface {
-	GetStorage() *JSONStorage
-	SetAuditRecorder(recorder *auditsvc.Recorder)
-	RecordAudit(entry AuditEntry)
-	GenerateCard(duration time.Duration, note string, maxSessions int, agentID string) (*Card, error)
-	GenerateCardWithCode(code string, duration time.Duration, note string, maxSessions int, agentID string) (*Card, error)
-	ValidateCard(code string) (*Card, error)
-	GetCard(code string) *Card
-	AllCards() []*Card
-	AllBlacklist() []*BlacklistEntry
-	AuditLog() []AuditEntry
-	AddBlacklist(typ, value, reason string)
-	RemoveBlacklist(value string)
-	UpdateCardStatus(code string, status CardStatus) error
-	ExtendCard(code string, duration time.Duration) error
-
-	IsBlacklisted(value string) bool
-
-	BatchGenerateCards(count int, duration time.Duration, note string, maxSessions int, agentID string) ([]*Card, error)
-	UpdateCardDetails(code string, note *string, maxSessions *int) error
-	SearchCards(query, status, machineID string) []*Card
-	GetUniqueMachines() []MachineInfo
-	GetCardsByMachine(machineID string) []*Card
-	AgentCards(agentID string) []*Card
-	AgentStats(agentID string) (total, active, expired int)
+// MachineInfo holds aggregated info about a machine used by the admin UI.
+type MachineInfo struct {
+	MachineID     string     `json:"machine_id"`
+	CardCount     int        `json:"card_count"`
+	LastSeen      *time.Time `json:"last_seen,omitempty"`
+	IsBlacklisted bool       `json:"is_blacklisted"`
 }

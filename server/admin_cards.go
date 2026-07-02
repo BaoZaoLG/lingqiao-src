@@ -1,8 +1,6 @@
 package main
 
 import (
-	"github.com/lingqiao/server/internal/httpapi"
-
 	"context"
 	"encoding/csv"
 	"errors"
@@ -13,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lingqiao/server/internal/audit"
 	"github.com/lingqiao/server/internal/features/cards"
+	"github.com/lingqiao/server/internal/httpapi"
 )
 
 // ── Card Management ──────────────────────────────────────────────────────────
@@ -82,12 +82,19 @@ func (h *AdminHandler) HandleImportCards(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	report := h.importCardsFromRecords(r.Context(), records, time.Duration(req.Duration)*time.Hour, req.MaxSessions, req.DryRun)
+	report, err := h.importCardsFromRecords(r.Context(), records, time.Duration(req.Duration)*time.Hour, req.MaxSessions, req.DryRun)
+	if err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if !req.DryRun && report.Imported > 0 {
-		h.cm.RecordAudit(AuditEntry{
+		if err := h.auditRecorder.Append(audit.Event{
 			Action: "cards_import_completed",
 			Detail: fmt.Sprintf("imported=%d duplicates=%d invalid=%d skipped=%d", report.Imported, report.Duplicates, report.Invalid, report.Skipped),
-		})
+		}); err != nil {
+			httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+			return
+		}
 	}
 	if req.DryRun {
 		log.Printf("[ADMIN] Previewed card CSV import: valid=%d duplicates=%d invalid=%d", report.ValidRows, report.Duplicates, report.Invalid)
@@ -115,7 +122,7 @@ type cardImportReport struct {
 	Items      []cardImportItem `json:"items"`
 }
 
-func (h *AdminHandler) importCardsFromRecords(ctx context.Context, records [][]string, duration time.Duration, maxSessions int, dryRun bool) cardImportReport {
+func (h *AdminHandler) importCardsFromRecords(ctx context.Context, records [][]string, duration time.Duration, maxSessions int, dryRun bool) (cardImportReport, error) {
 	report := cardImportReport{Items: make([]cardImportItem, 0, len(records))}
 	seen := make(map[string]struct{}, len(records))
 	for idx, record := range records {
@@ -173,15 +180,20 @@ func (h *AdminHandler) importCardsFromRecords(ctx context.Context, records [][]s
 			} else {
 				report.Imported++
 				item.Status = "imported"
-				h.cm.RecordAudit(AuditEntry{
+				if err := h.auditRecorder.Append(audit.Event{
 					Time:   time.Now(),
 					Action: "card_imported",
 					Card:   formatted,
 					Detail: fmt.Sprintf("duration=%s max_sessions=%d", duration, maxSessions),
-				})
+				}); err != nil {
+					item.Status = "error"
+					item.Message = "Audit log failed: " + err.Error()
+					report.Items = append(report.Items, item)
+					return report, fmt.Errorf("action succeeded partially but audit log failed to save: %w", err)
+				}
 			}
 		}
 		report.Items = append(report.Items, item)
 	}
-	return report
+	return report, nil
 }

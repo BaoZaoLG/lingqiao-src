@@ -5,7 +5,6 @@ import (
 
 	"context"
 	"crypto/tls"
-	"database/sql"
 	"embed"
 	"flag"
 	"fmt"
@@ -19,9 +18,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lingqiao/server/internal/audit"
 	"github.com/lingqiao/server/internal/config"
 	"github.com/lingqiao/server/internal/features/agents"
 	"github.com/lingqiao/server/internal/features/cards"
+	"github.com/lingqiao/server/internal/features/security/blacklist"
 	"github.com/lingqiao/server/internal/features/sessions"
 )
 
@@ -58,37 +59,32 @@ func main() {
 		}
 	}
 
-	sqliteCm, err := NewSQLiteCardManager(dbPath)
+	db, err := openDB(dbPath)
 	if err != nil {
 		log.Fatalf("[DB] Failed to init sqlite: %v", err)
 	}
+	defer db.Close()
 
 	if needsMigration {
-		log.Println("[DB] Migrating from JSON to SQLite...")
-		oldCm := NewJSONCardManager(storage)
-		if sqliteImpl, ok := sqliteCm.(*SQLiteCardManager); ok {
-			if err := sqliteImpl.ImportJSONData(oldCm); err != nil {
-				log.Printf("[DB] Migration warning: %v", err)
-			} else {
-				log.Println("[DB] Migration completed successfully.")
-			}
+		if err := migrateJSONToSQLite(db, storage); err != nil {
+			log.Fatalf("[DB] Fatal error during migration: %v", err)
 		}
 	}
 
-	var cm CardManager = sqliteCm
 	initAnnouncement()
 
+	cardsRepo := cards.NewSQLiteRepository(db)
+	cardsSvc := cards.NewService(cardsRepo, generateCardCode, time.Now)
+
+	auditRepo := audit.NewSQLiteRepository(db)
+	auditRecorder := audit.NewRecorder(auditRepo)
+
 	// CLI mode: generate card and exit
-	if handleCLIGenerate(cm) {
+	if handleCLIGenerate(cardsSvc, auditRecorder) {
 		return
 	}
 
 	log.Println("[SERVER] Starting DLL Injector Auth Server...")
-
-	var db *sql.DB
-	if impl, ok := sqliteCm.(*SQLiteCardManager); ok {
-		db = impl.DB()
-	}
 
 	// Migrate invites from JSON storage if SQLite database is empty but json storage has invites
 	if db != nil {
@@ -124,40 +120,48 @@ func main() {
 			}
 		}
 	}
-	cardsRepo := cards.NewSQLiteRepository(db)
-	cardsSvc := cards.NewService(cardsRepo, generateCardCode, time.Now)
+	blacklistRepo := blacklist.NewSQLiteRepository(db)
+	blacklistSvc := blacklist.NewService(blacklistRepo)
+
 	cardsHandler := cards.NewHandler(cardsSvc, cardsRepo)
 	cardsHandler.SetAuditSink(func(action, cardCode, detail string) {
-		cm.RecordAudit(AuditEntry{
+		if err := auditRecorder.Append(audit.Event{
 			Action: action,
 			Card:   cardCode,
 			Detail: detail,
-		})
+		}); err != nil {
+			log.Printf("[AUDIT] Failed to record audit for card %s: %v", cardCode, err)
+		}
 	})
 
 	sessionsRepo := sessions.NewSQLiteRepository(db)
 	sessionsSvc := sessions.NewService(sessionsRepo, 30*time.Minute, nil, time.Now)
 	sessionsSvc.SetAuditSink(func(action, cardCode, machineID, remoteAddr string) {
-		cm.RecordAudit(AuditEntry{
-			Action: action,
-			Card:   cardCode,
-			Detail: fmt.Sprintf("Machine: %s, IP: %s", machineID, remoteAddr),
-		})
+		if err := auditRecorder.Append(audit.Event{
+			Action:  action,
+			Card:    cardCode,
+			Machine: machineID,
+			IP:      remoteAddr,
+		}); err != nil {
+			log.Printf("[AUDIT] Failed to record audit for session %s: %v", cardCode, err)
+		}
 	})
 
 	inviteSvc := agents.NewInviteService(db)
 	agentsRepo := agents.NewSQLiteRepository(db)
 	agentsSvc := agents.NewService(agentsRepo, time.Now)
 	agentsSvc.SetAuditSink(func(action, agentID, detail string) {
-		cm.RecordAudit(AuditEntry{
+		if err := auditRecorder.Append(audit.Event{
 			Action:  action,
 			AgentID: agentID,
 			Detail:  detail,
-		})
+		}); err != nil {
+			log.Printf("[AUDIT] Failed to record audit for agent %s: %v", agentID, err)
+		}
 	})
 
-	api := NewAPIHandler(cm, sessionsSvc)
-	admin := NewAdminHandler(cm, cardsSvc, sessionsSvc, agentsSvc, inviteSvc)
+	api := NewAPIHandler(blacklistSvc, storage, sessionsSvc)
+	admin := NewAdminHandler(cardsSvc, sessionsSvc, agentsSvc, inviteSvc, blacklistSvc, auditRecorder, storage, db)
 	admin.chat = api.chat
 
 	adapter := &agentCardManagerAdapter{
@@ -167,18 +171,24 @@ func main() {
 	agentAdmin := agents.NewAdminHandler(agentsSvc, adapter)
 	agent := agents.NewAgentHandler(agentsSvc, adapter, adapter, inviteSvc, cfg.SessionTTL, cfg.DataDir)
 	agent.SetAuditSink(func(action, cardCode, agentID, detail string) {
-		cm.RecordAudit(AuditEntry{
+		if err := auditRecorder.Append(audit.Event{
 			Action:  action,
 			Card:    cardCode,
 			AgentID: agentID,
 			Detail:  detail,
-		})
+		}); err != nil {
+			log.Printf("[AUDIT] Failed to record audit for agent %s: %v", agentID, err)
+		}
 	})
 	payloadStore := NewPayloadStore(storage)
 	payload := NewPayloadHandler(payloadStore, sessionsSvc)
-	payload.SetAuditSink(cm.RecordAudit)
+	payload.SetAuditSink(func(e audit.Event) {
+		if err := auditRecorder.Append(e); err != nil {
+			log.Printf("[AUDIT] Failed to record audit for payload: %v", err)
+		}
+	})
 
-	printStartupInfo(cm)
+	printStartupInfo(cardsSvc)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -192,7 +202,7 @@ func main() {
 
 // ── CLI Mode ─────────────────────────────────────────────────────────────────
 
-func handleCLIGenerate(cm CardManager) bool {
+func handleCLIGenerate(cardsSvc *cards.Service, auditRecorder *audit.Recorder) bool {
 	genCard := flag.Bool("generate-card", false, "Generate a new card for testing")
 	cardDuration := flag.Int("duration", 720, "Card validity duration in hours")
 	cardSessions := flag.Int("max-sessions", 1, "Max concurrent sessions")
@@ -203,15 +213,25 @@ func handleCLIGenerate(cm CardManager) bool {
 		return false
 	}
 
-	card, err := cm.GenerateCard(
+	card, err := cardsSvc.Create(
+		context.Background(),
 		time.Duration(*cardDuration)*time.Hour,
 		*cardNote,
 		*cardSessions,
 		"",
 	)
 	if err != nil {
-		log.Fatalf("[GEN] Failed to generate card: %v", err)
+		log.Fatalf("Failed to generate card: %v\n", err)
 	}
+
+	if err := auditRecorder.Append(audit.Event{
+		Action: "card_generated",
+		Card:   card.Code,
+		Detail: fmt.Sprintf("Generated %s (note: %s, duration: %dh)", card.Code, card.Note, *cardDuration),
+	}); err != nil {
+		log.Fatalf("Warning: failed to record audit event: %v", err)
+	}
+
 	fmt.Printf("Card generated successfully:\n")
 	fmt.Printf("  Code:         %s\n", card.Code)
 	fmt.Printf("  Expires at:   %s\n", card.ExpiresAt.Format("2006-01-02 15:04:05"))
@@ -356,7 +376,7 @@ func registerAdminRoutes(mux *http.ServeMux, h *AdminHandler, payload *PayloadHa
 	mux.HandleFunc("/admin/api/chat/mute", auth(h.HandleChatMute))
 
 	// Machines
-	mux.HandleFunc("/admin/api/machines", auth(h.HandleMachines))
+	mux.HandleFunc("/admin/api/machines", auth(h.HandleAdminMachines))
 	mux.HandleFunc("/admin/api/machine/cards", auth(h.HandleMachineCards))
 
 	// Agents
@@ -439,17 +459,23 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"ok","time":"` + time.Now().Format(time.RFC3339) + `"}`))
 }
 
-func printStartupInfo(cm CardManager) {
-	cards := cm.AllCards()
+func printStartupInfo(svc *cards.Service) {
+	ctx := context.Background()
+	allCards, err := svc.AllCards(ctx)
+	if err != nil {
+		log.Printf("[SERVER] Could not load card count: %v", err)
+		return
+	}
+	now := time.Now()
 	activeCount := 0
-	for _, c := range cards {
-		if c.Status == CardActive && time.Now().Before(c.ExpiresAt) {
+	for _, c := range allCards {
+		if c.Status == cards.StatusActive && now.Before(c.ExpiresAt) {
 			activeCount++
 		}
 	}
 	log.Printf("[SERVER] Loaded %d cards (%d active)",
-		len(cards), activeCount)
-	if len(cards) == 0 {
+		len(allCards), activeCount)
+	if len(allCards) == 0 {
 		log.Println("[SERVER] No cards in database — generate one with: go run . --generate-card")
 	}
 }
