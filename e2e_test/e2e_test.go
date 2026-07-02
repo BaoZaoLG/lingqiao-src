@@ -38,6 +38,12 @@ func TestE2EMigrationAndAPI(t *testing.T) {
 	// 2. Create dirty data.json
 	dataJSONPath := filepath.Join(tempDir, "data.json")
 	dirtyData := `{
+	  "cards": {
+		"test-card-1": {"code": "test-card-1", "duration": 720, "created_at": "2023-01-01T00:00:00Z", "status": "active", "max_sessions": 1}
+	  },
+	  "sessions": {
+		"session-1": {"token": "session-1", "card_code": "test-card-1", "machine_id": "test-machine", "created_at": "2023-01-01T00:00:00Z"}
+	  },
 	  "agents": {
 		"agent1": {"username": "admin", "password": "hash1", "created_at": "2023-01-01T00:00:00Z"},
 		"agent2": {"username": "admin", "password": "hash2", "created_at": "2023-01-01T00:00:00Z"},
@@ -65,7 +71,8 @@ func TestE2EMigrationAndAPI(t *testing.T) {
 
 	// 4. Run server to trigger migration
 	srvCmd := exec.Command(serverExe)
-	srvCmd.Env = append(os.Environ(), "DATA_DIR="+tempDir, "PORT="+adminPort, "AGENT_PORT="+agentPort, "ADMIN_PASSWORD=testpass", "DISABLE_TLS=true")
+	srvCmd.Dir = tempDir
+	srvCmd.Env = append(os.Environ(), "DATA_DIR="+tempDir, "PORT="+adminPort, "AGENT_PORT="+agentPort, "ADMIN_PASSWORD=testpass")
 	srvCmd.Stdout = os.Stdout
 	srvCmd.Stderr = os.Stderr
 
@@ -138,6 +145,22 @@ func TestE2EMigrationAndAPI(t *testing.T) {
 		t.Fatalf("Failed to open sqlite db: %v", err)
 	}
 	defer db.Close()
+
+	var cardsCount int
+	if err := db.QueryRow("SELECT count(*) FROM cards").Scan(&cardsCount); err != nil {
+		t.Fatalf("Failed to count cards: %v", err)
+	}
+	if cardsCount != 1 {
+		t.Errorf("Expected 1 card, got %d", cardsCount)
+	}
+
+	var sessionsCount int
+	if err := db.QueryRow("SELECT count(*) FROM sessions").Scan(&sessionsCount); err != nil {
+		t.Fatalf("Failed to count sessions: %v", err)
+	}
+	if sessionsCount != 1 {
+		t.Errorf("Expected 1 session, got %d", sessionsCount)
+	}
 
 	var agentsCount int
 	if err := db.QueryRow("SELECT count(*) FROM agents").Scan(&agentsCount); err != nil {

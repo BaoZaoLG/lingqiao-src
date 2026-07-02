@@ -104,3 +104,33 @@ Runtime flow:
 5. Verification logic (e.g. checking whether an agent is disabled) is queried from the SQLite database on each request to prevent session leaks.
 
 Legacy `internal/agents` directory was completely removed. All domain models (`Account`) and invitation logic (`InviteCode`, `InviteService`) have been consolidated directly into `internal/features/agents`, ensuring zero legacy footprint and strict package encapsulation. Invite codes now persist in SQLite `invites` table; JSON invites are import-only compatibility data.
+
+## 6. 数据存储与迁移策略 (Database & Migration)
+
+服务端当前以 SQLite 为唯一的数据持久化层，所有核心域（Cards, Sessions, Agents, Audit, Blacklist, Invites）均已全量迁移至 `modernc.org/sqlite`。
+
+**旧版 JSON 到 SQLite 的自动迁移：**
+- 服务端启动时，会自动检测数据库是否为空。如果为空且存在旧版的 `data.json` / `cards.json` 等文件，服务会**自动、同步地将全部数据（包括黑名单、卡密、代理商账户、历史会话、审计日志）装载并写入 SQLite**。
+- 迁移过程中内置了严格的冲突防御（例如：自动解决老版本中重复的代理商 `username` 冲突，为其分配唯一的 `_dupN` 后缀）。
+- 任何无法修复的致命错误都会触发 Panic 从而阻止不一致的服务启动（Fail-Fast）。
+
+**备份与回滚：**
+- **备份**：SQLite 的全部数据存放于 `data/lingqiao.db` 中。备份仅需停止服务后直接复制该单文件即可。
+- **回滚**：如遇毁灭性问题，可删掉 `lingqiao.db` 文件，确保旧版的 JSON 文件存在于对应目录中，再次重启服务便会重新触发历史迁移逻辑。
+
+## 7. 测试与验证 (Testing & Verification)
+
+项目中包含单元测试（Unit Tests）与端到端黑盒演练（E2E Tests）：
+
+- **常规单测**：
+  验证各领域模块的独立逻辑。
+  ```powershell
+  cd server
+  go test ./... -count=1
+  ```
+- **真实 E2E 迁移演练**：
+  在隔离沙盒内，完全模拟“构造极端脏数据的旧 JSON” -> “冷启动 Server 触发无损迁移” -> “HTTPS 接口调用拉起核心业务链” -> “底层 SQLite 数据行级断言”的全生命周期。
+  ```powershell
+  cd e2e_test
+  go test -v .
+  ```
