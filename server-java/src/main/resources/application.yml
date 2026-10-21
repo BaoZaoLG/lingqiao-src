@@ -1,0 +1,110 @@
+server:
+  address: ${JAVA_SERVER_ADDRESS:127.0.0.1}
+  port: ${JAVA_SERVER_PORT:49001}
+  forward-headers-strategy: ${JAVA_FORWARD_HEADERS_STRATEGY:native}
+  shutdown: graceful
+
+spring:
+  application:
+    name: lingqiao-java-sidecar
+  servlet:
+    multipart:
+      max-file-size: 501MB
+      max-request-size: 501MB
+  main:
+    banner-mode: "off"
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
+      - org.springframework.boot.autoconfigure.jdbc.JdbcTemplateAutoConfiguration
+  flyway:
+    enabled: false
+
+lingqiao:
+  sidecar:
+    exam-enabled: ${JAVA_EXAM_ENABLED:false}
+    exam-write-enabled: ${JAVA_EXAM_WRITE_ENABLED:false}
+    audit-enabled: ${JAVA_AUDIT_ENABLED:false}
+    audit-write-enabled: ${JAVA_AUDIT_WRITE_ENABLED:false}
+    scripts-enabled: ${JAVA_SCRIPTS_ENABLED:false}
+    scripts-write-enabled: ${JAVA_SCRIPTS_WRITE_ENABLED:false}
+    cards-enabled: ${JAVA_CARDS_ENABLED:false}
+    cards-write-enabled: ${JAVA_CARDS_WRITE_ENABLED:false}
+    sessions-enabled: ${JAVA_SESSIONS_ENABLED:false}
+    sessions-write-enabled: ${JAVA_SESSIONS_WRITE_ENABLED:false}
+    agents-enabled: ${JAVA_AGENTS_ENABLED:false}
+    agents-write-enabled: ${JAVA_AGENTS_WRITE_ENABLED:false}
+    chat-enabled: ${JAVA_CHAT_ENABLED:false}
+    chat-write-enabled: ${JAVA_CHAT_WRITE_ENABLED:false}
+    blacklist-enabled: ${JAVA_BLACKLIST_ENABLED:false}
+    blacklist-write-enabled: ${JAVA_BLACKLIST_WRITE_ENABLED:false}
+    announcement-enabled: ${JAVA_ANNOUNCEMENT_ENABLED:false}
+    announcement-write-enabled: ${JAVA_ANNOUNCEMENT_WRITE_ENABLED:false}
+    releases-enabled: ${JAVA_RELEASES_ENABLED:false}
+    releases-write-enabled: ${JAVA_RELEASES_WRITE_ENABLED:false}
+    payloads-enabled: ${JAVA_PAYLOADS_ENABLED:false}
+    payloads-write-enabled: ${JAVA_PAYLOADS_WRITE_ENABLED:false}
+    client-write-enabled: ${JAVA_CLIENT_WRITE_ENABLED:false}
+    client-download-enabled: ${JAVA_CLIENT_DOWNLOAD_ENABLED:false}
+    client-update-enabled: ${JAVA_CLIENT_UPDATE_ENABLED:false}
+    client-chat-enabled: ${JAVA_CLIENT_CHAT_ENABLED:false}
+    client-announcement-enabled: ${JAVA_CLIENT_ANNOUNCEMENT_ENABLED:false}
+    admin-auth-enabled: ${JAVA_ADMIN_AUTH_ENABLED:false}
+    admin-overview-enabled: ${JAVA_ADMIN_OVERVIEW_ENABLED:false}
+    agent-portal-enabled: ${JAVA_AGENT_PORTAL_ENABLED:false}
+    agent-portal-write-enabled: ${JAVA_AGENT_PORTAL_WRITE_ENABLED:false}
+    production-entrypoint-replaced: ${JAVA_PRODUCTION_ENTRYPOINT_REPLACED:false}
+  cutover:
+    enabled: ${JAVA_CUTOVER_ENABLED:false}
+    admin: ${JAVA_CUTOVER_ADMIN:false}
+    exam: ${JAVA_CUTOVER_EXAM:false}
+    audit: ${JAVA_CUTOVER_AUDIT:false}
+    scripts: ${JAVA_CUTOVER_SCRIPTS:false}
+    cards: ${JAVA_CUTOVER_CARDS:false}
+    sessions: ${JAVA_CUTOVER_SESSIONS:false}
+    agents: ${JAVA_CUTOVER_AGENTS:false}
+    chat: ${JAVA_CUTOVER_CHAT:false}
+    blacklist: ${JAVA_CUTOVER_BLACKLIST:false}
+    announcement: ${JAVA_CUTOVER_ANNOUNCEMENT:false}
+    releases: ${JAVA_CUTOVER_RELEASES:false}
+    payloads: ${JAVA_CUTOVER_PAYLOADS:false}
+  auth:
+    hmac-secret: ${HMAC_SECRET:}
+    hmac-secret-file: ${JAVA_HMAC_SECRET_FILE:./data/hmac_secret.key}
+    data-dir: ${JAVA_DATA_DIR:./data}
+  write:
+    db-url: ${JAVA_WRITE_DB_URL:jdbc:sqlite:file:./data/lingqiao.db}
+  client:
+    session-ttl: ${JAVA_CLIENT_SESSION_TTL:PT4H}
+  admin:
+    session-ttl: ${JAVA_ADMIN_SESSION_TTL:PT4H}
+  agent:
+    session-ttl: ${JAVA_AGENT_SESSION_TTL:PT4H}
+  releases:
+    signing-seed-hex: ${UPDATE_SIGNING_SEED_HEX:}
+  web:
+    dist-dir: ${JAVA_WEB_DIST_DIR:../server/web-dist}
+
+management:
+  endpoints:
+    enabled-by-default: false
+
+---
+
+spring:
+  config:
+    activate:
+      on-profile: db-read
+
+  autoconfigure:
+    exclude: []
+
+  datasource:
+    url: ${JAVA_DB_URL:jdbc:sqlite:file:./data/lingqiao.db?mode=ro}
+    driver-class-name: org.sqlite.JDBC
+    hikari:
+      read-only: true
+      maximum-pool-size: 4
+      connection-timeout: 3000
+      initialization-fail-timeout: -1

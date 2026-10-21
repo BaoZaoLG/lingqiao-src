@@ -21,16 +21,29 @@ func NewAdminHandler(svc *Service, cm CardReader) *AdminHandler {
 }
 
 func (h *AdminHandler) RegisterRoutes(mux *http.ServeMux, authP func(string, http.HandlerFunc) http.HandlerFunc) {
-	mux.HandleFunc("/admin/api/agents", authP("agents.read", h.HandleAdminListAgents))
-	mux.HandleFunc("/admin/api/agent/update", authP("agents.write", h.HandleAdminUpdateAgent))
-	mux.HandleFunc("/admin/api/agent/cards", authP("agents.read", h.HandleAdminAgentCards))
+	h.RegisterRoutesWithCutover(mux, authP, func(module string, handler http.HandlerFunc) http.HandlerFunc { return handler })
+}
+
+// RegisterRoutesWithCutover registers agent admin routes with an optional cutover wrapper.
+func (h *AdminHandler) RegisterRoutesWithCutover(
+	mux *http.ServeMux,
+	authP func(string, http.HandlerFunc) http.HandlerFunc,
+	wrap func(string, http.HandlerFunc) http.HandlerFunc,
+) {
+	mux.HandleFunc("/admin/api/agents", authP("agents.read", wrap("agents", h.HandleAdminListAgents)))
+	mux.HandleFunc("/admin/api/agent/update", authP("agents.write", wrap("agents", h.HandleAdminUpdateAgent)))
+	mux.HandleFunc("/admin/api/agent/cards", authP("agents.read", wrap("agents", h.HandleAdminAgentCards)))
 }
 
 // HandleAdminListAgents ...
 func (h *AdminHandler) HandleAdminListAgents(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
 	allAgents, err := h.svc.AllAgents(r.Context())
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("[ADMIN] list agents failed: %v", err)
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to list agents")
 		return
 	}
 	summaries := buildAdminAgentSummaries(allAgents, h.cm.AllCards(), time.Now())
@@ -152,7 +165,7 @@ func (h *AdminHandler) HandleAdminUpdateAgent(w http.ResponseWriter, r *http.Req
 		MaxConcurrentSessions     int    `json:"max_concurrent_sessions,omitempty"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -160,22 +173,23 @@ func (h *AdminHandler) HandleAdminUpdateAgent(w http.ResponseWriter, r *http.Req
 	switch req.Action {
 	case "disable":
 		if err := h.svc.SetAgentStatus(ctx, req.AgentID, true); err != nil {
-			httpapi.WriteError(w, http.StatusNotFound, err.Error())
+			httpapi.WriteError(w, http.StatusNotFound, "agent not found")
 			return
 		}
 	case "enable":
 		if err := h.svc.SetAgentStatus(ctx, req.AgentID, false); err != nil {
-			httpapi.WriteError(w, http.StatusNotFound, err.Error())
+			httpapi.WriteError(w, http.StatusNotFound, "agent not found")
 			return
 		}
 	case "delete":
 		if err := h.svc.DeleteAgent(ctx, req.AgentID); err != nil {
-			httpapi.WriteError(w, http.StatusNotFound, err.Error())
+			httpapi.WriteError(w, http.StatusNotFound, "agent not found")
 			return
 		}
 	case "update_limits":
 		if err := h.svc.SetAgentLimits(ctx, req.AgentID, req.MaxSessionDurationMinutes, req.MaxDailySessions, req.MaxConcurrentSessions); err != nil {
-			httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+			log.Printf("[ADMIN] update agent limits failed: %v", err)
+			httpapi.WriteError(w, http.StatusInternalServerError, "failed to update agent limits")
 			return
 		}
 	case "reset_password":
@@ -183,11 +197,8 @@ func (h *AdminHandler) HandleAdminUpdateAgent(w http.ResponseWriter, r *http.Req
 			httpapi.WriteError(w, http.StatusBadRequest, "密码长度必须在6-72位之间")
 			return
 		}
-		// In an admin reset, we don't know the old password.
-		// Service.ChangePassword requires oldPassword.
-		// We'll need a way for admin to force reset password. We can add ForceResetPassword to Service.
 		if err := h.svc.ForceResetPassword(ctx, req.AgentID, req.Password); err != nil {
-			httpapi.WriteError(w, http.StatusNotFound, err.Error())
+			httpapi.WriteError(w, http.StatusNotFound, "agent not found")
 			return
 		}
 	default:
@@ -201,6 +212,9 @@ func (h *AdminHandler) HandleAdminUpdateAgent(w http.ResponseWriter, r *http.Req
 
 // HandleAdminAgentCards ...
 func (h *AdminHandler) HandleAdminAgentCards(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
 	agentID := r.URL.Query().Get("agent_id")
 	if agentID == "" {
 		httpapi.WriteError(w, http.StatusBadRequest, "agent_id is required")

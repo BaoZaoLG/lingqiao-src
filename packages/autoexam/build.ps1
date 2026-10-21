@@ -1,5 +1,5 @@
 param (
-    [string]$SourceFile = (Join-Path $PSScriptRoot "..\..\AutoExam.js"),
+    [string]$SourceFile = (Join-Path $PSScriptRoot "src\autoexam.js"),
     [string]$OutDir = (Join-Path $PSScriptRoot "dist")
 )
 
@@ -18,7 +18,12 @@ $ResolvedSourceFile = (Resolve-Path $SourceFile).Path
 $ScriptBytes = [System.IO.File]::ReadAllBytes($ResolvedSourceFile)
 
 # 1. Copy source to src/ and dist/
-Copy-Item $ResolvedSourceFile -Destination "$SrcDir\autoexam.js" -Force
+$ResolvedSrcCopy = (Resolve-Path (Join-Path $SrcDir "autoexam.js") -ErrorAction SilentlyContinue).Path
+if ($ResolvedSrcCopy -and ($ResolvedSrcCopy -ieq $ResolvedSourceFile)) {
+    # Source of truth is already in the package source directory.
+} else {
+    Copy-Item $ResolvedSourceFile -Destination "$SrcDir\autoexam.js" -Force
+}
 Copy-Item $ResolvedSourceFile -Destination "$OutDir\autoexam.bundle.js" -Force
 
 # 2. Calculate SHA256 and version metadata

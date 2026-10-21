@@ -1,0 +1,42 @@
+[Unit]
+Description=Lingqiao Java production server
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/lingqiao-java
+EnvironmentFile=/etc/lingqiao-java/lingqiao-java.env
+Environment="JAVA_OPTS=-Xms64m -Xmx384m -XX:+ExitOnOutOfMemoryError"
+ExecStartPre=/usr/bin/test -r /opt/lingqiao-java/current.jar
+ExecStartPre=/usr/bin/test -d /opt/lingqiao-java/web-dist
+ExecStart=/usr/bin/java $JAVA_OPTS -jar /opt/lingqiao-java/current.jar
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+SuccessExitStatus=143
+
+ReadWritePaths=/opt/injector-server/data
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictNamespaces=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+UMask=0077
+LimitNOFILE=65536
+MemoryMax=640M
+
+[Install]
+WantedBy=multi-user.target

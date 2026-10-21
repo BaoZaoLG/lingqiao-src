@@ -8,8 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/lingqiao/server/internal/httpapi"
 )
 
 type mockCardOps struct {
@@ -434,5 +437,61 @@ func TestAgentHandler_NegativeScenarios(t *testing.T) {
 	handler.agentAuth(handler.HandleDashboard)(w, req)
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401 Unauthorized for disabled agent session access, got %d", w.Code)
+	}
+}
+
+func TestAgentPortalHandlersRejectWrongMethod(t *testing.T) {
+	h := &AgentHandler{}
+	tests := []struct {
+		name   string
+		method string
+		call   func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "login", method: http.MethodGet, call: h.HandleLogin},
+		{name: "register", method: http.MethodGet, call: h.HandleRegister},
+		{name: "dashboard", method: http.MethodPost, call: h.HandleDashboard},
+		{name: "list cards", method: http.MethodPost, call: h.HandleListCards},
+		{name: "info", method: http.MethodPost, call: h.HandleAgentInfo},
+		{name: "generate", method: http.MethodGet, call: h.HandleGenerateCard},
+		{name: "batch", method: http.MethodGet, call: h.HandleBatchGenerate},
+		{name: "password", method: http.MethodGet, call: h.HandlePasswordChange},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "/", nil)
+			rec := httptest.NewRecorder()
+			tt.call(rec, req)
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("status=%d want %d body=%s", rec.Code, http.StatusMethodNotAllowed, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestAgentLoginRegisterRejectInvalidJSONWithoutLeak(t *testing.T) {
+	h := &AgentHandler{
+		loginLimiter: httpapi.NewRateLimiter(time.Minute, 100),
+		regLimiter:   httpapi.NewRateLimiter(time.Minute, 100),
+		pwLimiter:    httpapi.NewRateLimiter(time.Minute, 100),
+	}
+	for _, tt := range []struct {
+		name string
+		call func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "login", call: h.HandleLogin},
+		{name: "register", call: h.HandleRegister},
+		{name: "password", call: h.HandlePasswordChange},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{"))
+			rec := httptest.NewRecorder()
+			tt.call(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d want %d body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+			if strings.Contains(rec.Body.String(), "unexpected") {
+				t.Fatalf("leaked: %s", rec.Body.String())
+			}
+		})
 	}
 }

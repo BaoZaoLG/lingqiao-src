@@ -47,11 +47,12 @@ var RolePermissions = map[Role][]string{
 		"announcement.read", "announcement.write",
 		"chat.read", "chat.write",
 		"audit.read", "system.read", "admins.write",
+		"exam.read",
 	},
 	RoleOperator: {
 		"cards.read", "cards.write", "cards.bulk",
 		"sessions.read", "sessions.force_logout",
-		"audit.read",
+		"audit.read", "exam.read",
 	},
 	RoleSupport: {
 		"cards.read", "sessions.read", "sessions.force_logout",
@@ -77,4 +78,9 @@ func HasPermission(role Role, perm string) bool {
 		}
 	}
 	return false
+}
+
+func IsValidRole(role Role) bool {
+	_, ok := RolePermissions[role]
+	return ok
 }

@@ -17,7 +17,13 @@ jobs:
 
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
+
+    - name: Path / package consistency
+      shell: pwsh
+      run: |
+        python scripts/check_admin_api_paths.py
+        python scripts/check_autoexam_package.py
 
     - name: Get Version
       id: get_version
@@ -37,6 +43,61 @@ jobs:
         arch: 'win32_msvc2019'
         dir: '${{ github.workspace }}\Qt'
 
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+        cache: 'npm'
+        cache-dependency-path: server/web/package-lock.json
+
+    - name: Build Web UI
+      shell: pwsh
+      working-directory: server/web
+      run: |
+        npm ci
+        npm run check
+
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.26.3'
+        cache-dependency-path: |
+          server/go.sum
+          e2e_test/go.sum
+
+    - name: Test Go Modules
+      shell: pwsh
+      run: |
+        Push-Location server
+        go test ./...
+        Pop-Location
+
+    - name: Test Java Server
+      shell: pwsh
+      run: |
+        $mvn = Join-Path "${{ github.workspace }}" ".tools\apache-maven-3.9.11\bin\mvn.cmd"
+        if (-not (Test-Path $mvn)) { throw "Maven distribution is missing: $mvn" }
+        Push-Location server-java
+        & $mvn -B test
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        Pop-Location
+        Push-Location e2e_test
+        go test ./...
+        Pop-Location
+
+    - name: Build Go Server
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path dist\server | Out-Null
+        Push-Location server
+        go build -ldflags "-s -w" -o ..\dist\server\lingqiao-server.exe .
+        Pop-Location
+
+    - name: Build AutoExam Script
+      shell: pwsh
+      run: |
+        & .\packages\autoexam\build.ps1
+
     - name: Install WiX Toolset v4
       shell: pwsh
       run: |
@@ -46,7 +107,7 @@ jobs:
     - name: Configure CMake
       shell: pwsh
       run: |
-        cmake -S . -B build-release -G "Visual Studio 17 2022" -A Win32 -DCMAKE_PREFIX_PATH="${{ env.Qt5_DIR }}" -DAPP_VERSION="${{ env.VERSION }}"
+        cmake -S client -B build-release -G "Visual Studio 17 2022" -A Win32 -DCMAKE_PREFIX_PATH="${{ env.Qt5_DIR }}" -DAPP_VERSION="${{ env.VERSION }}"
 
     - name: Build Application
       shell: pwsh
@@ -60,29 +121,15 @@ jobs:
         $exePath = "build-release\src\Release\CX_LingQiao.exe"
         & $windeployqt --no-translations --no-opengl-sw --release $exePath
 
-    - name: Build MSI (WiX)
+    - name: Build Installer (WiX)
       shell: pwsh
       run: |
         $version = "${{ env.VERSION }}"
         $sourceDir = Resolve-Path "build-release\src\Release"
-        $outDir = "dist\installer"
-        New-Item -ItemType Directory -Force -Path $outDir
-        
-        Write-Host "Building MSI..."
-        wix build "installer\Product.wxs" -d "ProductVersion=$version" -d "SourceDir=$sourceDir" -o "$outDir\Lingqiao-$version.msi"
-
-    - name: Build Burn Bundle (WiX)
-      shell: pwsh
-      run: |
-        $version = "${{ env.VERSION }}"
-        $msiPath = Resolve-Path "dist\installer\Lingqiao-$version.msi"
-        $outDir = "dist\installer"
-        
-        Write-Host "Building Bootstrapper (Bundle)..."
-        wix build "installer\Bundle.wxs" -ext WixToolset.Bal.wixext -d "ProductVersion=$version" -d "MsiPath=$msiPath" -o "$outDir\LingqiaoSetup-$version.exe"
+        & .\installer\build_installer.ps1 -Version $version -SourceDir $sourceDir -OutputDir "dist\installer"
 
     - name: Upload Artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: Lingqiao-Installers
         path: dist\installer\*

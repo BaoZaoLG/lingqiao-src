@@ -29,6 +29,26 @@ interface SessionRecord extends JsonRecord {
   expires_at: string;
 }
 
+interface ExamRecord extends JsonRecord {
+  id: number;
+  card_code: string;
+  machine_id: string;
+  exam_id: string;
+  course_id: string;
+  class_id: string;
+  question_id: string;
+  question_text: string;
+  question_type: string;
+  options_json?: string;
+  provided_answer: string;
+  correct_answer?: string;
+  model_name: string;
+  confidence: number;
+  answer_time_ms: number;
+  fill_ok: boolean;
+  created_at: string;
+}
+
 interface CardImportReport extends JsonRecord {
   total_rows?: number;
   valid_rows?: number;
@@ -71,7 +91,8 @@ const shell = new AppShell({
   audit: () => loadAudit(1),
   agents: loadAgents,
   invites: loadInvites,
-  settings: loadHealth
+  settings: loadHealth,
+  exam: () => loadExam(1)
 });
 
 boot();
@@ -92,6 +113,7 @@ function boot(): void {
   bindAgents();
   bindInvites();
   bindAudit();
+  bindExam();
   void checkAuth();
   window.setInterval(updateServerStatus, 30000);
 }
@@ -192,6 +214,7 @@ function bindScripts(): void {
 
 function bindPayloads(): void {
   on(qs<HTMLElement>('#refreshPayloadsButton'), 'click', () => void loadPayloads());
+  on(qs<HTMLElement>('#uploadPayloadDllButton'), 'click', () => void uploadPayloadDll());
 }
 
 function bindPassword(): void {
@@ -368,7 +391,7 @@ function renderCards(): void {
 
 function filteredCards(): Card[] {
   const query = qs<HTMLInputElement>('#cardSearch').value.toUpperCase();
-  return cards.filter((card) => !query || card.code.includes(query) || String(card.note ?? '').toUpperCase().includes(query));
+  return cards.filter((card) => !query || String(card.code).toUpperCase().includes(query) || String(card.note ?? '').toUpperCase().includes(query));
 }
 
 function effectiveCardStatus(card: Card): string {
@@ -627,7 +650,7 @@ function renderImportReport(report?: CardImportReport): void {
     escapeHtml(importStatusLabel(String(item.status ?? ''))),
     escapeHtml(item.message ?? item.note ?? '-')
   ]);
-  qs<HTMLElement>('#importReport').innerHTML = `<div class="release-metrics">${summary}</div>${table(['行', '卡密', '状态', '说明'], rows, '暂无明细')}`;
+  qs<HTMLElement>('#importReport').innerHTML = `<div class="release-metrics">${summary}</div>${htmlTable(['行', '卡密', '状态', '说明'], rows, '暂无明细')}`;
 }
 
 function importStatusLabel(status: string): string {
@@ -678,7 +701,7 @@ async function loadMachines(): Promise<void> {
 async function showMachineDetail(machineID: string): Promise<void> {
   const response = await api.get<{ cards?: Card[] }>(`/admin/api/machine/cards?id=${encodeURIComponent(machineID)}`);
   qs<HTMLElement>('#machineModalTitle').innerHTML = `机器 <span class="mono">${escapeHtml(machineID).slice(0, 24)}...</span> 的卡密`;
-  qs<HTMLElement>('#machineDetailContent').innerHTML = table(['卡密', '状态', '到期', '备注'], (response.cards ?? []).map((card) => [
+  qs<HTMLElement>('#machineDetailContent').innerHTML = htmlTable(['卡密', '状态', '到期', '备注'], (response.cards ?? []).map((card) => [
     `<span class="mono">${escapeHtml(card.code)}</span>`, escapeHtml(card.status), formatDate(card.expires_at), escapeHtml(card.note ?? '-')
   ]), '无绑定卡密');
   showModal('machineModal');
@@ -859,58 +882,64 @@ function splitTargetList(value: string): string[] {
 }
 
 async function loadScriptModule(): Promise<void> {
-  const response = await api.get<JsonRecord>('/admin/api/script');
-  const script = response.script as JsonRecord | null | undefined;
+  const response = await api.get<JsonRecord>('/admin/api/scripts');
   scripts = (response.scripts as JsonRecord[] | undefined) ?? [];
-  const hasScript = Boolean(response.version || script);
-  const version = String(response.version ?? script?.version ?? '');
-  const sha = String(response.sha256 ?? script?.sha256 ?? '');
-  const content = String(response.content ?? script?.content ?? '');
-  const size = Number(response.size ?? script?.size ?? 0);
-  const updatedAt = String(response.updated_at ?? script?.updated_at ?? '');
-  selectedScriptID = String(response.active_id ?? script?.id ?? '');
-  qs<HTMLInputElement>('#scriptVersion').value = version;
-  qs<HTMLInputElement>('#scriptSha').value = sha;
-  qs<HTMLInputElement>('#scriptNote').value = String(script?.note ?? '');
-  qs<HTMLTextAreaElement>('#scriptContent').value = content;
-  qs<HTMLElement>('#scriptCurrentInfo').innerHTML = hasScript
-    ? `<div class="status-summary">
+  const active = response.active as JsonRecord | undefined;
+  selectedScriptID = String(response.active_id ?? active?.id ?? '');
+  if (active) {
+    const content = String(active.content ?? '');
+    qs<HTMLElement>('#scriptCurrentInfo').innerHTML = `<div class="status-summary">
         <span class="badge badge-active">当前启用</span>
-        <strong>v${escapeHtml(version)}</strong>
-        <span>${formatBytes(size)} · ${formatDate(updatedAt)}</span>
+        <strong>v${escapeHtml(String(active.version ?? '-'))}</strong>
+        <span>${formatBytes(Number(active.size ?? 0))} · ${formatDate(String(active.updated_at ?? ''))}</span>
         <span class="mono">${escapeHtml(selectedScriptID)}</span>
-        <span class="mono">${escapeHtml(sha)}</span>
-      </div>`
-    : '<div class="empty-state">暂无启用脚本，客户端无法从后台拉取业务 JS</div>';
+        <span class="mono">${escapeHtml(String(active.sha256 ?? ''))}</span>
+      </div>
+      <details class="script-content-viewer">
+        <summary>查看业务 JS 代码 (${formatBytes(content.length)})</summary>
+        <textarea class="code-viewer" readonly rows="20" wrap="off">${escapeHtml(content)}</textarea>
+      </details>`;
+  } else {
+    qs<HTMLElement>('#scriptCurrentInfo').innerHTML = '<div class="empty-state">暂无启用脚本，客户端无法从后台拉取业务 JS</div>';
+  }
   renderScriptList();
 }
 
 async function saveScriptModule(): Promise<void> {
-  await saveScriptModuleWithAction('save');
-}
-
-async function publishScriptModule(): Promise<void> {
-  await saveScriptModuleWithAction('');
-}
-
-async function saveScriptModuleWithAction(action: string): Promise<void> {
   const version = qs<HTMLInputElement>('#scriptVersion').value.trim();
   const note = qs<HTMLInputElement>('#scriptNote').value.trim();
   const content = qs<HTMLTextAreaElement>('#scriptContent').value.trim();
   if (!content) return toast.show('脚本内容不能为空', 'warning');
-  const response = await api.post<JsonRecord>('/admin/api/script', { version, content, note, action });
-  qs<HTMLInputElement>('#scriptVersion').value = String(response.version ?? version);
-  qs<HTMLInputElement>('#scriptSha').value = String(response.sha256 ?? '');
-  toast.show(action === 'save' ? '脚本已保存，可在列表中启用' : '脚本模块已发布');
+  const response = await api.post<JsonRecord>('/admin/api/scripts/create', { version, content, note });
+  const script = response.script as JsonRecord | undefined;
+  qs<HTMLInputElement>('#scriptVersion').value = String(script?.version ?? version);
+  qs<HTMLInputElement>('#scriptSha').value = String(script?.sha256 ?? '');
+  toast.show('脚本已保存为草稿，可在列表中启用');
+  await loadScriptModule();
+}
+
+async function publishScriptModule(): Promise<void> {
+  const version = qs<HTMLInputElement>('#scriptVersion').value.trim();
+  const note = qs<HTMLInputElement>('#scriptNote').value.trim();
+  const content = qs<HTMLTextAreaElement>('#scriptContent').value.trim();
+  if (!content) return toast.show('脚本内容不能为空', 'warning');
+  const response = await api.post<JsonRecord>('/admin/api/scripts/publish', { version, content, note });
+  const script = response.script as JsonRecord | undefined;
+  qs<HTMLInputElement>('#scriptVersion').value = String(script?.version ?? version);
+  qs<HTMLInputElement>('#scriptSha').value = String(script?.sha256 ?? '');
+  toast.show('脚本已发布并启用');
   await loadScriptModule();
 }
 
 function renderScriptList(): void {
   qs<HTMLElement>('#scriptList').innerHTML = scripts.length ? scripts.map((script) => {
     const id = String(script.id ?? '');
-    const active = Boolean(script.active);
+    const status = String(script.status ?? 'draft');
+    const active = status === 'active' || id === selectedScriptID;
     const version = String(script.version ?? '-');
     const sha = String(script.sha256 ?? '');
+    const content = String(script.content ?? '');
+    const contentSize = formatBytes(content.length);
     return `<div class="script-row ${active ? 'success-item' : ''}">
       <div>
         <strong>${escapeHtml(script.name ?? `JS ${version}`)}</strong>
@@ -918,41 +947,47 @@ function renderScriptList(): void {
         <div class="mono muted">${escapeHtml(id)}</div>
       </div>
       <div>
-        <span class="badge ${active ? 'badge-active' : 'badge-expired'}">${active ? '当前启用' : '历史版本'}</span>
+        <span class="badge ${active ? 'badge-active' : status === 'archived' ? 'badge-expired' : 'badge-info'}">${active ? '当前启用' : status === 'archived' ? '历史版本' : '草稿'}</span>
         <div class="mono muted">${escapeHtml(sha)}</div>
       </div>
       <div class="row-actions">
-        <button class="btn btn-sm btn-ghost" data-load-script="${escapeHtml(id)}">查看/编辑</button>
+        <button class="btn btn-sm btn-ghost" data-copy-script="${escapeHtml(id)}">复制为新版本</button>
         <button class="btn btn-sm btn-success" data-activate-script="${escapeHtml(id)}" ${active ? 'disabled' : ''}>启用</button>
         <button class="btn btn-sm btn-danger" data-delete-script="${escapeHtml(id)}" ${active ? 'disabled' : ''}>删除</button>
       </div>
+      <details class="script-content-viewer script-row-full">
+        <summary>查看业务 JS 代码 (${contentSize})</summary>
+        <textarea class="code-viewer" readonly rows="20" wrap="off">${escapeHtml(content)}</textarea>
+      </details>
     </div>`;
   }).join('') : emptyBlock('暂无脚本版本');
-  qsa<HTMLElement>('[data-load-script]').forEach((button) => on(button, 'click', () => void loadScriptDetail(String(button.dataset.loadScript))));
+  qsa<HTMLElement>('[data-copy-script]').forEach((button) => on(button, 'click', () => void copyScriptAsNew(String(button.dataset.copyScript))));
   qsa<HTMLElement>('[data-activate-script]').forEach((button) => on(button, 'click', () => void activateScript(String(button.dataset.activateScript))));
   qsa<HTMLElement>('[data-delete-script]').forEach((button) => on(button, 'click', () => void deleteScript(String(button.dataset.deleteScript))));
 }
 
-async function loadScriptDetail(id: string): Promise<void> {
-  const response = await api.get<JsonRecord>(`/admin/api/script?id=${encodeURIComponent(id)}`);
+async function copyScriptAsNew(id: string): Promise<void> {
+  const response = await api.get<JsonRecord>(`/admin/api/scripts/${encodeURIComponent(id)}`);
   const script = response.script as JsonRecord | undefined;
-  if (!script) return;
-  selectedScriptID = String(script.id ?? id);
-  qs<HTMLInputElement>('#scriptVersion').value = String(script.version ?? '');
-  qs<HTMLInputElement>('#scriptSha').value = String(script.sha256 ?? '');
+  if (!script) return toast.show('脚本不存在', 'error');
+  // Load content into editor as a new draft; do not carry over version/id.
+  selectedScriptID = '';
+  qs<HTMLInputElement>('#scriptVersion').value = '';
+  qs<HTMLInputElement>('#scriptSha').value = '';
   qs<HTMLInputElement>('#scriptNote').value = String(script.note ?? '');
   qs<HTMLTextAreaElement>('#scriptContent').value = String(script.content ?? '');
+  toast.show('已加载到编辑器，保存时将作为新版本');
 }
 
 async function activateScript(id: string): Promise<void> {
-  await api.post('/admin/api/script', { action: 'activate', id });
+  await api.post(`/admin/api/scripts/${encodeURIComponent(id)}/activate`, {});
   toast.show('脚本已启用');
   await loadScriptModule();
 }
 
 async function deleteScript(id: string): Promise<void> {
   if (!confirm('确认删除这个脚本版本？当前启用脚本不会被允许删除。')) return;
-  await api.post('/admin/api/script', { action: 'delete', id });
+  await api.delete(`/admin/api/scripts/${encodeURIComponent(id)}/delete`);
   if (selectedScriptID === id) selectedScriptID = '';
   toast.show('脚本已删除');
   await loadScriptModule();
@@ -1033,7 +1068,7 @@ async function loadReleaseEvents(id: string): Promise<void> {
       ${stat('安装成功', metrics.install_success ?? 0, 'success')}
       ${stat('回滚', metrics.rollback ?? 0, 'warning')}
     </div>
-    ${table(['时间', '事件', '机器', '错误'], events.map((event) => [
+    ${htmlTable(['时间', '事件', '机器', '错误'], events.map((event) => [
       formatDate(String(event.created_at ?? '')),
       escapeHtml(event.type ?? ''),
       `<span class="mono">${escapeHtml(event.machine_id ?? '-')}</span>`,
@@ -1070,7 +1105,7 @@ async function loadPayloads(): Promise<void> {
   const active = response.active as JsonRecord | null | undefined;
   qs<HTMLElement>('#payloadCurrentInfo').innerHTML = active?.payload_id
     ? `当前启用载荷：<b class="mono">${escapeHtml(active.payload_id)}</b> · ${formatBytes(Number(active.total_size ?? 0))} · ${formatDate(String(active.created_at ?? ''))}<br><span class="mono">${escapeHtml(active.exe_hash ?? '')}</span>`
-    : '暂无启用载荷，客户端只能按显式 payload_id 获取载荷';
+    : '暂无启用载荷，可上传时选择立即启用或从列表手动启用';
   renderPayloads();
 }
 
@@ -1087,7 +1122,7 @@ function renderPayloads(): void {
       <td>${formatDate(String(payload.created_at ?? ''))}</td>
       <td><button class="btn btn-sm btn-success" data-payload-action="activate" data-payload-id="${escapeHtml(id)}" ${active ? 'disabled' : ''}>启用</button> <button class="btn btn-sm btn-danger" data-payload-action="delete" data-payload-id="${escapeHtml(id)}" ${active ? 'disabled' : ''}>删除</button></td>
     </tr>`;
-  }).join('') : emptyRow(7, '暂无载荷记录');
+  }).join('') : emptyRow(7, '暂无载荷记录，请上传 DLL 载荷');
   qsa<HTMLElement>('[data-payload-action]').forEach((button) => on(button, 'click', () => void managePayload(String(button.dataset.payloadId), String(button.dataset.payloadAction))));
 }
 
@@ -1097,6 +1132,36 @@ async function managePayload(id: string, action: string): Promise<void> {
   await api.post('/admin/api/payloads/manage', { action, payload_id: id });
   toast.show(action === 'activate' ? '载荷已启用' : '载荷已删除');
   await loadPayloads();
+}
+
+async function uploadPayloadDll(): Promise<void> {
+  const fileInput = qs<HTMLInputElement>('#payloadDllFile');
+  const idInput = qs<HTMLInputElement>('#payloadIdInput');
+  const activateInput = qs<HTMLInputElement>('#payloadActivateAfterUpload');
+  const progressEl = qs<HTMLElement>('#payloadUploadProgress');
+
+  const file = fileInput.files?.[0];
+  if (!file) return toast.show('请选择 DLL 文件', 'warning');
+  if (!file.name.toLowerCase().endsWith('.dll')) return toast.show('仅支持 .dll 文件', 'warning');
+
+  const form = new FormData();
+  form.append('file', file);
+  if (idInput.value.trim()) form.append('payload_id', idInput.value.trim());
+  form.append('activate', activateInput.checked ? 'true' : 'false');
+
+  progressEl.textContent = '上传中...';
+  try {
+    await api.post<JsonRecord>('/admin/api/payloads/upload-dll', form);
+    toast.show(activateInput.checked ? '载荷已上传并启用' : '载荷已上传');
+    fileInput.value = '';
+    idInput.value = '';
+    await loadPayloads();
+    await loadControlPlaneOverview();
+  } catch (err) {
+    toast.show(messageOf(err), 'error');
+  } finally {
+    progressEl.textContent = '';
+  }
 }
 
 async function changePassword(): Promise<void> {
@@ -1205,7 +1270,7 @@ async function confirmResetAgentPassword(): Promise<void> {
 async function viewAgentCards(id: string, username: string): Promise<void> {
   const response = await api.get<{ cards?: Card[] }>(`/admin/api/agent/cards?agent_id=${encodeURIComponent(id)}`);
   qs<HTMLElement>('#agentCardsTitle').innerHTML = `代理 <span class="accent">${escapeHtml(username)}</span> 的卡密`;
-  qs<HTMLElement>('#agentCardsContent').innerHTML = table(['卡密', '状态', '到期', '机器', '备注'], (response.cards ?? []).map((card) => [
+  qs<HTMLElement>('#agentCardsContent').innerHTML = htmlTable(['卡密', '状态', '到期', '机器', '备注'], (response.cards ?? []).map((card) => [
     `<span class="mono">${escapeHtml(card.code)}</span>`, escapeHtml(card.status), formatDate(card.expires_at), card.machine_id ? `<span class="mono">${escapeHtml(card.machine_id).slice(0, 12)}...</span>` : '-', escapeHtml(card.note ?? '-')
   ]), '该代理暂无卡密');
   showModal('agentCardsModal');
@@ -1291,7 +1356,7 @@ function compactStatus(state: string, title: string, detail: string, id: string)
   </div>`;
 }
 
-function table(headers: string[], rows: string[][], emptyText: string): string {
+function htmlTable(headers: string[], rows: string[][], emptyText: string): string {
   return `<div class="table-wrap"><table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join('')}</tr>`).join('') : emptyRow(headers.length, emptyText)}</tbody></table></div>`;
 }
 
@@ -1443,4 +1508,116 @@ function setParam(params: URLSearchParams, key: string, value: string): void {
 function dateToRFC3339(value: string, endOfDay = false): string {
   if (!value) return '';
   return `${value}T${endOfDay ? '23:59:59' : '00:00:00'}+08:00`;
+}
+
+/* ── Exam Records Page ─────────────────────────────────────────────────────── */
+
+let examPage = 1;
+const examPageSize = 50;
+
+function bindExam(): void {
+  on(qs<HTMLElement>('#examRefreshButton'), 'click', () => void loadExam(examPage));
+  on(qs<HTMLElement>('#examClearFiltersButton'), 'click', () => {
+    qs<HTMLInputElement>('#examSearch').value = '';
+    qs<HTMLInputElement>('#examCardFilter').value = '';
+    void loadExam(1);
+  });
+  on(qs<HTMLElement>('#examExportButton'), 'click', () => void exportExamCSV());
+  qs<HTMLInputElement>('#examSearch').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') void loadExam(1);
+  });
+  qs<HTMLInputElement>('#examCardFilter').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') void loadExam(1);
+  });
+}
+
+async function exportExamCSV(): Promise<void> {
+  const params = new URLSearchParams();
+  const q = qs<HTMLInputElement>('#examSearch').value.trim();
+  const card = qs<HTMLInputElement>('#examCardFilter').value.trim();
+  if (q) params.set('q', q);
+  if (card) params.set('card_code', card);
+  const qs_str = params.size ? `?${params}` : '';
+  const response = await fetch(`/admin/api/exam/export${qs_str}`, { credentials: 'include' });
+  if (!response.ok) throw new ApiError(`导出失败 (HTTP ${response.status})`, response.status);
+  downloadBlob(await response.blob(), `exam_records_${new Date().toISOString().slice(0, 10)}.csv`);
+  toast.show('答题记录已导出');
+}
+
+async function loadExam(page: number): Promise<void> {
+  examPage = page;
+  const params = new URLSearchParams();
+  params.set('page', String(page));
+  params.set('page_size', String(examPageSize));
+  const q = qs<HTMLInputElement>('#examSearch').value.trim();
+  const card = qs<HTMLInputElement>('#examCardFilter').value.trim();
+  if (q) params.set('q', q);
+  if (card) params.set('card_code', card);
+
+  try {
+    const [data, stats] = await Promise.all([
+      api.get<{ records?: ExamRecord[]; total?: number }>(`/admin/api/exam/records?${params}`),
+      api.get<{ total?: number; filled?: number; correct?: number }>('/admin/api/exam/stats')
+    ]);
+
+    const records = data.records ?? [];
+    const total = data.total ?? 0;
+
+    // Render stats
+    qs<HTMLElement>('#examStats').innerHTML = `
+      <div class="stat-card"><span class="stat-value">${stats.total ?? 0}</span><span class="stat-label">总答题</span></div>
+      <div class="stat-card"><span class="stat-value">${stats.filled ?? 0}</span><span class="stat-label">成功填充</span></div>
+      <div class="stat-card"><span class="stat-value">${stats.correct ?? 0}</span><span class="stat-label">正确答案</span></div>
+      <div class="stat-card"><span class="stat-value">${total}</span><span class="stat-label">当前筛选</span></div>
+    `;
+
+    // Render table
+    qs<HTMLElement>('#examTable').innerHTML = records.length
+      ? records.map(renderExamRow).join('')
+      : emptyRow(8, '暂无答题记录');
+
+    // Render pagination
+    const totalPages = Math.ceil(total / examPageSize) || 1;
+    qs<HTMLElement>('#examPagination').innerHTML = renderExamPagination(page, totalPages);
+    qsa<HTMLElement>('[data-exam-page]').forEach((button) => {
+      on(button, 'click', () => void loadExam(Number(button.dataset.examPage)));
+    });
+  } catch (error) {
+    toast.show(messageOf(error), 'error');
+  }
+}
+
+function renderExamRow(rec: ExamRecord): string {
+  const text = rec.question_text || '';
+  const truncated = text.length > 60 ? text.slice(0, 60) + '…' : text;
+  const fillBadge = rec.fill_ok
+    ? '<span class="badge badge-active">成功</span>'
+    : '<span class="badge badge-expired">失败</span>';
+  const timeMs = rec.answer_time_ms || 0;
+  const timeStr = timeMs > 0 ? (timeMs >= 1000 ? `${(timeMs / 1000).toFixed(1)}s` : `${timeMs}ms`) : '-';
+  return `<tr>
+    <td>${formatDate(rec.created_at)}</td>
+    <td><span class="mono">${escapeHtml(rec.card_code).slice(0, 8)}...</span></td>
+    <td>${escapeHtml(rec.question_type || '-')}</td>
+    <td title="${escapeHtml(text)}">${escapeHtml(truncated)}</td>
+    <td>${escapeHtml(rec.provided_answer || '-')}</td>
+    <td><span class="mono">${escapeHtml(rec.model_name || '-')}</span></td>
+    <td>${timeStr}</td>
+    <td>${fillBadge}</td>
+  </tr>`;
+}
+
+function renderExamPagination(current: number, total: number): string {
+  if (total <= 1) return '';
+  const pages: string[] = [];
+  if (current > 1) pages.push(`<button class="btn btn-sm btn-ghost" data-exam-page="${current - 1}">上一页</button>`);
+  const start = Math.max(1, current - 3);
+  const end = Math.min(total, current + 3);
+  for (let i = start; i <= end; i++) {
+    pages.push(i === current
+      ? `<button class="btn btn-sm btn-primary" data-exam-page="${i}">${i}</button>`
+      : `<button class="btn btn-sm btn-ghost" data-exam-page="${i}">${i}</button>`);
+  }
+  if (current < total) pages.push(`<button class="btn btn-sm btn-ghost" data-exam-page="${current + 1}">下一页</button>`);
+  return pages.join(' ');
 }

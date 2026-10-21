@@ -10,13 +10,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/lingqiao/server/internal/audit"
-	"github.com/lingqiao/server/internal/auth"
-	"github.com/lingqiao/server/internal/features/cards"
-	"github.com/lingqiao/server/internal/features/sessions"
-	"github.com/lingqiao/server/internal/httpapi"
-	"github.com/lingqiao/server/internal/utils"
-
 	"io"
 	"log"
 	"net/http"
@@ -25,6 +18,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lingqiao/server/internal/audit"
+	"github.com/lingqiao/server/internal/auth"
+	"github.com/lingqiao/server/internal/features/cards"
+	"github.com/lingqiao/server/internal/features/sessions"
+	"github.com/lingqiao/server/internal/httpapi"
+	"github.com/lingqiao/server/internal/utils"
 )
 
 type Handler struct {
@@ -35,7 +35,7 @@ type Handler struct {
 	auditSink   func(audit.Event)
 }
 
-func NewHandler(store *PayloadStore, sessionsSvc *sessions.Service, dataDir string) *Handler {
+func NewHandler(store *PayloadStore, sessionsSvc *sessions.Service, dataDir string) (*Handler, error) {
 	key := os.Getenv("UPLOAD_KEY")
 	if key == "" {
 		keyPath := filepath.Join(dataDir, "upload_key")
@@ -44,14 +44,21 @@ func NewHandler(store *PayloadStore, sessionsSvc *sessions.Service, dataDir stri
 		}
 		if key == "" {
 			b := make([]byte, 24)
-			rand.Read(b)
+			if _, err := rand.Read(b); err != nil {
+				return nil, fmt.Errorf("failed to generate upload key: %w", err)
+			}
 			key = hex.EncodeToString(b)
 			os.MkdirAll(dataDir, 0755)
-			os.WriteFile(keyPath, []byte(key), 0600)
+			if err := os.WriteFile(keyPath, []byte(key), 0600); err != nil {
+				return nil, fmt.Errorf("failed to save upload key: %w", err)
+			}
 			log.Printf("[PAYLOAD] Generated upload key and saved to %s", keyPath)
 		}
 	}
-	return &Handler{store: store, sessionsSvc: sessionsSvc, dataDir: dataDir, uploadKey: key}
+	if key == "" {
+		return nil, fmt.Errorf("upload key is empty")
+	}
+	return &Handler{store: store, sessionsSvc: sessionsSvc, dataDir: dataDir, uploadKey: key}, nil
 }
 
 func (h *Handler) SetAuditSink(auditSink func(audit.Event)) {
@@ -89,7 +96,7 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		Chunks     []string `json:"chunks"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
 
@@ -98,18 +105,17 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sanitize payload ID — reject path traversal
-	if strings.ContainsAny(req.PayloadID, "/\\..") || len(req.PayloadID) > 64 {
+	if err := validatePayloadID(req.PayloadID); err != nil {
 		httpapi.WriteError(w, http.StatusBadRequest, "invalid payload_id")
 		return
 	}
 
 	if _, _, _, err := decodePayloadKeyMaterial(req.AesKey, req.HmacKey, req.IV); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid key material")
 		return
 	}
 	if _, err := decodeFixedHex("exe_hash", req.ExeHash, 32); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid exe_hash")
 		return
 	}
 	if req.ChunkCount != len(req.Chunks) {
@@ -130,7 +136,7 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	for i, chunkB64 := range req.Chunks {
 		chunkData, err := base64.StdEncoding.DecodeString(chunkB64)
 		if err != nil {
-			httpapi.WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid chunk %d: %v", i, err))
+			httpapi.WriteError(w, http.StatusBadRequest, fmt.Sprintf("invalid chunk %d", i))
 			return
 		}
 		if len(chunkData) == 0 {
@@ -153,17 +159,6 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chunkDir := filepath.Join(h.dataDir, "payloads", req.PayloadID)
-	os.MkdirAll(chunkDir, 0755)
-
-	for i, chunkData := range decodedChunks {
-		chunkPath := filepath.Join(chunkDir, fmt.Sprintf("chunk_%04d.bin", i))
-		if err := os.WriteFile(chunkPath, chunkData, 0600); err != nil {
-			httpapi.WriteError(w, http.StatusInternalServerError, "failed to save chunk")
-			return
-		}
-	}
-
 	info := &PayloadInfo{
 		PayloadID:  req.PayloadID,
 		AesKey:     req.AesKey,
@@ -175,7 +170,16 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		TotalSize:  actualTotal,
 		CreatedAt:  time.Now(),
 	}
-	h.store.Add(info)
+
+	if err := savePayloadChunks(h.dataDir, info, decodedChunks); err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to save payload")
+		return
+	}
+	if err := h.store.Add(info); err != nil {
+		_ = os.RemoveAll(filepath.Join(h.dataDir, "payloads", req.PayloadID))
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to persist payload metadata")
+		return
+	}
 	h.recordPayloadAudit("payload_uploaded", info, "")
 
 	log.Printf("[PAYLOAD] Uploaded: id=%s chunks=%d size=%d", req.PayloadID, len(decodedChunks), actualTotal)
@@ -184,6 +188,83 @@ func (h *Handler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		"payload_id":  req.PayloadID,
 		"chunk_count": len(decodedChunks),
 	})
+}
+
+// HandleAdminDLLUpload accepts a raw DLL from the admin panel, encrypts/chunks it, and optionally activates it.
+func (h *Handler) HandleAdminDLLUpload(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+
+	if err := r.ParseMultipartForm(200 << 20); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, "failed to parse multipart form")
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, "file is required")
+		return
+	}
+	defer file.Close()
+
+	if !strings.HasSuffix(strings.ToLower(header.Filename), ".dll") {
+		httpapi.WriteError(w, http.StatusBadRequest, "only .dll payloads are supported")
+		return
+	}
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, "failed to read file")
+		return
+	}
+
+	if !isPEPayload(data) {
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid DLL payload")
+		return
+	}
+
+	payloadID := r.FormValue("payload_id")
+	if payloadID == "" {
+		payloadID = generatePayloadID()
+	}
+	if err := validatePayloadID(payloadID); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid payload_id")
+		return
+	}
+	if h.store.Get(payloadID) != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, "payload_id already exists")
+		return
+	}
+
+	info, chunks, err := PackPlainDLL(payloadID, data, defaultChunkSize)
+	if err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, "failed to pack dll payload")
+		return
+	}
+
+	if err := savePayloadChunks(h.dataDir, info, chunks); err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to save payload")
+		return
+	}
+	if err := h.store.Add(info); err != nil {
+		_ = os.RemoveAll(filepath.Join(h.dataDir, "payloads", payloadID))
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to persist payload metadata")
+		return
+	}
+	h.recordPayloadAudit("payload_uploaded", info, "")
+
+	activate := r.FormValue("activate") == "true" || r.FormValue("activate") == "1"
+	if activate {
+		if err := h.store.SetActive(payloadID); err != nil {
+			httpapi.WriteError(w, http.StatusInternalServerError, "failed to activate payload")
+			return
+		}
+		h.recordPayloadAudit("payload_activated", info, "")
+	}
+
+	log.Printf("[PAYLOAD] Admin DLL uploaded: id=%s chunks=%d size=%d activate=%v", payloadID, info.ChunkCount, info.TotalSize, activate)
+	httpapi.WriteOK(w, map[string]interface{}{"payload": payloadSummaryFromInfo(h.store.Get(payloadID))})
 }
 
 func (h *Handler) HandleAdminList(w http.ResponseWriter, r *http.Request) {
@@ -219,13 +300,13 @@ func (h *Handler) HandleAdminManage(w http.ResponseWriter, r *http.Request) {
 		PayloadID string `json:"payload_id"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	switch req.Action {
 	case "activate":
 		if err := h.store.SetActive(req.PayloadID); err != nil {
-			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+			httpapi.WriteError(w, http.StatusBadRequest, "failed to activate payload")
 			return
 		}
 		info := h.store.Get(req.PayloadID)
@@ -234,10 +315,12 @@ func (h *Handler) HandleAdminManage(w http.ResponseWriter, r *http.Request) {
 	case "delete":
 		info := h.store.Get(req.PayloadID)
 		if err := h.store.Delete(req.PayloadID); err != nil {
-			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+			httpapi.WriteError(w, http.StatusBadRequest, "failed to delete payload")
 			return
 		}
-		_ = os.RemoveAll(filepath.Join(h.dataDir, "payloads", req.PayloadID))
+		if err := os.RemoveAll(filepath.Join(h.dataDir, "payloads", req.PayloadID)); err != nil {
+			log.Printf("[PAYLOAD] metadata deleted but payload files remain for id=%s: %v", req.PayloadID, err)
+		}
 		h.recordPayloadAudit("payload_deleted", info, "")
 		httpapi.WriteOK(w, nil)
 	default:
@@ -247,6 +330,10 @@ func (h *Handler) HandleAdminManage(w http.ResponseWriter, r *http.Request) {
 
 // HandlePayloadInfo returns metadata about a payload (requires HMAC auth).
 func (h *Handler) HandlePayloadInfo(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+
 	if err := auth.VerifyRequest(r, r.URL.Path); err != nil {
 		httpapi.WriteError(w, http.StatusUnauthorized, "missing auth")
 		return
@@ -305,6 +392,10 @@ func payloadSummaryFromInfo(info *PayloadInfo) *PayloadSummary {
 
 // HandleChunkDownload serves a single chunk.
 func (h *Handler) HandleChunkDownload(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+
 	parts := splitPayloadPath(r.URL.Path)
 	if len(parts) < 2 {
 		httpapi.WriteError(w, http.StatusBadRequest, "invalid path")
@@ -313,8 +404,7 @@ func (h *Handler) HandleChunkDownload(w http.ResponseWriter, r *http.Request) {
 	payloadID := parts[0]
 	chunkIdxStr := parts[1]
 
-	// Sanitize payload ID — reject path traversal
-	if strings.ContainsAny(payloadID, "/\\..") || len(payloadID) > 64 {
+	if err := validatePayloadID(payloadID); err != nil {
 		httpapi.WriteError(w, http.StatusBadRequest, "invalid payload_id")
 		return
 	}
@@ -418,7 +508,11 @@ func (h *Handler) HandleKeyExchange(w http.ResponseWriter, r *http.Request) {
 
 	// Encrypt combined key material with KEK using AES-256-CBC
 	encIV := make([]byte, 16)
-	rand.Read(encIV)
+	if _, err := rand.Read(encIV); err != nil {
+		log.Printf("[KEY-EXCHANGE] Failed to generate IV: %v", err)
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to generate IV")
+		return
+	}
 
 	block, err := aes.NewCipher(kek)
 	if err != nil {
@@ -471,6 +565,12 @@ func decodePayloadKeyMaterial(aesKey, hmacKey, iv string) ([]byte, []byte, []byt
 		return nil, nil, nil, err
 	}
 	return aesKeyBytes, hmacKeyBytes, ivBytes, nil
+}
+
+// DecodePayloadKeyMaterialForServer exposes the same validation used by the
+// payload handlers for server-side consumers that need to read active payloads.
+func DecodePayloadKeyMaterialForServer(aesKey, hmacKey, iv string) ([]byte, []byte, []byte, error) {
+	return decodePayloadKeyMaterial(aesKey, hmacKey, iv)
 }
 
 func decodeFixedHex(name, value string, wantBytes int) ([]byte, error) {

@@ -52,6 +52,9 @@ ApiError ApiClient::parseError(const ApiResult& rawResp, const QJsonObject& defa
         } else if (rawResp.statusCode == 403) {
             err.category = ApiErrorCategory::Business;
             err.detail = obj.contains("detail") ? obj["detail"].toString() : obj["message"].toString(QString::fromUtf8("权限拒绝"));
+        } else if (rawResp.statusCode == 405) {
+            err.category = ApiErrorCategory::Http;
+            err.detail = QString::fromUtf8("请求方法不匹配 (HTTP 405)：请确认当前客户端构建产物使用 POST 激活接口，并且服务器/反向代理已部署最新路由");
         } else {
             err.category = ApiErrorCategory::Http;
             err.detail = QString::fromUtf8("请求失败 (HTTP %1)").arg(rawResp.statusCode);

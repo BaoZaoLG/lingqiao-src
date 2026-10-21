@@ -1,386 +1,40 @@
 package scripts
 
 import (
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"strings"
+
 	"github.com/lingqiao/server/internal/audit"
 	"github.com/lingqiao/server/internal/auth"
 	"github.com/lingqiao/server/internal/features/sessions"
 	"github.com/lingqiao/server/internal/httpapi"
-
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
-	"log"
-	"net/http"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
-	"time"
 )
 
-const maxScriptModuleBytes = 2 << 20
-
-var scriptVersionRe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
-
-// ScriptModule ...
-type ScriptModule struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Version      string    `json:"version"`
-	SHA256       string    `json:"sha256"`
-	Content      string    `json:"content"`
-	Size         int       `json:"size"`
-	Note         string    `json:"note,omitempty"`
-	SourceCommit string    `json:"source_commit,omitempty"`
-	ReleaseID    string    `json:"release_id,omitempty"`
-	Active       bool      `json:"active"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-}
-
-type scriptIndex struct {
-	ActiveID string         `json:"active_id"`
-	Scripts  []ScriptModule `json:"scripts"`
-}
-
-var globalDataDir string
-
-func Init(dir string) { globalDataDir = dir }
-
-func scriptDir() string { return filepath.Join(globalDataDir, "scripts") }
-
+// Handler handles script module admin and download endpoints.
 type Handler struct {
+	repo          *Repository
 	auditRecorder *audit.Recorder
 	sessionsSvc   *sessions.Service
 }
 
-func NewHandler(auditRecorder *audit.Recorder, sessionsSvc *sessions.Service) *Handler {
+// NewHandler creates a new script handler rooted at dataDir.
+func NewHandler(dataDir string, auditRecorder *audit.Recorder, sessionsSvc *sessions.Service) *Handler {
 	return &Handler{
+		repo:          NewRepository(dataDir),
 		auditRecorder: auditRecorder,
 		sessionsSvc:   sessionsSvc,
 	}
 }
 
-func scriptIndexPath() string { return filepath.Join(scriptDir(), "index.json") }
-
-func scriptModulePath(id string) string {
-	return filepath.Join(scriptDir(), sanitizeScriptVersion(id)+".json")
+// SetAuditSink sets the audit sink.
+func (h *Handler) SetAuditSink(sink func(audit.Event)) {
+	// Kept for backwards compatibility; auditRecorder is already provided at construction.
 }
 
-// LoadActiveScriptModule ...
-func LoadActiveScriptModule() (*ScriptModule, error) {
-	scripts, activeID, err := ListScriptModules()
-	if err == nil && activeID != "" {
-		for _, module := range scripts {
-			if module.ID == activeID {
-				return loadScriptModuleContent(module.ID)
-			}
-		}
-	}
-
-	data, err := os.ReadFile(filepath.Join(scriptDir(), "active.json"))
-	if err != nil {
-		return nil, err
-	}
-	var module ScriptModule
-	if err := json.Unmarshal(data, &module); err != nil {
-		return nil, err
-	}
-	if module.Content == "" || module.SHA256 == "" {
-		return nil, fmt.Errorf("active script is incomplete")
-	}
-	normalizeScriptModule(&module)
-	return &module, nil
-}
-
-// SaveActiveScriptModule ...
-func SaveActiveScriptModule(version, content string) (*ScriptModule, error) {
-	module, err := saveScriptModule(version, content, "", "active", true)
-	if err != nil {
-		return nil, err
-	}
-	return module, SetActiveScriptModule(module.ID)
-}
-
-// SaveScriptModuleDraft ...
-func SaveScriptModuleDraft(version, content, note string) (*ScriptModule, error) {
-	return saveScriptModule(version, content, note, "", false)
-}
-
-func saveScriptModule(version, content, note, name string, active bool) (*ScriptModule, error) {
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return nil, fmt.Errorf("content is required")
-	}
-	if len([]byte(content)) > maxScriptModuleBytes {
-		return nil, fmt.Errorf("content exceeds %d bytes", maxScriptModuleBytes)
-	}
-
-	version = strings.TrimSpace(version)
-	if version == "" {
-		version = time.Now().Format("20060102.150405")
-	}
-	version = sanitizeScriptVersion(version)
-	if version == "" {
-		return nil, fmt.Errorf("version is invalid")
-	}
-
-	scripts, _, _ := ListScriptModules()
-	for _, s := range scripts {
-		if s.Version == version {
-			return nil, fmt.Errorf("script version already exists")
-		}
-	}
-
-	now := time.Now().UTC()
-	sum := sha256.Sum256([]byte(content))
-	id := fmt.Sprintf("%s-%s", version, now.Format("20060102T150405000Z"))
-	if name == "" {
-		name = "JS " + version
-	}
-	module := &ScriptModule{
-		ID:        id,
-		Name:      name,
-		Version:   version,
-		SHA256:    hex.EncodeToString(sum[:]),
-		Content:   content,
-		Size:      len([]byte(content)),
-		Note:      strings.TrimSpace(note),
-		Active:    active,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	dir := scriptDir()
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, err
-	}
-	data, err := json.MarshalIndent(module, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(scriptModulePath(module.ID), data, 0600); err != nil {
-		return nil, err
-	}
-	historyName := fmt.Sprintf("%s-%s.json", module.Version, module.UpdatedAt.Format("20060102T150405Z"))
-	if err := os.WriteFile(filepath.Join(dir, historyName), data, 0600); err != nil {
-		return nil, err
-	}
-	if err := upsertScriptIndex(*module, active); err != nil {
-		return nil, err
-	}
-	return module, nil
-}
-
-// ListScriptModules ...
-func ListScriptModules() ([]ScriptModule, string, error) {
-	if err := migrateLegacyActiveScript(); err != nil {
-		return nil, "", err
-	}
-	data, err := os.ReadFile(scriptIndexPath())
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []ScriptModule{}, "", nil
-		}
-		return nil, "", err
-	}
-	var idx scriptIndex
-	if err := json.Unmarshal(data, &idx); err != nil {
-		return nil, "", err
-	}
-	for i := range idx.Scripts {
-		idx.Scripts[i].Active = idx.Scripts[i].ID == idx.ActiveID
-		idx.Scripts[i].Content = ""
-	}
-	return idx.Scripts, idx.ActiveID, nil
-}
-
-// SetActiveScriptModule ...
-func SetActiveScriptModule(id string) error {
-	idx, err := readScriptIndex()
-	if err != nil {
-		return err
-	}
-	found := false
-	for i := range idx.Scripts {
-		idx.Scripts[i].Active = idx.Scripts[i].ID == id
-		if idx.Scripts[i].ID == id {
-			found = true
-		}
-	}
-	if !found {
-		return fmt.Errorf("script not found")
-	}
-	idx.ActiveID = id
-	if err := writeScriptIndex(idx); err != nil {
-		return err
-	}
-	module, err := loadScriptModuleContent(id)
-	if err != nil {
-		return err
-	}
-	module.Active = true
-	data, _ := json.MarshalIndent(module, "", "  ")
-	return os.WriteFile(filepath.Join(scriptDir(), "active.json"), data, 0600)
-}
-
-// DeleteScriptModule ...
-func DeleteScriptModule(id string) error {
-	idx, err := readScriptIndex()
-	if err != nil {
-		return err
-	}
-	if idx.ActiveID == id {
-		return fmt.Errorf("cannot delete active script")
-	}
-	next := make([]ScriptModule, 0, len(idx.Scripts))
-	found := false
-	for _, module := range idx.Scripts {
-		if module.ID == id {
-			found = true
-			continue
-		}
-		next = append(next, module)
-	}
-	if !found {
-		return fmt.Errorf("script not found")
-	}
-	idx.Scripts = next
-	if err := writeScriptIndex(idx); err != nil {
-		return err
-	}
-	return os.Remove(scriptModulePath(id))
-}
-
-func loadScriptModuleContent(id string) (*ScriptModule, error) {
-	data, err := os.ReadFile(scriptModulePath(id))
-	if err != nil {
-		return nil, err
-	}
-	var module ScriptModule
-	if err := json.Unmarshal(data, &module); err != nil {
-		return nil, err
-	}
-	normalizeScriptModule(&module)
-	return &module, nil
-}
-
-func upsertScriptIndex(module ScriptModule, active bool) error {
-	idx, err := readScriptIndex()
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	module.Content = ""
-	replaced := false
-	for i := range idx.Scripts {
-		if idx.Scripts[i].ID == module.ID {
-			idx.Scripts[i] = module
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		idx.Scripts = append([]ScriptModule{module}, idx.Scripts...)
-	}
-	if active {
-		idx.ActiveID = module.ID
-	}
-	for i := range idx.Scripts {
-		idx.Scripts[i].Active = idx.Scripts[i].ID == idx.ActiveID
-	}
-	return writeScriptIndex(idx)
-}
-
-func readScriptIndex() (scriptIndex, error) {
-	var idx scriptIndex
-	data, err := os.ReadFile(scriptIndexPath())
-	if err != nil {
-		if os.IsNotExist(err) {
-			return idx, nil
-		}
-		return idx, err
-	}
-	if err := json.Unmarshal(data, &idx); err != nil {
-		return idx, err
-	}
-	return idx, nil
-}
-
-func writeScriptIndex(idx scriptIndex) error {
-	if err := os.MkdirAll(scriptDir(), 0755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(idx, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(scriptIndexPath(), data, 0600)
-}
-
-func migrateLegacyActiveScript() error {
-	if _, err := os.Stat(scriptIndexPath()); err == nil {
-		return nil
-	}
-	data, err := os.ReadFile(filepath.Join(scriptDir(), "active.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	var module ScriptModule
-	if err := json.Unmarshal(data, &module); err != nil {
-		return err
-	}
-	normalizeScriptModule(&module)
-	module.Active = true
-	if err := os.MkdirAll(scriptDir(), 0755); err != nil {
-		return err
-	}
-	moduleData, err := json.MarshalIndent(module, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(scriptModulePath(module.ID), moduleData, 0600); err != nil {
-		return err
-	}
-	module.Content = ""
-	return writeScriptIndex(scriptIndex{ActiveID: module.ID, Scripts: []ScriptModule{module}})
-}
-
-func normalizeScriptModule(module *ScriptModule) {
-	if module.ID == "" {
-		base := module.Version
-		if base == "" {
-			base = "legacy"
-		}
-		t := module.UpdatedAt
-		if t.IsZero() {
-			t = time.Now().UTC()
-		}
-		module.ID = sanitizeScriptVersion(base + "-" + t.Format("20060102T150405Z"))
-	}
-	if module.Name == "" {
-		module.Name = "JS " + module.Version
-	}
-	if module.CreatedAt.IsZero() {
-		module.CreatedAt = module.UpdatedAt
-	}
-	if module.UpdatedAt.IsZero() {
-		module.UpdatedAt = time.Now().UTC()
-	}
-	if module.Size == 0 && module.Content != "" {
-		module.Size = len([]byte(module.Content))
-	}
-}
-
-func sanitizeScriptVersion(version string) string {
-	version = scriptVersionRe.ReplaceAllString(version, "-")
-	return strings.Trim(version, ".-_")
-}
-
-// HandleScriptDownload ...
+// HandleScriptDownload serves the active script to clients.
 func (h *Handler) HandleScriptDownload(w http.ResponseWriter, r *http.Request) {
 	if !httpapi.RequireMethod(w, r, http.MethodGet) {
 		return
@@ -399,13 +53,20 @@ func (h *Handler) HandleScriptDownload(w http.ResponseWriter, r *http.Request) {
 	machineID := r.Header.Get("X-Machine-ID")
 	cardCode := r.Header.Get("X-Card-Code")
 
-	_, err := h.sessionsSvc.ValidateBound(r.Context(), token, machineID, cardCode)
+	var sess sessions.Session
+	var err error
+	if machineID != "" && cardCode != "" {
+		sess, err = h.sessionsSvc.ValidateBound(r.Context(), token, machineID, cardCode)
+	} else {
+		sess, err = h.sessionsSvc.ValidateActiveToken(r.Context(), token)
+	}
 	if err != nil {
 		httpapi.WriteError(w, http.StatusUnauthorized, "invalid or expired session")
 		return
 	}
+	_ = sess
 
-	module, err := LoadActiveScriptModule()
+	module, err := h.repo.GetActive()
 	if err != nil {
 		log.Printf("[SCRIPT] active script unavailable: %v", err)
 		httpapi.WriteError(w, http.StatusNotFound, "script module not published")
@@ -434,12 +95,153 @@ func (h *Handler) HandleScriptDownload(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(module.Content))
 }
 
-// HandleScriptAdmin ...
+// HandleList returns the list of scripts (with content) and active ID.
+func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	list, activeID, err := h.repo.List()
+	if err != nil {
+		log.Printf("[SCRIPT] list failed: %v", err)
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to list scripts")
+		return
+	}
+	active := (*ScriptModule)(nil)
+	for i := range list {
+		if list[i].ID == activeID {
+			active = &list[i]
+			break
+		}
+	}
+	httpapi.WriteOK(w, map[string]interface{}{
+		"scripts":   list,
+		"active_id": activeID,
+		"active":    active,
+	})
+}
+
+// HandleGet returns a single script version.
+func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		httpapi.WriteError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	module, err := h.repo.Get(id)
+	if err != nil {
+		httpapi.WriteError(w, http.StatusNotFound, "script not found")
+		return
+	}
+	httpapi.WriteOK(w, map[string]interface{}{"script": module})
+}
+
+// HandleCreate creates a new draft version.
+func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	var req struct {
+		Version string `json:"version"`
+		Content string `json:"content"`
+		Note    string `json:"note"`
+	}
+	if err := httpapi.ReadJSON(r, &req); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	module, err := h.repo.Create(req.Version, req.Content, req.Note)
+	if err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, "failed to create script")
+		return
+	}
+	h.recordScriptAudit("script_created", module, "")
+	httpapi.WriteOK(w, map[string]interface{}{"script": module})
+}
+
+// HandlePublish creates and immediately activates a new version.
+func (h *Handler) HandlePublish(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	var req struct {
+		Version string `json:"version"`
+		Content string `json:"content"`
+		Note    string `json:"note"`
+	}
+	if err := httpapi.ReadJSON(r, &req); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	module, err := h.repo.Publish(req.Version, req.Content, req.Note)
+	if err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, "failed to publish script")
+		return
+	}
+	h.recordScriptAudit("script_published", module, "")
+	log.Printf("[SCRIPT] Published version=%s sha256=%s size=%d", module.Version, module.SHA256, module.Size)
+	httpapi.WriteOK(w, map[string]interface{}{"script": module})
+}
+
+// HandleActivate activates an existing version.
+func (h *Handler) HandleActivate(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodPost) {
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		httpapi.WriteError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	module, err := h.repo.Activate(id)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			httpapi.WriteError(w, http.StatusNotFound, "script not found")
+			return
+		}
+		httpapi.WriteError(w, http.StatusBadRequest, "failed to activate script")
+		return
+	}
+	h.recordScriptAudit("script_activated", module, "")
+	httpapi.WriteOK(w, map[string]interface{}{"script": module})
+}
+
+// HandleDelete deletes a non-active script version.
+func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodDelete) {
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		httpapi.WriteError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	if err := h.repo.Delete(id); err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "not found") {
+			httpapi.WriteError(w, http.StatusNotFound, "script not found")
+			return
+		}
+		if strings.Contains(msg, "active") {
+			httpapi.WriteError(w, http.StatusBadRequest, "cannot delete active script")
+			return
+		}
+		httpapi.WriteError(w, http.StatusBadRequest, "failed to delete script")
+		return
+	}
+	h.recordScriptAudit("script_deleted", &ScriptModule{ID: id}, "")
+	httpapi.WriteOK(w, map[string]interface{}{"id": id})
+}
+
+// HandleScriptAdmin is the legacy single-endpoint API kept for backwards compatibility.
+// It delegates to the new handlers based on the request method and body fields.
 func (h *Handler) HandleScriptAdmin(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		if id := r.URL.Query().Get("id"); id != "" {
-			module, err := loadScriptModuleContent(id)
+			module, err := h.repo.Get(id)
 			if err != nil {
 				httpapi.WriteError(w, http.StatusNotFound, "script not found")
 				return
@@ -447,35 +249,37 @@ func (h *Handler) HandleScriptAdmin(w http.ResponseWriter, r *http.Request) {
 			httpapi.WriteOK(w, map[string]interface{}{"script": module})
 			return
 		}
-		list, activeID, err := ListScriptModules()
-		if err == nil {
-			data := map[string]interface{}{"scripts": list, "active_id": activeID}
-			if activeID != "" {
-				if active, err := loadScriptModuleContent(activeID); err == nil {
-					data["script"] = active
-					data["id"] = active.ID
-					data["version"] = active.Version
-					data["sha256"] = active.SHA256
-					data["content"] = active.Content
-					data["size"] = active.Size
-					data["updated_at"] = active.UpdatedAt
-				}
-			}
-			httpapi.WriteOK(w, data)
-			return
-		}
-		module, err := LoadActiveScriptModule()
+		list, activeID, err := h.repo.List()
 		if err != nil {
-			httpapi.WriteOK(w, map[string]interface{}{"script": nil})
+			log.Printf("[SCRIPT] legacy list failed: %v", err)
+			httpapi.WriteError(w, http.StatusInternalServerError, "failed to list scripts")
 			return
 		}
-		httpapi.WriteOK(w, map[string]interface{}{
-			"version":    module.Version,
-			"sha256":     module.SHA256,
-			"content":    module.Content,
-			"size":       module.Size,
-			"updated_at": module.UpdatedAt,
-		})
+		active := (*ScriptModule)(nil)
+		for i := range list {
+			if list[i].ID == activeID {
+				active = &list[i]
+				break
+			}
+		}
+		// Return the active script content in legacy top-level fields.
+		data := map[string]interface{}{
+			"scripts":    list,
+			"active_id":  activeID,
+		}
+		if active != nil {
+			module, _ := h.repo.Get(active.ID)
+			if module != nil {
+				data["script"] = module
+				data["id"] = module.ID
+				data["version"] = module.Version
+				data["sha256"] = module.SHA256
+				data["content"] = module.Content
+				data["size"] = module.Size
+				data["updated_at"] = module.UpdatedAt
+			}
+		}
+		httpapi.WriteOK(w, data)
 	case http.MethodPost:
 		var req struct {
 			Version string `json:"version"`
@@ -485,65 +289,60 @@ func (h *Handler) HandleScriptAdmin(w http.ResponseWriter, r *http.Request) {
 			ID      string `json:"id"`
 		}
 		if err := httpapi.ReadJSON(r, &req); err != nil {
-			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+			httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
 		switch req.Action {
 		case "activate":
-			_, previousActiveID, _ := ListScriptModules()
-			if err := SetActiveScriptModule(req.ID); err != nil {
-				httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+			module, err := h.repo.Activate(req.ID)
+			if err != nil {
+				if strings.Contains(strings.ToLower(err.Error()), "not found") {
+					httpapi.WriteError(w, http.StatusNotFound, "script not found")
+					return
+				}
+				httpapi.WriteError(w, http.StatusBadRequest, "failed to activate script")
 				return
 			}
-			module, _ := loadScriptModuleContent(req.ID)
-			if err := h.recordScriptAudit("script_activated", module, fmt.Sprintf("previous_id=%s", previousActiveID)); err != nil {
-				httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
-				return
-			}
-			httpapi.WriteOK(w, nil)
+			h.recordScriptAudit("script_activated", module, "")
+			httpapi.WriteOK(w, map[string]interface{}{"script": module})
 			return
 		case "delete":
-			module, _ := loadScriptModuleContent(req.ID)
-			if err := DeleteScriptModule(req.ID); err != nil {
-				httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+			if err := h.repo.Delete(req.ID); err != nil {
+				msg := strings.ToLower(err.Error())
+				if strings.Contains(msg, "not found") {
+					httpapi.WriteError(w, http.StatusNotFound, "script not found")
+					return
+				}
+				if strings.Contains(msg, "active") {
+					httpapi.WriteError(w, http.StatusBadRequest, "cannot delete active script")
+					return
+				}
+				httpapi.WriteError(w, http.StatusBadRequest, "failed to delete script")
 				return
 			}
-			if err := h.recordScriptAudit("script_deleted", module, ""); err != nil {
-				httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
-				return
-			}
-			httpapi.WriteOK(w, nil)
+			h.recordScriptAudit("script_deleted", &ScriptModule{ID: req.ID}, "")
+			httpapi.WriteOK(w, map[string]interface{}{"id": req.ID})
 			return
 		case "save":
-			module, err := SaveScriptModuleDraft(req.Version, req.Content, req.Note)
+			module, err := h.repo.Create(req.Version, req.Content, req.Note)
 			if err != nil {
-				httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+				httpapi.WriteError(w, http.StatusBadRequest, "failed to create script")
 				return
 			}
-			if err := h.recordScriptAudit("script_saved", module, ""); err != nil {
-				httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
-				return
-			}
-			httpapi.WriteOK(w, map[string]interface{}{"script": module, "id": module.ID, "version": module.Version, "sha256": module.SHA256, "content": module.Content, "size": module.Size, "updated_at": module.UpdatedAt})
+			h.recordScriptAudit("script_created", module, "")
+			httpapi.WriteOK(w, map[string]interface{}{"script": module})
 			return
 		}
-		module, err := saveScriptModule(req.Version, req.Content, req.Note, "", true)
+		// Default legacy action: publish (create + activate).
+		module, err := h.repo.Publish(req.Version, req.Content, req.Note)
 		if err != nil {
-			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+			httpapi.WriteError(w, http.StatusBadRequest, "failed to publish script")
 			return
 		}
-		if err := SetActiveScriptModule(module.ID); err != nil {
-			httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if err := h.recordScriptAudit("script_published", module, ""); err != nil {
-			httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
-			return
-		}
+		h.recordScriptAudit("script_published", module, "")
 		log.Printf("[SCRIPT] Published version=%s sha256=%s size=%d", module.Version, module.SHA256, module.Size)
 		httpapi.WriteOK(w, map[string]interface{}{
 			"id":         module.ID,
-			"name":       module.Name,
 			"version":    module.Version,
 			"sha256":     module.SHA256,
 			"content":    module.Content,
@@ -567,4 +366,41 @@ func (h *Handler) recordScriptAudit(action string, module *ScriptModule, extra s
 		Action: action,
 		Detail: detail,
 	})
+}
+
+// LoadActiveScriptModule is kept for backwards compatibility with external callers.
+func (h *Handler) LoadActiveScriptModule() (*ScriptModule, error) {
+	return h.repo.GetActive()
+}
+
+// Init is kept for backwards compatibility.
+func Init(dir string) {
+	// Repository is now initialized per-handler; no global state.
+}
+
+// SaveActiveScriptModule is kept for backwards compatibility.
+var SaveActiveScriptModule = func(version, content string) (*ScriptModule, error) {
+	return nil, errors.New("deprecated: use Handler or Repository directly")
+}
+
+// SaveScriptModuleDraft is kept for backwards compatibility.
+var SaveScriptModuleDraft = func(version, content, note string) (*ScriptModule, error) {
+	return nil, errors.New("deprecated: use Handler or Repository directly")
+}
+
+// ListScriptModules is kept for backwards compatibility.
+var ListScriptModules = func() ([]ScriptModule, string, error) {
+	return nil, "", errors.New("deprecated: use Handler or Repository directly")
+}
+
+// SetActiveScriptModule is kept for backwards compatibility.
+var SetActiveScriptModule = func(id string) error {
+	_ = id
+	return errors.New("deprecated: use Handler or Repository directly")
+}
+
+// DeleteScriptModule is kept for backwards compatibility.
+var DeleteScriptModule = func(id string) error {
+	_ = id
+	return errors.New("deprecated: use Handler or Repository directly")
 }

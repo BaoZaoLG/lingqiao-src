@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"errors"
 	"crypto/sha256"
 	"encoding/hex"
 
@@ -14,6 +15,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/lingqiao/server/internal/features/sessions"
+)
+
+var (
+	ErrMuted       = errors.New("muted")
+	ErrRateLimited = errors.New("rate limited")
 )
 
 const (
@@ -109,10 +115,10 @@ func (s *Service) Add(session *sessions.Session, content string, replyToID ...in
 
 	now := s.now()
 	if s.isMutedLocked(chatAuthorID(session), now) {
-		return ChatMessage{}, fmt.Errorf("muted")
+		return ChatMessage{}, ErrMuted
 	}
 	if last, ok := s.lastSent[session.Token]; ok && now.Sub(last) < chatSendInterval {
-		return ChatMessage{}, fmt.Errorf("rate limited")
+		return ChatMessage{}, ErrRateLimited
 	}
 	replyID := int64(0)
 	if len(replyToID) > 0 {
@@ -174,7 +180,7 @@ func (s *Service) SetProfile(session *sessions.Session, nickname string) (ChatPr
 	defer s.mu.Unlock()
 
 	if s.isMutedLocked(chatAuthorID(session), s.now()) {
-		return ChatProfile{}, fmt.Errorf("muted")
+		return ChatProfile{}, ErrMuted
 	}
 	profile := ChatProfile{
 		AuthorID:  chatAuthorID(session),
@@ -242,7 +248,7 @@ func (s *Service) React(session *sessions.Session, messageID int64, reaction str
 
 	authorID := chatAuthorID(session)
 	if s.isMutedLocked(authorID, s.now()) {
-		return ChatMessage{}, fmt.Errorf("muted")
+		return ChatMessage{}, ErrMuted
 	}
 	for i := range s.messages {
 		if s.messages[i].ID != messageID || s.messages[i].Deleted {

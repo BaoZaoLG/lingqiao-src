@@ -118,12 +118,30 @@ static bool DeriveKey(const char* masterSecret, DWORD secretLen,
     return NT_SUCCESS(status);
 }
 
-// SHA-256 fingerprint of the server's self-signed TLS certificate.
+// SHA-256 fingerprints of accepted server TLS certs (comma-separated).
 // Regenerate when certs/server.crt is renewed:
 //   openssl x509 -in certs/server.crt -outform DER | sha256sum
+// During cert rotation, list old and new pins, then drop the old one.
 // NOTE: This is the single source of truth. script_loader.h references this.
 #define LQ_CERT_PIN_SHA256_LITERAL "9f3435586bdb2528c1b1b460748782a96e2670ff4690b388796c85241b306458"
 static const char* CERT_PIN_SHA256 = LQ_SP(LQ_CERT_PIN_SHA256_LITERAL);
+
+// Returns true if hex matches any comma-separated pin in the list.
+static bool CertPinMatchesList(const char* hex, const char* pinList) {
+    if (!hex || !pinList || !*pinList) return false;
+    const char* p = pinList;
+    while (*p) {
+        while (*p == ',' || *p == ' ' || *p == '\t') ++p;
+        if (!*p) break;
+        const char* start = p;
+        while (*p && *p != ',') ++p;
+        size_t len = (size_t)(p - start);
+        while (len > 0 && (start[len - 1] == ' ' || start[len - 1] == '\t')) --len;
+        if (len == 64 && _strnicmp(hex, start, 64) == 0) return true;
+        if (*p == ',') ++p;
+    }
+    return false;
+}
 
 // ============================================================================
 // AES-256-GCM encryption/decryption (via BCrypt)
@@ -233,7 +251,7 @@ static bool VerifyServerCert(HINTERNET hRequest) {
             BCryptFinishHash(hHash, hash, 32, 0);
             char hex[65];
             ByteToHex(hash, 32, hex);
-            ok = (_stricmp(hex, CERT_PIN_SHA256) == 0);
+            ok = CertPinMatchesList(hex, CERT_PIN_SHA256);
             BCryptDestroyHash(hHash);
         }
         BCryptCloseAlgorithmProvider(hAlg, 0);

@@ -49,6 +49,12 @@ func (r *SQLiteRepository) Insert(ctx context.Context, e Event) error {
 }
 
 func (r *SQLiteRepository) List(ctx context.Context, filter Filter, limit int) ([]Event, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 10000 {
+		limit = 10000
+	}
 	query := `SELECT time, action, card, machine, agent_id, detail, addr,
 		actor_type, actor_id, resource_type, resource_id,
 		before, after, user_agent, request_id

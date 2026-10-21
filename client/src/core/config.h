@@ -19,20 +19,21 @@ static const EncryptedBlob g_enc_kPathDeact    = { nullptr, 0, 0 };
 static const EncryptedBlob g_enc_kPathAnnounce = { nullptr, 0, 0 };
 #endif
 
-static wchar_t g_hostBuf[64];
-static wchar_t g_clientIdBuf[32];
-static char    g_secretBuf[128];
-static wchar_t g_pathAct[64];
-static wchar_t g_pathHb[64];
-static wchar_t g_pathDeact[64];
-static wchar_t g_pathAnn[64];
-static BYTE    g_derivedKey[32]; // PBKDF2-derived HMAC signing key
+// Defined in core/config.cpp — single definition shared across all TUs
+extern wchar_t g_hostBuf[64];
+extern wchar_t g_clientIdBuf[32];
+extern char    g_secretBuf[128];
+extern wchar_t g_pathAct[64];
+extern wchar_t g_pathHb[64];
+extern wchar_t g_pathDeact[64];
+extern wchar_t g_pathAnn[64];
+extern BYTE    g_derivedKey[32]; // PBKDF2-derived HMAC signing key
 
-static const wchar_t* SERVER_HOST   = nullptr;
-static const int      SERVER_PORT   = 443;
-static const wchar_t* CLIENT_ID     = nullptr;
-static const char*    CLIENT_SECRET = nullptr;
-static const BYTE*    HMAC_KEY      = nullptr; // points to g_derivedKey
+extern const wchar_t* SERVER_HOST;
+extern const int      SERVER_PORT;
+extern const wchar_t* CLIENT_ID;
+extern const char*    CLIENT_SECRET;
+extern const BYTE*    HMAC_KEY; // points to g_derivedKey
 
 // Version injected from CMake via APP_VERSION compile definition
 #ifdef APP_VERSION

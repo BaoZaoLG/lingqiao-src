@@ -1290,6 +1290,10 @@ tr:hover td {
   min-width: 0;
 }
 
+.script-row-full {
+  grid-column: 1 / -1;
+}
+
 .script-row .mono,
 .compact-status .mono,
 .status-summary .mono {
@@ -2235,6 +2239,49 @@ td input[type="checkbox"],
 
 .status-summary {
   padding: 16px;
+}
+
+/* Script content viewer — collapsible code display */
+.script-content-viewer {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.script-content-viewer summary {
+  padding: 10px 14px;
+  background: #f8fafc;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-2);
+  user-select: none;
+}
+
+.script-content-viewer summary:hover {
+  background: #f1f5f9;
+}
+
+.script-content-viewer[open] summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.code-viewer {
+  width: 100%;
+  min-height: 400px;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 0;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #1e293b;
+  background: #ffffff;
+  resize: vertical;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+  tab-size: 2;
 }
 
 @media (max-width: 1180px) {

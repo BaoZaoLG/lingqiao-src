@@ -13,9 +13,13 @@ import (
 )
 
 func (h *AdminHandler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+
 	cardsList, err := h.cardsSvc.AllCards(r.Context())
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards: "+err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards")
 		return
 	}
 
@@ -44,6 +48,10 @@ func (h *AdminHandler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminHandler) HandleServerStats(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+
 	activeCount := 0
 	if res, err := h.sessionsSvc.List(r.Context(), sessions.ListFilter{ActiveOnly: true}); err == nil {
 		activeCount = res.Total
@@ -51,7 +59,7 @@ func (h *AdminHandler) HandleServerStats(w http.ResponseWriter, r *http.Request)
 
 	cardsList, err := h.cardsSvc.AllCards(r.Context())
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards: "+err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards")
 		return
 	}
 
@@ -64,16 +72,20 @@ func (h *AdminHandler) HandleServerStats(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+
 	now := time.Now()
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	cardsList, err := h.cardsSvc.AllCards(r.Context())
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards: "+err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards")
 		return
 	}
 	auditLog, err := h.auditRecorder.Query(r.Context(), audit.Filter{}, 10000)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "failed to query audit log: "+err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to query audit log")
 		return
 	}
 
@@ -119,27 +131,27 @@ func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request)
 			HAVING card_count > 1
 		`)
 		if err != nil {
-			httpapi.WriteError(w, http.StatusInternalServerError, "failed to query risky machines: "+err.Error())
+			httpapi.WriteError(w, http.StatusInternalServerError, "failed to query risky machines")
 			return
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var m cards.MachineInfo
 			if err := rows.Scan(&m.MachineID, &m.CardCount); err != nil {
-				httpapi.WriteError(w, http.StatusInternalServerError, "failed to scan risky machine row: "+err.Error())
+				httpapi.WriteError(w, http.StatusInternalServerError, "failed to scan risky machine row")
 				return
 			}
 			riskyMachines = append(riskyMachines, m)
 		}
 		if err := rows.Err(); err != nil {
-			httpapi.WriteError(w, http.StatusInternalServerError, "error iterating risky machine rows: "+err.Error())
+			httpapi.WriteError(w, http.StatusInternalServerError, "error iterating risky machine rows")
 			return
 		}
 	}
 
 	blacklisted, err := h.blacklistSvc.List(r.Context())
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "failed to query blacklist: "+err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to query blacklist")
 		return
 	}
 	blacklistSet := make(map[string]bool)
@@ -174,7 +186,7 @@ func (h *AdminHandler) HandleOpsOverview(w http.ResponseWriter, r *http.Request)
 
 	accs, err := h.agentsSvc.AllAgents(r.Context())
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load agents: "+err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load agents")
 		return
 	}
 
@@ -199,6 +211,10 @@ type moduleOverviewItem struct {
 }
 
 func (h *AdminHandler) HandleModulesOverview(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+
 	cardsList, cardErr := h.cardsSvc.AllCards(r.Context())
 	activeSessions := 0
 	if res, err := h.sessionsSvc.List(r.Context(), sessions.ListFilter{ActiveOnly: true}); err == nil {
@@ -208,7 +224,7 @@ func (h *AdminHandler) HandleModulesOverview(w http.ResponseWriter, r *http.Requ
 	cardSummary := fmt.Sprintf("%d total cards", len(cardsList))
 	if cardErr != nil {
 		cardStatus = "error"
-		cardSummary = cardErr.Error()
+		cardSummary = "failed to load cards"
 	}
 
 	agentsList, agentErr := h.agentsSvc.AllAgents(r.Context())
@@ -216,7 +232,7 @@ func (h *AdminHandler) HandleModulesOverview(w http.ResponseWriter, r *http.Requ
 	agentSummary := fmt.Sprintf("%d agents", len(agentsList))
 	if agentErr != nil {
 		agentStatus = "error"
-		agentSummary = agentErr.Error()
+		agentSummary = "failed to load agents"
 	}
 
 	auditEvents, auditErr := h.auditRecorder.Query(r.Context(), audit.Filter{}, 10000)
@@ -224,7 +240,7 @@ func (h *AdminHandler) HandleModulesOverview(w http.ResponseWriter, r *http.Requ
 	auditSummary := fmt.Sprintf("%d retained events", len(auditEvents))
 	if auditErr != nil {
 		auditStatus = "error"
-		auditSummary = auditErr.Error()
+		auditSummary = "failed to load audit events"
 	}
 
 	httpapi.WriteOK(w, map[string]interface{}{

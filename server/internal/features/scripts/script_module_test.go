@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -73,7 +72,7 @@ func (s *testSessionStore) DeleteExpired(ctx context.Context, now time.Time) (in
 	return 0, nil
 }
 
-func newScriptTestHandler(t *testing.T) *Handler {
+func newScriptTestHandler(t *testing.T, dataDir string) *Handler {
 	t.Helper()
 	now := time.Now().UTC()
 	store := &testSessionStore{
@@ -89,7 +88,7 @@ func newScriptTestHandler(t *testing.T) *Handler {
 			ExpiresAt: now.Add(time.Hour),
 		},
 	}
-	return NewHandler(nil, sessions.NewService(store, time.Hour, func() string { return "unused" }, func() time.Time { return now }))
+	return NewHandler(dataDir, nil, sessions.NewService(store, time.Hour, func() string { return "unused" }, func() time.Time { return now }))
 }
 
 func signRequestForTest(t *testing.T, req *http.Request, body string) {
@@ -110,7 +109,8 @@ func signRequestForTest(t *testing.T, req *http.Request, body string) {
 }
 
 func TestHandleScriptDownloadRejectsMissingHMAC(t *testing.T) {
-	h := newScriptTestHandler(t)
+	dataDir := t.TempDir()
+	h := newScriptTestHandler(t, dataDir)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/script", nil)
 	req.Header.Set("X-Session-Token", "tok-1")
 	req.Header.Set("X-Machine-ID", "machine-1")
@@ -124,15 +124,26 @@ func TestHandleScriptDownloadRejectsMissingHMAC(t *testing.T) {
 	}
 }
 
+func TestHandleScriptDownloadRejectsNonGET(t *testing.T) {
+	h := newScriptTestHandler(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/script", nil)
+	rr := httptest.NewRecorder()
+
+	h.HandleScriptDownload(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d; body=%s", rr.Code, http.StatusMethodNotAllowed, rr.Body.String())
+	}
+}
+
 func TestHandleScriptDownloadRejectsQueryToken(t *testing.T) {
 	dataDir := t.TempDir()
-	Init(dataDir)
-	if _, err := SaveActiveScriptModule("1.0.0", "console.log('ok')"); err != nil {
+	repo := NewRepository(dataDir)
+	if _, err := repo.Publish("1.0.0", "console.log('ok')", ""); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dataDir) })
 
-	h := newScriptTestHandler(t)
+	h := newScriptTestHandler(t, dataDir)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/script?token=tok-1", nil)
 	req.Header.Set("X-Machine-ID", "machine-1")
 	req.Header.Set("X-Card-Code", "CARD-1")
@@ -148,14 +159,13 @@ func TestHandleScriptDownloadRejectsQueryToken(t *testing.T) {
 
 func TestHandleScriptDownloadJSONAcceptAndSizeHeader(t *testing.T) {
 	dataDir := t.TempDir()
-	Init(dataDir)
-	module, err := SaveActiveScriptModule("1.0.0", "console.log('ok')")
+	repo := NewRepository(dataDir)
+	module, err := repo.Publish("1.0.0", "console.log('ok')", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dataDir) })
 
-	h := newScriptTestHandler(t)
+	h := newScriptTestHandler(t, dataDir)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/script", nil)
 	req.Header.Set("X-Session-Token", "tok-1")
 	req.Header.Set("X-Machine-ID", "machine-1")
@@ -174,5 +184,58 @@ func TestHandleScriptDownloadJSONAcceptAndSizeHeader(t *testing.T) {
 	}
 	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		t.Fatalf("Content-Type = %q, want application/json", ct)
+	}
+}
+
+func TestAdminScriptHandlersRejectWrongMethod(t *testing.T) {
+	h := NewHandler(t.TempDir(), nil, nil)
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		call   func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "list", method: http.MethodPost, path: "/admin/api/scripts", call: h.HandleList},
+		{name: "get", method: http.MethodPost, path: "/admin/api/scripts/x", call: h.HandleGet},
+		{name: "create", method: http.MethodGet, path: "/admin/api/scripts/create", call: h.HandleCreate},
+		{name: "publish", method: http.MethodGet, path: "/admin/api/scripts/publish", call: h.HandlePublish},
+		{name: "activate", method: http.MethodGet, path: "/admin/api/scripts/x/activate", call: h.HandleActivate},
+		{name: "delete", method: http.MethodPost, path: "/admin/api/scripts/x/delete", call: h.HandleDelete},
+		{name: "legacy admin", method: http.MethodPut, path: "/admin/api/script", call: h.HandleScriptAdmin},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			rec := httptest.NewRecorder()
+			tt.call(rec, req)
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("status=%d want %d body=%s", rec.Code, http.StatusMethodNotAllowed, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestAdminScriptCreateRejectsInvalidJSONWithoutLeak(t *testing.T) {
+	h := NewHandler(t.TempDir(), nil, nil)
+	for _, tt := range []struct {
+		name string
+		path string
+		call func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "create", path: "/admin/api/scripts/create", call: h.HandleCreate},
+		{name: "publish", path: "/admin/api/scripts/publish", call: h.HandlePublish},
+		{name: "legacy", path: "/admin/api/script", call: h.HandleScriptAdmin},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader("{"))
+			rec := httptest.NewRecorder()
+			tt.call(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d want %d body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+			if strings.Contains(rec.Body.String(), "unexpected") {
+				t.Fatalf("leaked: %s", rec.Body.String())
+			}
+		})
 	}
 }

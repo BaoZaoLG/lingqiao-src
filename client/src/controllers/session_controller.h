@@ -27,6 +27,8 @@ public:
     void resetToInactive(const QString& reason);
     
     SessionState state() const { return m_state; }
+    QString machineID() const { return m_machineID; }
+    QString lastCardCode() const { return m_lastCardCode; }
 
 signals:
     void onActivated(const QString& sessionToken, qint64 cardExpiresAt);
@@ -46,7 +48,8 @@ private:
     void saveSession(const QString& fingerprint);
     void clearSavedSession();
     
-    static QString xorEncrypt(const QString& data, const QString& key);
+    static QString protectToken(const QString& token);
+    static QString unprotectToken(const QString& enc, const QString& fingerprint);
     static QString xorDecrypt(const QString& encBase64, const QString& key);
 
     ApiClient* m_apiClient;

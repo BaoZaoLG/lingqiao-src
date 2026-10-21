@@ -252,6 +252,9 @@ func (s *Service) ForceResetPassword(ctx context.Context, id, newPassword string
 }
 
 func (s *Service) RegisterAgent(ctx context.Context, username, plainPassword, prefix string, inviteCode string, inviteSvc *InviteService) (*Account, error) {
+	if inviteSvc == nil {
+		return nil, errors.New("invite service is required")
+	}
 	// 1. Validate username uniqueness
 	exists, err := s.repo.UsernameExists(ctx, username)
 	if err != nil {

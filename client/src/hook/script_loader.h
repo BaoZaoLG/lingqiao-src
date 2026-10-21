@@ -9,6 +9,7 @@
 
 #include "obfuscate.h"
 #include "encrypted_data.h"
+#include "secret_channel.h"
 
 #ifndef NT_SUCCESS
 #define NT_SUCCESS(status) ((status) >= 0)
@@ -18,13 +19,9 @@
 #include "crypto.h"
 static const char* HOOK_CERT_PIN_SHA256 = LQ_SP(LQ_CERT_PIN_SHA256_LITERAL);
 
+// Thin aliases to core/crypto.h — do not reimplement HMAC/hex here.
 static void HookByteToHex(const BYTE* input, DWORD inputLen, char* output) {
-    static const char hex[] = "0123456789abcdef";
-    for (DWORD i = 0; i < inputLen; i++) {
-        output[i * 2] = hex[(input[i] >> 4) & 0xF];
-        output[i * 2 + 1] = hex[input[i] & 0xF];
-    }
-    output[inputLen * 2] = 0;
+    ByteToHex(input, inputLen, output);
 }
 
 static bool HookSha256Hex(const char* data, DWORD dataLen, char* outputHex) {
@@ -36,7 +33,7 @@ static bool HookSha256Hex(const char* data, DWORD dataLen, char* outputHex) {
             BYTE hash[32];
             if (BCryptHashData(hHash, (PUCHAR)data, dataLen, 0) == 0 &&
                 BCryptFinishHash(hHash, hash, sizeof(hash), 0) == 0) {
-                HookByteToHex(hash, sizeof(hash), outputHex);
+                ByteToHex(hash, sizeof(hash), outputHex);
                 ok = true;
             }
             BCryptDestroyHash(hHash);
@@ -47,67 +44,28 @@ static bool HookSha256Hex(const char* data, DWORD dataLen, char* outputHex) {
 }
 
 static bool HookDeriveKey(const char* secret, BYTE* key, DWORD keyLen) {
-    BCRYPT_ALG_HANDLE hAlg = NULL;
-    NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, NULL, BCRYPT_ALG_HANDLE_HMAC_FLAG);
-    if (!NT_SUCCESS(status)) return false;
     const char* salt = "CefBridge-HMAC-Salt-v2";
-    status = BCryptDeriveKeyPBKDF2(hAlg,
-        (PUCHAR)secret, (ULONG)strlen(secret),
-        (PUCHAR)salt, (ULONG)strlen(salt),
-        100000,
-        key, keyLen,
-        0);
-    BCryptCloseAlgorithmProvider(hAlg, 0);
-    return NT_SUCCESS(status);
+    return DeriveKey(secret, (DWORD)strlen(secret),
+                     salt, (DWORD)strlen(salt), key, keyLen);
 }
 
 static bool HookHmacSha256(const BYTE* key, DWORD keyLen, const char* data, DWORD dataLen, BYTE* output, DWORD* outputLen) {
-    BCRYPT_ALG_HANDLE hAlg = NULL;
-    BCRYPT_HASH_HANDLE hHash = NULL;
-    NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, NULL, BCRYPT_ALG_HANDLE_HMAC_FLAG);
-    if (!NT_SUCCESS(status)) return false;
-
-    DWORD hashObjSize = 0, resultLen = 0, hashLen = 0;
-    BCryptGetProperty(hAlg, BCRYPT_OBJECT_LENGTH, (PBYTE)&hashObjSize, sizeof(hashObjSize), &resultLen, 0);
-    BCryptGetProperty(hAlg, BCRYPT_HASH_LENGTH, (PBYTE)&hashLen, sizeof(hashLen), &resultLen, 0);
-    BYTE* hashObj = (BYTE*)HeapAlloc(GetProcessHeap(), 0, hashObjSize);
-    if (!hashObj) {
-        BCryptCloseAlgorithmProvider(hAlg, 0);
-        return false;
-    }
-
-    status = BCryptCreateHash(hAlg, &hHash, hashObj, hashObjSize, (PBYTE)key, keyLen, 0);
-    if (NT_SUCCESS(status)) {
-        status = BCryptHashData(hHash, (PBYTE)data, dataLen, 0);
-    }
-    if (NT_SUCCESS(status)) {
-        status = BCryptFinishHash(hHash, output, hashLen, 0);
-        *outputLen = hashLen;
-    }
-    if (hHash) BCryptDestroyHash(hHash);
-    HeapFree(GetProcessHeap(), 0, hashObj);
-    BCryptCloseAlgorithmProvider(hAlg, 0);
-    return NT_SUCCESS(status);
+    return HmacSha256((const char*)key, keyLen, data, dataLen, output, outputLen);
 }
 
 static __int64 HookUnixTimestamp() {
-    FILETIME ft;
-    GetSystemTimeAsFileTime(&ft);
-    __int64 t = ((__int64)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
-    return (t - 116444736000000000LL) / 10000000LL;
+    return GetUnixTimestamp();
 }
 
 static void HookGenerateNonce(char* output) {
-    BYTE buf[16];
-    if (BCryptGenRandom(NULL, buf, sizeof(buf), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
-        memset(buf, 0, sizeof(buf));
+    if (!GenerateNonce(output)) {
+        memset(output, 0, 33);
     }
-    HookByteToHex(buf, sizeof(buf), output);
 }
 
 static bool HookBuildSignature(const BYTE* key, const wchar_t* path, char* sigHex, char* tsBuf, char* nonceHex) {
-    _i64toa_s(HookUnixTimestamp(), tsBuf, 32, 10);
-    HookGenerateNonce(nonceHex);
+    _i64toa_s(GetUnixTimestamp(), tsBuf, 32, 10);
+    if (!GenerateNonce(nonceHex)) return false;
 
     int pathLen = WideCharToMultiByte(CP_UTF8, 0, path, -1, NULL, 0, NULL, NULL);
     if (pathLen <= 1) return false;
@@ -115,11 +73,13 @@ static bool HookBuildSignature(const BYTE* key, const wchar_t* path, char* sigHe
     WideCharToMultiByte(CP_UTF8, 0, path, -1, &pathUtf8[0], pathLen, NULL, NULL);
     pathUtf8.resize(pathLen - 1);
 
-    std::string signedBody = std::string(tsBuf) + "|" + nonceHex + "|" + pathUtf8;
     BYTE sig[32];
     DWORD sigLen = 0;
-    if (!HookHmacSha256(key, 32, signedBody.data(), (DWORD)signedBody.size(), sig, &sigLen)) return false;
-    HookByteToHex(sig, sigLen, sigHex);
+    if (!HmacSha256Signed((const char*)key, 32, tsBuf, nonceHex,
+                          pathUtf8.data(), (DWORD)pathUtf8.size(), sig, &sigLen)) {
+        return false;
+    }
+    ByteToHex(sig, sigLen, sigHex);
     return true;
 }
 
@@ -139,7 +99,7 @@ static bool HookVerifyServerCert(HINTERNET hRequest) {
             BCryptFinishHash(hHash, hash, 32, 0);
             char hex[65];
             HookByteToHex(hash, 32, hex);
-            ok = (_stricmp(hex, HOOK_CERT_PIN_SHA256) == 0);
+            ok = CertPinMatchesList(hex, HOOK_CERT_PIN_SHA256);
             BCryptDestroyHash(hHash);
         }
         BCryptCloseAlgorithmProvider(hAlg, 0);
@@ -235,13 +195,25 @@ static bool HookQueryHeaderString(HINTERNET hRequest, const wchar_t* headerName,
     return true;
 }
 
+static std::wstring LqUtf8ToWide(const std::string& s) {
+    if (s.empty()) return std::wstring();
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    if (n <= 0) return std::wstring();
+    std::wstring w((size_t)n, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], n);
+    return w;
+}
+
 static bool FetchVersionedScript(std::string* scriptOut, std::string* versionOut) {
-    WCHAR sessionToken[256] = {0};
-    GetEnvironmentVariableW(L"INJECTOR_SESSION_TOKEN", sessionToken, _countof(sessionToken));
-    if (!sessionToken[0]) {
+    OutputDebugStringA("[HOOK] FetchVersionedScript: entry\n");
+    const LqSecretBundle& secrets = LqSecretsCached();
+    if (secrets.sessionToken.empty()) {
         OutputDebugStringA("[HOOK] Script fetch skipped: missing session token\n");
         return false;
     }
+    std::wstring sessionToken = LqUtf8ToWide(secrets.sessionToken);
+    std::wstring machineId = LqUtf8ToWide(secrets.machineId);
+    std::wstring cardCode = LqUtf8ToWide(secrets.cardCode);
 
     SecBuf<WCHAR> host(g_enc_kHost);
     SecBuf<WCHAR> clientId(g_enc_kClientId);
@@ -250,6 +222,14 @@ static bool FetchVersionedScript(std::string* scriptOut, std::string* versionOut
     if (!HookDeriveKey(secret.c_str(), key, sizeof(key))) {
         OutputDebugStringA("[HOOK] Script fetch skipped: key derivation failed\n");
         return false;
+    }
+    {
+        char hostUtf8[128] = {0};
+        WideCharToMultiByte(CP_UTF8, 0, host.c_str(), -1, hostUtf8, sizeof(hostUtf8), NULL, NULL);
+        char dbg[256];
+        sprintf_s(dbg, "[HOOK] Script fetch: host=%s token_len=%zu mid=%d cc=%d\n",
+                  hostUtf8, sessionToken.size(), (int)machineId.size(), (int)cardCode.size());
+        OutputDebugStringA(dbg);
     }
 
     const wchar_t* path = L"/api/v1/script";
@@ -275,11 +255,19 @@ static bool FetchVersionedScript(std::string* scriptOut, std::string* versionOut
         return false;
     }
 
-    wchar_t headers[1024];
-    swprintf_s(headers, _countof(headers),
+    wchar_t headers[2048];
+    int off = swprintf_s(headers, _countof(headers),
         L"X-Client-ID: %s\r\nX-HMAC-Signature: %S\r\nX-Timestamp: %S\r\nX-Nonce: %S\r\nX-Session-Token: %s\r\n",
-        clientId.c_str(), sigHex, tsBuf, nonceHex, sessionToken);
-    WinHttpAddRequestHeaders(hRequest, headers, (DWORD)wcslen(headers), WINHTTP_ADDREQ_FLAG_ADD);
+        clientId.c_str(), sigHex, tsBuf, nonceHex, sessionToken.c_str());
+    if (!machineId.empty()) {
+        off += swprintf_s(headers + off, _countof(headers) - off,
+            L"X-Machine-ID: %s\r\n", machineId.c_str());
+    }
+    if (!cardCode.empty()) {
+        swprintf_s(headers + off, _countof(headers) - off,
+            L"X-Card-Code: %s\r\n", cardCode.c_str());
+    }
+    WinHttpAddRequestHeaders(hRequest, headers, (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD);
 
     DWORD secFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA;
     WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &secFlags, sizeof(secFlags));
@@ -287,11 +275,28 @@ static bool FetchVersionedScript(std::string* scriptOut, std::string* versionOut
 
     bool ok = false;
     std::string body;
-    if (WinHttpSendRequest(hRequest, NULL, 0, NULL, 0, 0, 0) &&
-        WinHttpReceiveResponse(hRequest, NULL) &&
-        HookVerifyServerCert(hRequest)) {
+    bool sendOk = WinHttpSendRequest(hRequest, NULL, 0, NULL, 0, 0, 0);
+    if (!sendOk) {
+        char dbg[128];
+        sprintf_s(dbg, "[HOOK] Script fetch: WinHttpSendRequest failed err=%lu\n", GetLastError());
+        OutputDebugStringA(dbg);
+    }
+    bool recvOk = sendOk && WinHttpReceiveResponse(hRequest, NULL);
+    if (!recvOk && sendOk) {
+        char dbg[128];
+        sprintf_s(dbg, "[HOOK] Script fetch: WinHttpReceiveResponse failed err=%lu\n", GetLastError());
+        OutputDebugStringA(dbg);
+    }
+    bool certOk = recvOk && HookVerifyServerCert(hRequest);
+    if (!certOk && recvOk) {
+        OutputDebugStringA("[HOOK] Script fetch: certificate verification failed\n");
+    }
+    if (sendOk && recvOk && certOk) {
         DWORD status = 0, statusSize = sizeof(status);
         WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &status, &statusSize, NULL);
+        char dbg[128];
+        sprintf_s(dbg, "[HOOK] Script fetch: HTTP %lu\n", (unsigned long)status);
+        OutputDebugStringA(dbg);
         if (status == 200) {
             char buf[4096];
             DWORD bytesRead = 0;
@@ -303,16 +308,25 @@ static bool FetchVersionedScript(std::string* scriptOut, std::string* versionOut
                 }
             }
             if (!body.empty()) {
+                char dbg[128];
+                sprintf_s(dbg, "[HOOK] Script fetch: body size=%zu\n", body.size());
+                OutputDebugStringA(dbg);
                 std::string sha;
                 std::string version;
                 char actualSha[65] = {0};
-                if (HookQueryHeaderString(hRequest, L"X-Script-SHA256", &sha) &&
-                    HookSha256Hex(body.data(), (DWORD)body.size(), actualSha) &&
-                    _stricmp(actualSha, sha.c_str()) == 0) {
-                    HookQueryHeaderString(hRequest, L"X-Script-Version", &version);
-                    *scriptOut = body;
-                    *versionOut = version;
-                    ok = true;
+                if (HookQueryHeaderString(hRequest, L"X-Script-SHA256", &sha)) {
+                    HookSha256Hex(body.data(), (DWORD)body.size(), actualSha);
+                    if (_stricmp(actualSha, sha.c_str()) == 0) {
+                        HookQueryHeaderString(hRequest, L"X-Script-Version", &version);
+                        *scriptOut = body;
+                        *versionOut = version;
+                        ok = true;
+                    } else {
+                        char dbg2[256];
+                        sprintf_s(dbg2, "[HOOK] Script fetch: SHA256 mismatch expected=%.64s got=%.64s\n",
+                                  sha.c_str(), actualSha);
+                        OutputDebugStringA(dbg2);
+                    }
                 } else {
                     std::string content;
                     if (HookJsonExtractString(body, "content", &content) &&
@@ -323,8 +337,21 @@ static bool FetchVersionedScript(std::string* scriptOut, std::string* versionOut
                         *scriptOut = content;
                         *versionOut = version;
                         ok = true;
+                    } else {
+                        OutputDebugStringA("[HOOK] Script fetch: SHA256 verification failed (no header + JSON fallback failed)\n");
                     }
                 }
+            } else {
+                OutputDebugStringA("[HOOK] Script fetch: empty response body\n");
+            }
+        } else {
+            char buf[512];
+            DWORD bytesRead = 0;
+            while (WinHttpReadData(hRequest, buf, sizeof(buf) - 1, &bytesRead) && bytesRead > 0) {
+                buf[bytesRead] = 0;
+                char dbg[640];
+                sprintf_s(dbg, "[HOOK] Script fetch: non-200 body=%.400s\n", buf);
+                OutputDebugStringA(dbg);
             }
         }
     }

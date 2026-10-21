@@ -4,10 +4,10 @@
 #include <QtConcurrent>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include "crypto.h"
 
-#ifndef _S
-#define _S(x) L##x
-#endif
+static QString injectorOrg() { return QStringLiteral("LingQiao"); }
+static QString injectorApp() { return QStringLiteral("Injector"); }
 
 SessionController::SessionController(ApiClient* apiClient, QObject* parent)
     : QObject(parent), m_apiClient(apiClient) {
@@ -21,17 +21,6 @@ void SessionController::setState(SessionState state) {
     m_state = state;
 }
 
-QString SessionController::xorEncrypt(const QString& data, const QString& key) {
-    QByteArray dataBytes = data.toUtf8();
-    QByteArray keyBytes = key.toUtf8();
-    if (keyBytes.isEmpty()) return QString();
-    QByteArray result;
-    for (int i = 0; i < dataBytes.size(); i++) {
-        result.append(dataBytes[i] ^ keyBytes[i % keyBytes.size()] ^ (char)((i * 0x9D) & 0xFF));
-    }
-    return result.toBase64();
-}
-
 QString SessionController::xorDecrypt(const QString& encBase64, const QString& key) {
     QByteArray dataBytes = QByteArray::fromBase64(encBase64.toUtf8());
     QByteArray keyBytes = key.toUtf8();
@@ -43,40 +32,55 @@ QString SessionController::xorDecrypt(const QString& encBase64, const QString& k
     return QString::fromUtf8(result);
 }
 
+QString SessionController::protectToken(const QString& token) {
+    return DpapiProtect(token.toUtf8());
+}
+
+QString SessionController::unprotectToken(const QString& enc, const QString& fingerprint) {
+    if (enc.isEmpty()) return QString();
+    QByteArray plain = DpapiUnprotect(enc);
+    if (!plain.isEmpty()) return QString::fromUtf8(plain);
+    // Migration: older builds stored XOR+fingerprint ciphertext.
+    return xorDecrypt(enc, fingerprint);
+}
+
 void SessionController::saveSession(const QString& fingerprint) {
-    if (fingerprint.isEmpty()) return;
-    QSettings s(QString::fromWCharArray(_S("LingQiao")), QString::fromWCharArray(_S("Injector")));
-    s.setValue("session_token", xorEncrypt(m_sessionToken, fingerprint));
+    Q_UNUSED(fingerprint);
+    if (m_sessionToken.isEmpty()) return;
+    QSettings s(injectorOrg(), injectorApp());
+    s.setValue("session_token", protectToken(m_sessionToken));
+    s.setValue("session_token_v", 2);
     s.setValue("machine_id", m_machineID);
     s.setValue("card_expires_at", m_cardExpiresAt);
     s.setValue("card_code", m_lastCardCode);
 }
 
 void SessionController::clearSavedSession() {
-    QSettings s(QString::fromWCharArray(_S("LingQiao")), QString::fromWCharArray(_S("Injector")));
+    QSettings s(injectorOrg(), injectorApp());
     s.remove("session_token");
+    s.remove("session_token_v");
     s.remove("machine_id");
     s.remove("card_expires_at");
     s.remove("card_code");
 }
 
 void SessionController::queuePendingDeactivation(const QString& token, const QString& mid, const QString& fingerprint) {
-    if (token.isEmpty() || mid.isEmpty() || fingerprint.isEmpty()) return;
-    QSettings s(QString::fromWCharArray(_S("LingQiao")), QString::fromWCharArray(_S("Injector")));
+    if (token.isEmpty() || mid.isEmpty()) return;
+    Q_UNUSED(fingerprint);
+    QSettings s(injectorOrg(), injectorApp());
     QStringList tokens = s.value("pending_deactivate_tokens").toStringList();
     QStringList machines = s.value("pending_deactivate_machines").toStringList();
-    QString encToken = xorEncrypt(token, fingerprint);
-    if (!tokens.contains(encToken)) {
-        tokens.append(encToken);
-        machines.append(mid);
-        s.setValue("pending_deactivate_tokens", tokens);
-        s.setValue("pending_deactivate_machines", machines);
-    }
+    QString encToken = protectToken(token);
+    if (encToken.isEmpty() || tokens.contains(encToken)) return;
+    tokens.append(encToken);
+    machines.append(mid);
+    s.setValue("pending_deactivate_tokens", tokens);
+    s.setValue("pending_deactivate_machines", machines);
 }
 
 void SessionController::flushPendingDeactivations(const QString& fingerprint) {
     if (fingerprint.isEmpty()) return;
-    QSettings s(QString::fromWCharArray(_S("LingQiao")), QString::fromWCharArray(_S("Injector")));
+    QSettings s(injectorOrg(), injectorApp());
     QStringList tokens = s.value("pending_deactivate_tokens").toStringList();
     QStringList machines = s.value("pending_deactivate_machines").toStringList();
     if (tokens.isEmpty() || tokens.size() != machines.size()) {
@@ -90,19 +94,19 @@ void SessionController::flushPendingDeactivations(const QString& fingerprint) {
         QStringList keepTokens;
         QStringList keepMachines;
         for (int i = 0; i < tokens.size(); ++i) {
-            QString token = xorDecrypt(tokens[i], fingerprint);
+            QString token = SessionController::unprotectToken(tokens[i], fingerprint);
             QString mid = machines[i];
             if (token.isEmpty() || mid.isEmpty()) continue;
-            
+
             auto resp = clientCopy.deactivate(token, mid);
             // Keep if network error or 5xx server error
-            if (!resp.ok() && (resp.error.category == ApiErrorCategory::Network || 
+            if (!resp.ok() && (resp.error.category == ApiErrorCategory::Network ||
                                (resp.error.category == ApiErrorCategory::Http && resp.error.status >= 500))) {
                 keepTokens.append(tokens[i]);
                 keepMachines.append(mid);
             }
         }
-        QSettings out(QString::fromWCharArray(_S("LingQiao")), QString::fromWCharArray(_S("Injector")));
+        QSettings out(injectorOrg(), injectorApp());
         if (keepTokens.isEmpty()) {
             out.remove("pending_deactivate_tokens");
             out.remove("pending_deactivate_machines");
@@ -189,7 +193,7 @@ void SessionController::activate(const QString& cardCode, const QString& machine
 bool SessionController::tryRestoreSession(const QString& fingerprint, const QString& clientVersion) {
     flushPendingDeactivations(fingerprint);
     
-    QSettings s(QString::fromWCharArray(_S("LingQiao")), QString::fromWCharArray(_S("Injector")));
+    QSettings s(injectorOrg(), injectorApp());
     QString encToken = s.value("session_token").toString();
     QString mid = s.value("machine_id").toString();
     qint64 exp = s.value("card_expires_at").toLongLong();
@@ -199,7 +203,7 @@ bool SessionController::tryRestoreSession(const QString& fingerprint, const QStr
         return false;
     }
     
-    QString token = encToken.isEmpty() ? QString() : xorDecrypt(encToken, fingerprint);
+    QString token = encToken.isEmpty() ? QString() : unprotectToken(encToken, fingerprint);
     if (token.isEmpty() || mid.isEmpty()) return false;
     
     if (exp > 0 && exp < QDateTime::currentSecsSinceEpoch()) {

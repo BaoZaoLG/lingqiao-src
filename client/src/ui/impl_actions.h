@@ -50,6 +50,7 @@ private:
 
     void onInject() {
         logEvent("INJECT", "Starting injection");
+        if (m_injectInProgress) return;
         if (!m_activated || m_sessionToken.isEmpty()) { setStatus("warn", QString::fromUtf8(_S("请先激活卡密"))); return; }
         if (!g_dllReady) { setStatus("error", QString::fromUtf8(_S("初始化失败：请重新启动程序"))); return; }
         QString targetPath = m_targetInput->text().trimmed();
@@ -73,148 +74,96 @@ private:
             }
         }
 
+        QString baseUrl = m_baseUrlInput->text().trimmed();
+        QString modelName = m_modelNameInput->currentText().trimmed();
+        QString apiKey = m_apiKeyInput->text().trimmed();
+        if (baseUrl.isEmpty()) {
+            setStatus("warn", QString::fromUtf8(_S("请先输入 BaseUrl")));
+            return;
+        }
+        if (modelName.isEmpty()) {
+            setStatus("warn", QString::fromUtf8(_S("请先输入模型名称")));
+            return;
+        }
+        if (apiKey.isEmpty()) {
+            setStatus("warn", QString::fromUtf8(_S("请先输入 API 密钥")));
+            return;
+        }
+
+        m_injectInProgress = true;
         m_injectBtn->setEnabled(false);
         m_injectBtn->setText(QString::fromUtf8(_S("注入中...")));
         setStatus("idle", QString::fromUtf8(_S("正在准备注入引擎...")));
         saveInjectHistory(targetPath);
+        saveAiConfig();
 
-        QString apiKey = m_apiKeyInput->text().trimmed();
-        if (apiKey.isEmpty()) {
-            setStatus("warn", QString::fromUtf8(_S("请先输入 API 密钥")));
-            m_injectBtn->setEnabled(true);
-            m_injectBtn->setText(QString::fromUtf8(_S("▶  启动注入")));
-            return;
-        }
-        const auto& provider = currentProvider();
-        SetEnvironmentVariableW(L"INJECTOR_AI_PROVIDER", (LPCWSTR)provider.id.utf16());
-        SetEnvironmentVariableW(L"INJECTOR_AI_KEY", (LPCWSTR)apiKey.utf16());
-        SetEnvironmentVariableW(L"INJECTOR_AI_TEXT_MODEL", (LPCWSTR)provider.textModel.utf16());
-        SetEnvironmentVariableW(L"INJECTOR_AI_VISION_MODEL", (LPCWSTR)provider.visionModel.utf16());
-        SetEnvironmentVariableW(L"INJECTOR_AI_BASE_URL", (LPCWSTR)provider.baseUrl.utf16());
-        SetEnvironmentVariableW(L"INJECTOR_AI_ADAPTER", (LPCWSTR)provider.adapter.utf16());
-        SetEnvironmentVariableW(L"INJECTOR_AI_SUPPORTS_VISION", provider.supportsVision ? L"1" : L"0");
-        SetEnvironmentVariableW(L"INJECTOR_API_KEY", (LPCWSTR)apiKey.utf16());
-        SetEnvironmentVariableW(L"INJECTOR_SESSION_TOKEN", (LPCWSTR)m_sessionToken.utf16());
+        SetInjectionEnv(
+            modelName, baseUrl, apiKey,
+            m_sessionToken,
+            m_sessionController->machineID(),
+            m_sessionController->lastCardCode());
 
-        PROCESS_INFORMATION pi = {0};
-        STARTUPINFOW si = {0}; si.cb = sizeof(si);
-        if (!CreateProcessW((LPCWSTR)targetPath.utf16(), NULL, NULL, NULL, FALSE,
-                           CREATE_SUSPENDED, NULL, NULL, &si, &pi)) {
-            DWORD err = GetLastError();
-            if (err == 740) {
-                WCHAR exePath[MAX_PATH] = {0};
-                GetModuleFileNameW(NULL, exePath, MAX_PATH);
-                // Pass target path so elevated process can continue injection
-                setStatus("info", QString::fromUtf8(_S("正在请求管理员权限...")));
-                std::wstring params = std::wstring(L"--reinject --target \"") + (LPCWSTR)targetPath.utf16() + L"\"";
-                SHELLEXECUTEINFOW sei = {sizeof(sei)};
-                sei.lpVerb = L"runas";
-                sei.lpFile = exePath;
-                sei.lpParameters = params.c_str();
-                sei.nShow = SW_SHOWNORMAL;
-                if (ShellExecuteExW(&sei)) {
-                    setStatus("ok", QString::fromUtf8(_S("提权成功，请在新窗口中继续")));
-                    QTimer::singleShot(500, this, &QMainWindow::close);
-                    return;
-                }
-                setStatus("warn", QString::fromUtf8(_S("提权被取消或失败")));
-                m_injectBtn->setEnabled(true);
-                m_injectBtn->setText(QString::fromUtf8(_S("▶  启动注入")));
+        runInjectionWorker(targetPath);
+    }
+
+    void runInjectionWorker(const QString& targetPath) {
+        QPointer<MainWindow> safeThis(this);
+        QtConcurrent::run([safeThis, targetPath]() {
+            InjectOutcome outcome = PerformInjection(targetPath);
+            QMetaObject::invokeMethod(safeThis, [safeThis, outcome]() {
+                if (!safeThis) return;
+                safeThis->finishInjection(outcome);
+            }, Qt::QueuedConnection);
+        });
+    }
+
+    void finishInjection(const InjectOutcome& outcome) {
+        m_injectInProgress = false;
+        // Child already inherited secrets at CreateProcess; drop them from the injector.
+        ClearInjectedSecrets();
+
+        if (outcome.kind == InjectOutcome::NeedElevation) {
+            WCHAR exePath[MAX_PATH] = {0};
+            GetModuleFileNameW(NULL, exePath, MAX_PATH);
+            setStatus("info", QString::fromUtf8(_S("正在请求管理员权限...")));
+            QString targetPath = m_targetInput->text().trimmed();
+            std::wstring params = std::wstring(L"--reinject --target \"") + (LPCWSTR)targetPath.utf16() + L"\"";
+            SHELLEXECUTEINFOW sei = {sizeof(sei)};
+            sei.lpVerb = L"runas";
+            sei.lpFile = exePath;
+            sei.lpParameters = params.c_str();
+            sei.nShow = SW_SHOWNORMAL;
+            if (ShellExecuteExW(&sei)) {
+                setStatus("ok", QString::fromUtf8(_S("提权成功，请在新窗口中继续")));
+                QTimer::singleShot(500, this, [this]() {
+                    m_minimizeToTray = false;
+                    close();
+                });
                 return;
             }
-            logEvent("INJECT", QString("CreateProcess failed: error %1").arg(err));
-            setStatus("error", QString::fromUtf8(_S("无法启动目标程序 (错误: %1)")).arg(err));
+            setStatus("warn", QString::fromUtf8(_S("提权被取消或失败")));
             m_injectBtn->setEnabled(true);
             m_injectBtn->setText(QString::fromUtf8(_S("▶  启动注入")));
             return;
         }
-        size_t cb = (wcslen(g_dllPath) + 1) * sizeof(WCHAR);
-        PVOID pRemote = VirtualAllocEx(pi.hProcess, NULL, cb, MEM_COMMIT, PAGE_READWRITE);
-        if (!pRemote) {
-            TerminateProcess(pi.hProcess, 1); CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
-            setStatus("error", QString::fromUtf8(_S("内存分配失败")));
-            m_injectBtn->setEnabled(true); m_injectBtn->setText(QString::fromUtf8(_S("▶  启动注入")));
-            return;
-        }
-        if (!WriteProcessMemory(pi.hProcess, pRemote, g_dllPath, cb, NULL)) {
-            VirtualFreeEx(pi.hProcess, pRemote, 0, MEM_RELEASE);
-            TerminateProcess(pi.hProcess, 1); CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
-            setStatus("error", QString::fromUtf8(_S("内存写入失败 (错误: %1)")).arg(GetLastError()));
-            m_injectBtn->setEnabled(true); m_injectBtn->setText(QString::fromUtf8(_S("▶  启动注入")));
-            return;
-        }
 
-        // Injection: try NtCreateThreadEx first (bypasses user-mode hooks on CreateRemoteThread),
-        // fall back to CreateRemoteThread if NtCreateThreadEx is unavailable.
-        HMODULE hK32 = GetModuleHandleW(L"kernel32.dll");
-        LPTHREAD_START_ROUTINE pLoadLib = (LPTHREAD_START_ROUTINE)GetProcAddress(hK32, "LoadLibraryW");
-        HANDLE hThread = NULL;
-
-        // Method 1: NtCreateThreadEx (undocumented, available on Vista+)
-        typedef NTSTATUS(NTAPI* pNtCreateThreadEx)(
-            PHANDLE, ACCESS_MASK, PVOID, HANDLE, LPTHREAD_START_ROUTINE,
-            PVOID, ULONG, SIZE_T, SIZE_T, SIZE_T, PVOID);
-        HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
-        auto NtCreateThreadEx = hNtdll ? (pNtCreateThreadEx)
-            GetProcAddress(hNtdll, "NtCreateThreadEx") : NULL;
-
-        if (NtCreateThreadEx) {
-            NTSTATUS st = NtCreateThreadEx(
-                &hThread,
-                THREAD_ALL_ACCESS,
-                NULL,           // ObjectAttributes
-                pi.hProcess,
-                pLoadLib,
-                pRemote,
-                0,              // CreateFlags (0 = run immediately)
-                0, 0, 0,        // Stack sizes (use defaults)
-                NULL            // AttributeList
-            );
-            if (st < 0 || !hThread) {
-                logEvent("INJECT", QString("NtCreateThreadEx failed: 0x%1").arg(st, 0, 16));
-                hThread = NULL; // will fall through to CreateRemoteThread
-            }
-        }
-
-        // Method 2: CreateRemoteThread (fallback)
-        if (!hThread) {
-            logEvent("INJECT", "Falling back to CreateRemoteThread");
-            hThread = CreateRemoteThread(pi.hProcess, NULL, 0, pLoadLib, pRemote, 0, NULL);
-        }
-
-        if (!hThread) {
-            VirtualFreeEx(pi.hProcess, pRemote, 0, MEM_RELEASE);
-            TerminateProcess(pi.hProcess, 1); CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
-            setStatus("error", QString::fromUtf8(_S("注入失败 — 目标程序可能不兼容")));
-            m_injectBtn->setEnabled(true); m_injectBtn->setText(QString::fromUtf8(_S("▶  启动注入")));
-            return;
-        }
-        DWORD waitResult = WaitForSingleObject(hThread, 15000);
-        DWORD result = 0;
-        if (waitResult == WAIT_OBJECT_0) {
-            GetExitCodeThread(hThread, &result);
-            VirtualFreeEx(pi.hProcess, pRemote, 0, MEM_RELEASE);
-        } else {
-            // Timeout: do NOT free remote memory — remote thread may still be reading it.
-            // The memory will be reclaimed when the target process exits.
-            logEvent("INJECT", QString("Inject thread wait result: %1 (timeout/error)").arg(waitResult));
-        }
-        CloseHandle(hThread);
-        ResumeThread(pi.hThread); CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
-        CleanupDll();
-
-        if (result) {
+        if (outcome.kind == InjectOutcome::Success) {
             logEvent("INJECT", "Injection successful");
             playSound("success");
             showTrayMessage(QString::fromUtf8(_S("灵桥")), QString::fromUtf8(_S("注入成功")));
             setStatus("ok", QString::fromUtf8(_S("注入成功")));
             m_injectBtn->setText(QString::fromUtf8(_S("✓  注入成功")));
             m_injectBtn->setStyleSheet(buttonStyle(ButtonSuccess, spx(14), spx(10)));
-            QTimer::singleShot(1500, this, &QMainWindow::close);
-        } else {
-            logEvent("INJECT", "Injection failed — DLL rejected by target");
-            playSound("error");
-            setStatus("error", QString::fromUtf8(_S("注入失败 — DLL 加载被目标程序拒绝")));
-            m_injectBtn->setEnabled(true); m_injectBtn->setText(QString::fromUtf8(_S("▶  启动注入")));
+            QTimer::singleShot(1500, this, [this]() {
+                m_minimizeToTray = false;
+                close();
+            });
+            return;
         }
+
+        logEvent("INJECT", "Injection failed: " + outcome.message);
+        playSound("error");
+        setStatus("error", outcome.message);
+        m_injectBtn->setEnabled(true);
+        m_injectBtn->setText(QString::fromUtf8(_S("▶  启动注入")));
     }

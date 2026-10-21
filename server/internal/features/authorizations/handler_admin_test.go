@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -98,5 +99,60 @@ func TestHandlerPreviewAndExecuteAction(t *testing.T) {
 	}
 	if card.Status != cards.StatusArchived {
 		t.Fatalf("status = %q", card.Status)
+	}
+}
+
+
+func TestAuthorizationHandlersRejectWrongMethod(t *testing.T) {
+	h := NewHandler(NewService(newMemoryCardRepo(), memorySessionLister{}, time.Now))
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		call   func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "list", method: http.MethodPost, path: "/admin/api/control/authorizations", call: h.HandleList},
+		{name: "detail", method: http.MethodPost, path: "/admin/api/control/authorizations/AUTH-1", call: h.HandleDetail},
+		{name: "impact", method: http.MethodGet, path: "/admin/api/control/authorizations/AUTH-1/impact", call: h.HandleImpact},
+		{name: "action", method: http.MethodGet, path: "/admin/api/control/authorizations/AUTH-1/actions", call: h.HandleAction},
+		{name: "bulk impact", method: http.MethodGet, path: "/admin/api/control/authorizations/bulk/impact", call: h.HandleBulkImpact},
+		{name: "bulk action", method: http.MethodGet, path: "/admin/api/control/authorizations/bulk/actions", call: h.HandleBulkAction},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			rec := httptest.NewRecorder()
+			tt.call(rec, req)
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusMethodNotAllowed, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestAuthorizationHandlersRejectInvalidJSONWithoutLeak(t *testing.T) {
+	h := NewHandler(NewService(newMemoryCardRepo(), memorySessionLister{}, time.Now))
+	tests := []struct {
+		name string
+		path string
+		call func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "impact", path: "/admin/api/control/authorizations/AUTH-1/impact", call: h.HandleImpact},
+		{name: "action", path: "/admin/api/control/authorizations/AUTH-1/actions", call: h.HandleAction},
+		{name: "bulk impact", path: "/admin/api/control/authorizations/bulk/impact", call: h.HandleBulkImpact},
+		{name: "bulk action", path: "/admin/api/control/authorizations/bulk/actions", call: h.HandleBulkAction},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tt.path, bytes.NewBufferString("{"))
+			rec := httptest.NewRecorder()
+			tt.call(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+			if strings.Contains(rec.Body.String(), "unexpected") {
+				t.Fatalf("leaked internal detail: %s", rec.Body.String())
+			}
+		})
 	}
 }

@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "author_id": {
+    "hash": "SHA-256",
+    "material": "cardCode + \"|\" + machineId",
+    "encoding": "lowercase hex, first 16 characters",
+    "display_name": "用户- + uppercase(first 4 chars of authorId)",
+    "cases": [
+      {
+        "card_code": "ABCDEF-GHJKMN-PQRSTV",
+        "machine_id": "MACHINE-001",
+        "author_id": "5d9866218f867311",
+        "author_name": "用户-5D98"
+      },
+      {
+        "card_code": "CARD-1",
+        "machine_id": "M1",
+        "author_id": "113b7d7cc1090773",
+        "author_name": "用户-113B"
+      },
+      {
+        "card_code": "",
+        "machine_id": "",
+        "author_id": "cbe5cfdf7c2118a9",
+        "author_name": "用户-CBE5"
+      }
+    ]
+  },
+  "nickname": {
+    "max_runes": 16,
+    "banned_substrings": ["admin", "管理员", "系统", "官方"],
+    "cases": [
+      {"input": "  好友  ", "normalized": "好友", "allowed": true},
+      {"input": "", "normalized": "", "allowed": true},
+      {"input": "Admin大人", "normalized": "Admin大人", "allowed": false},
+      {"input": "系统通知", "normalized": "系统通知", "allowed": false},
+      {"input": "十七个字十七个字十七", "normalized": "十七个字十七个字十七", "allowed": true},
+      {"input": "十七个字十七个字十七个字十七个字十七", "normalized": "", "allowed": true}
+    ]
+  },
+  "reactions": {
+    "allowed": ["👍", "❤️", "😂", "？", "收到"],
+    "rejected": ["😀", "ok", "", "?"]
+  },
+  "reply_preview": {
+    "max_runes": 60
+  }
+}

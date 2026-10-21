@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -19,7 +20,7 @@ func (h *AdminHandler) HandleAdminUsersList(w http.ResponseWriter, r *http.Reque
 
 	admins, err := h.adminSvc.ListAdmins(r.Context())
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "Failed to list admins: "+err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to list admins")
 		return
 	}
 
@@ -66,7 +67,11 @@ func (h *AdminHandler) HandleAdminUserCreate(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := h.adminSvc.CreateAdmin(r.Context(), newAdmin); err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "Failed to create admin: "+err.Error())
+		if errors.Is(err, admin.ErrInvalidAdminRole) {
+			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to create admin")
 		return
 	}
 
@@ -100,32 +105,17 @@ func (h *AdminHandler) HandleAdminUserUpdate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Cannot disable or demote the last owner
-	if (req.SetDisabled && req.Disabled) || (req.ChangeRole && req.Role != admin.RoleOwner) {
-		if targetAdmin.Role == admin.RoleOwner {
-			// Check how many owners are left
-			admins, err := h.adminSvc.ListAdmins(r.Context())
-			if err == nil {
-				ownerCount := 0
-				for _, a := range admins {
-					if a.Role == admin.RoleOwner && !a.Disabled {
-						ownerCount++
-					}
-				}
-				if ownerCount <= 1 {
-					httpapi.WriteError(w, http.StatusBadRequest, "Cannot disable or demote the last active owner")
-					return
-				}
-			}
-		}
-	}
-
 	if req.ChangePassword {
-		if req.NewPassword == "" {
-			httpapi.WriteError(w, http.StatusBadRequest, "New password cannot be empty")
+		if len(req.NewPassword) < admin.MinPasswordBytes || len(req.NewPassword) > admin.MaxPasswordBytes {
+			httpapi.WriteError(w, http.StatusBadRequest, "password length must be between 6 and 72 bytes")
 			return
 		}
-		targetAdmin.PasswordHash = h.adminSvc.HashPassword(req.NewPassword)
+		passwordHash, err := h.adminSvc.HashPassword(req.NewPassword)
+		if err != nil {
+			httpapi.WriteError(w, http.StatusInternalServerError, "failed to hash password")
+			return
+		}
+		targetAdmin.PasswordHash = passwordHash
 	}
 
 	if req.ChangeRole {
@@ -137,7 +127,11 @@ func (h *AdminHandler) HandleAdminUserUpdate(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := h.adminSvc.UpdateAdmin(r.Context(), targetAdmin); err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "Failed to update admin: "+err.Error())
+		if errors.Is(err, admin.ErrInvalidAdminRole) || errors.Is(err, admin.ErrLastActiveOwner) {
+			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to update admin")
 		return
 	}
 

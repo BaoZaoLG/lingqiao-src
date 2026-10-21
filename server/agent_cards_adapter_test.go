@@ -46,12 +46,13 @@ func setupTestDBAndServices(t *testing.T) (*sql.DB, *cards.Service, *agents.Serv
 	CREATE TABLE invites (
 		code TEXT PRIMARY KEY,
 		created_at DATETIME NOT NULL,
-		created_by TEXT,
-		used_by TEXT,
+		created_by TEXT NOT NULL DEFAULT '',
+		used_by TEXT NOT NULL DEFAULT '',
 		used_at DATETIME,
-		max_uses INTEGER,
-		use_count INTEGER
+		max_uses INTEGER NOT NULL DEFAULT 0,
+		use_count INTEGER NOT NULL DEFAULT 0
 	);
+	CREATE INDEX idx_invites_created_at_code ON invites(created_at DESC, code ASC);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
@@ -97,7 +98,21 @@ func TestAgentCardManagerAdapter_StatusChecks(t *testing.T) {
 		t.Errorf("unexpected card code: %s", snapshot.Code)
 	}
 
-	// 2. Disable agent
+	// 2. Enforce exact duration and daily-session limits.
+	err = agentsSvc.SetAgentLimits(context.Background(), agent.ID, 1440, 2, 0)
+	if err != nil {
+		t.Fatalf("failed to set agent limits: %v", err)
+	}
+	_, err = adapter.GenerateCard(24*time.Hour+time.Second, "note", 1, agent.ID)
+	if err == nil || !strings.Contains(err.Error(), "duration exceeds maximum") {
+		t.Errorf("expected exact duration limit error, got: %v", err)
+	}
+	_, err = adapter.BatchGenerateCards(2, 24*time.Hour, "note", 1, agent.ID)
+	if err == nil || !strings.Contains(err.Error(), "daily sessions limit") {
+		t.Errorf("expected daily sessions limit error, got: %v", err)
+	}
+
+	// 3. Disable agent
 	err = agentsSvc.SetAgentStatus(context.Background(), agent.ID, true)
 	if err != nil {
 		t.Fatalf("failed to disable agent: %v", err)
@@ -113,7 +128,7 @@ func TestAgentCardManagerAdapter_StatusChecks(t *testing.T) {
 		t.Errorf("expected 'agent is disabled' error, got: %v", err)
 	}
 
-	// 3. Deleted/Non-existent agent ID
+	// 4. Deleted/Non-existent agent ID
 	_, err = adapter.GenerateCard(24*time.Hour, "note", 1, "AGT-nonexistent")
 	if err == nil || !strings.Contains(err.Error(), "agent not found") {
 		t.Errorf("expected 'agent not found' error, got: %v", err)

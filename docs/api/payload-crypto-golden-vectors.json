@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "key_exchange": {
+    "kdf": "PBKDF2-HMAC-SHA256",
+    "iterations": 100000,
+    "key_length": 32,
+    "kek_material": "normalizedCardCode + machineId",
+    "salt_prefix": "payload_key_",
+    "cipher": "AES-256-CBC",
+    "padding": "PKCS7",
+    "mac": "HMAC-SHA256 over ciphertext with KEK",
+    "combined_layout": "aesKey(32) || hmacKey(32) || iv(16)"
+  },
+  "payload_cipher": {
+    "algorithm": "AES-256-CTR",
+    "key": "payload aesKey",
+    "counter_iv": "payload iv"
+  },
+  "case": {
+    "card_code": "ABCDEF-GHJKMN-PQRSTV",
+    "normalized_card_code": "ABCDEFGHJKMNPQRSTV",
+    "machine_id": "MACHINE-001",
+    "payload_id": "payload-001",
+    "aes_key_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    "hmac_key_hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+    "iv_hex": "808182838485868788898a8b8c8d8e8f",
+    "encryption_iv_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "expected_kek_hex": "f98de8c4d2a896a3ece13a374554d8898b2bc3a44dbdfab716bfa5fa81168c99",
+    "expected_padded_length": 96,
+    "expected_encrypted_key_hex": "257617b59e9825b6c98376999f238ae03253877bab957b03ebf87b962cb68fa9739e43b44a6479bfe2a0f7a9f352bf11332d1e2bba32751eada3400dc58514f25a099eea2e7f008f35f8c2a35832d11699a7f00798bb822b67d733ee937eabf9",
+    "expected_encrypted_hmac_hex": "34d7c97bbce5b2b921d433fc4a2b117bdf4d955e08b1610af8999bd5b028d712",
+    "plaintext_dll_utf8": "MZ-golden-dll-sample-payload",
+    "expected_ctr_ciphertext_hex": "4bd06ecbf3efd66e2730fa61656a2aa6f9111f5d2987befc85aaf553"
+  }
+}

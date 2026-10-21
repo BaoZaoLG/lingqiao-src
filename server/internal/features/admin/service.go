@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -16,12 +17,23 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+const (
+	MinPasswordBytes = 6
+	MaxPasswordBytes = 72
+)
+
+var (
+	ErrInvalidAdminRole = errors.New("invalid admin role")
+	ErrLastActiveOwner  = errors.New("cannot disable or demote the last active owner")
+	ErrWrongOldPassword = errors.New("旧密码错误")
+)
+
 type Service struct {
 	repo       *RepositorySQLite
 	sessionTTL time.Duration
 }
 
-func NewService(repo *RepositorySQLite, sessionTTL time.Duration, dataDir string) *Service {
+func NewService(repo *RepositorySQLite, sessionTTL time.Duration, dataDir string) (*Service, error) {
 	if sessionTTL <= 0 {
 		sessionTTL = 4 * time.Hour
 	}
@@ -46,11 +58,16 @@ func NewService(repo *RepositorySQLite, sessionTTL time.Duration, dataDir string
 			pass := os.Getenv("ADMIN_PASSWORD")
 			if pass == "" {
 				b := make([]byte, 16)
-				rand.Read(b)
+				if _, err := rand.Read(b); err != nil {
+					return nil, fmt.Errorf("failed to generate owner admin password: %w", err)
+				}
 				pass = hex.EncodeToString(b)
 				log.Printf("[ADMIN] Generated random password: %s****", pass[:4])
 			}
-			passHash = s.hashPassword(pass)
+			passHash, err = s.hashPassword(pass)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		owner := &AdminUser{
@@ -66,12 +83,15 @@ func NewService(repo *RepositorySQLite, sessionTTL time.Duration, dataDir string
 		}
 	}
 
-	return s
+	return s, nil
 }
 
-func (s *Service) CreateSession(ctx context.Context, adminID string, remoteAddr, userAgent string) (string, int) {
+func (s *Service) CreateSession(ctx context.Context, adminID string, remoteAddr, userAgent string) (string, int, error) {
 	b := make([]byte, 32)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		log.Printf("[ADMIN] Failed to generate session token: %v", err)
+		return "", 0, err
+	}
 	token := "admin_" + hex.EncodeToString(b)
 
 	now := time.Now().UTC()
@@ -83,8 +103,10 @@ func (s *Service) CreateSession(ctx context.Context, adminID string, remoteAddr,
 		RemoteAddr: remoteAddr,
 		UserAgent:  userAgent,
 	}
-	_ = s.repo.CreateSession(ctx, session)
-	return token, int(s.sessionTTL.Seconds())
+	if err := s.repo.CreateSession(ctx, session); err != nil {
+		return "", 0, err
+	}
+	return token, int(s.sessionTTL.Seconds()), nil
 }
 
 func (s *Service) CheckSession(ctx context.Context, token string) (*AdminUser, bool) {
@@ -133,7 +155,7 @@ func (s *Service) VerifyLogin(ctx context.Context, username, password string) (*
 }
 
 func (s *Service) ChangePassword(ctx context.Context, adminID, oldPassword, newPassword string) error {
-	if len(newPassword) < 6 || len(newPassword) > 128 {
+	if len(newPassword) < MinPasswordBytes || len(newPassword) > MaxPasswordBytes {
 		return errors.New("password length invalid")
 	}
 
@@ -144,20 +166,26 @@ func (s *Service) ChangePassword(ctx context.Context, adminID, oldPassword, newP
 
 	match, _ := s.verifyPassword(oldPassword, admin.PasswordHash)
 	if !match {
-		return errors.New("旧密码错误")
+		return ErrWrongOldPassword
 	}
 
-	admin.PasswordHash = s.hashPassword(newPassword)
+	passwordHash, err := s.hashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	admin.PasswordHash = passwordHash
 	return s.repo.UpdateAdmin(ctx, admin)
 }
 
-func (s *Service) hashPassword(pw string) string {
+func (s *Service) hashPassword(pw string) (string, error) {
+	if len(pw) < MinPasswordBytes || len(pw) > MaxPasswordBytes {
+		return "", errors.New("password length invalid")
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
 	if err != nil {
-		h := sha256.Sum256([]byte(pw))
-		return hex.EncodeToString(h[:])
+		return "", fmt.Errorf("password hashing failed: %w", err)
 	}
-	return string(hash)
+	return string(hash), nil
 }
 
 func (s *Service) isBcryptHash(h string) bool {
@@ -194,14 +222,52 @@ func (s *Service) ListAdmins(ctx context.Context) ([]AdminUser, error) {
 }
 
 func (s *Service) CreateAdmin(ctx context.Context, admin *AdminUser) error {
-	admin.PasswordHash = s.hashPassword(admin.PasswordHash)
+	if admin == nil {
+		return errors.New("admin is required")
+	}
+	if !IsValidRole(admin.Role) {
+		return ErrInvalidAdminRole
+	}
+	passwordHash, err := s.hashPassword(admin.PasswordHash)
+	if err != nil {
+		return err
+	}
+	admin.PasswordHash = passwordHash
 	return s.repo.CreateAdmin(ctx, admin)
 }
 
 func (s *Service) UpdateAdmin(ctx context.Context, admin *AdminUser) error {
+	if admin == nil {
+		return errors.New("admin is required")
+	}
+	if !IsValidRole(admin.Role) {
+		return ErrInvalidAdminRole
+	}
+
+	current, err := s.repo.GetAdmin(ctx, admin.ID)
+	if err != nil {
+		return err
+	}
+	if current.Role == RoleOwner && !current.Disabled &&
+		(admin.Role != RoleOwner || admin.Disabled) {
+		admins, err := s.repo.ListAdmins(ctx)
+		if err != nil {
+			return err
+		}
+		activeOwners := 0
+		for _, candidate := range admins {
+			if candidate.Role == RoleOwner && !candidate.Disabled {
+				activeOwners++
+			}
+		}
+		if activeOwners <= 1 {
+			return ErrLastActiveOwner
+		}
+	}
+
 	return s.repo.UpdateAdmin(ctx, admin)
 }
 
-func (s *Service) HashPassword(pw string) string {
+func (s *Service) HashPassword(pw string) (string, error) {
 	return s.hashPassword(pw)
 }

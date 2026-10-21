@@ -2,7 +2,6 @@ package payloads
 
 import (
 	"fmt"
-	"log"
 	"sort"
 	"sync"
 	"time"
@@ -62,29 +61,39 @@ func (ps *PayloadStore) load() {
 	}
 }
 
-func (ps *PayloadStore) save() {
-	ps.mu.RLock()
+func (ps *PayloadStore) snapshotLocked() struct {
+	Payloads map[string]*PayloadInfo `json:"payloads"`
+	ActiveID string                  `json:"active_id"`
+} {
 	payloads := make(map[string]*PayloadInfo, len(ps.payloads))
 	for id, info := range ps.payloads {
 		payloads[id] = clonePayloadInfo(info)
 	}
-	data := struct {
+	return struct {
 		Payloads map[string]*PayloadInfo `json:"payloads"`
 		ActiveID string                  `json:"active_id"`
 	}{Payloads: payloads, ActiveID: ps.activeID}
-	ps.mu.RUnlock()
-	if err := ps.storage.Save("payloads", &data); err != nil {
-		log.Printf("[ERROR] Failed to persist payloads: %v", err)
-	}
 }
 
-func (ps *PayloadStore) Add(info *PayloadInfo) {
+func (ps *PayloadStore) Add(info *PayloadInfo) error {
+	if info == nil || info.PayloadID == "" {
+		return fmt.Errorf("invalid payload")
+	}
 	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	previous, existed := ps.payloads[info.PayloadID]
 	cp := clonePayloadInfo(info)
 	cp.Active = cp.PayloadID == ps.activeID
 	ps.payloads[info.PayloadID] = cp
-	ps.mu.Unlock()
-	ps.save()
+	if err := ps.storage.Save("payloads", ps.snapshotLocked()); err != nil {
+		if existed {
+			ps.payloads[info.PayloadID] = previous
+		} else {
+			delete(ps.payloads, info.PayloadID)
+		}
+		return fmt.Errorf("persist payload: %w", err)
+	}
+	return nil
 }
 
 func (ps *PayloadStore) Get(payloadID string) *PayloadInfo {
@@ -137,32 +146,40 @@ func (ps *PayloadStore) Active() *PayloadInfo {
 
 func (ps *PayloadStore) SetActive(payloadID string) error {
 	ps.mu.Lock()
+	defer ps.mu.Unlock()
 	if _, exists := ps.payloads[payloadID]; !exists {
-		ps.mu.Unlock()
 		return fmt.Errorf("payload not found")
 	}
+	previousActiveID := ps.activeID
 	ps.activeID = payloadID
 	for id, info := range ps.payloads {
 		info.Active = id == payloadID
 	}
-	ps.mu.Unlock()
-	ps.save()
+	if err := ps.storage.Save("payloads", ps.snapshotLocked()); err != nil {
+		ps.activeID = previousActiveID
+		for id, info := range ps.payloads {
+			info.Active = id == previousActiveID
+		}
+		return fmt.Errorf("persist active payload: %w", err)
+	}
 	return nil
 }
 
 func (ps *PayloadStore) Delete(payloadID string) error {
 	ps.mu.Lock()
+	defer ps.mu.Unlock()
 	if ps.activeID == payloadID {
-		ps.mu.Unlock()
 		return fmt.Errorf("cannot delete active payload")
 	}
-	if _, exists := ps.payloads[payloadID]; !exists {
-		ps.mu.Unlock()
+	previous, exists := ps.payloads[payloadID]
+	if !exists {
 		return fmt.Errorf("payload not found")
 	}
 	delete(ps.payloads, payloadID)
-	ps.mu.Unlock()
-	ps.save()
+	if err := ps.storage.Save("payloads", ps.snapshotLocked()); err != nil {
+		ps.payloads[payloadID] = previous
+		return fmt.Errorf("persist payload deletion: %w", err)
+	}
 	return nil
 }
 

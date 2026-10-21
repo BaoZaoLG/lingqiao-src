@@ -3,6 +3,7 @@ package system
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -28,6 +29,9 @@ func NewHandler(announcementSvc *AnnouncementService, db *sql.DB, blacklistSvc *
 }
 
 func (h *Handler) HandleAnnouncementGet(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
 	a := h.announcementSvc.Get()
 	items, activeID, _ := h.announcementSvc.ListRevisions()
 	if a == nil {
@@ -48,7 +52,7 @@ func (h *Handler) HandleAnnouncementSet(w http.ResponseWriter, r *http.Request) 
 		ID      string `json:"id"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -56,43 +60,47 @@ func (h *Handler) HandleAnnouncementSet(w http.ResponseWriter, r *http.Request) 
 	case "save":
 		a, err := h.announcementSvc.SaveRevision(req.Content, false)
 		if err != nil {
-			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+			httpapi.WriteError(w, http.StatusBadRequest, "failed to save announcement")
 			return
 		}
 		if err := h.recordAnnouncementAudit("announcement_saved", a); err != nil {
-			httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+			log.Printf("[SYSTEM] announcement audit failed: %v", err)
+			httpapi.WriteError(w, http.StatusInternalServerError, "action succeeded but audit log failed")
 			return
 		}
 		httpapi.WriteOK(w, map[string]interface{}{"announcement": a, "id": a.ID})
 	case "publish":
 		a, err := h.announcementSvc.PublishRevision(req.ID)
 		if err != nil {
-			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+			httpapi.WriteError(w, http.StatusBadRequest, "failed to publish announcement")
 			return
 		}
 		if err := h.recordAnnouncementAudit("announcement_published", a); err != nil {
-			httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+			log.Printf("[SYSTEM] announcement audit failed: %v", err)
+			httpapi.WriteError(w, http.StatusInternalServerError, "action succeeded but audit log failed")
 			return
 		}
 		httpapi.WriteOK(w, map[string]interface{}{"announcement": a, "id": a.ID})
 	case "delete":
 		if err := h.announcementSvc.DeleteRevision(req.ID); err != nil {
-			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+			httpapi.WriteError(w, http.StatusBadRequest, "failed to delete announcement")
 			return
 		}
 		if err := h.recordAnnouncementAudit("announcement_deleted", &Announcement{ID: req.ID}); err != nil {
-			httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+			log.Printf("[SYSTEM] announcement audit failed: %v", err)
+			httpapi.WriteError(w, http.StatusInternalServerError, "action succeeded but audit log failed")
 			return
 		}
 		httpapi.WriteOK(w, nil)
 	default:
 		a, err := h.announcementSvc.SaveRevision(req.Content, true)
 		if err != nil {
-			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+			httpapi.WriteError(w, http.StatusBadRequest, "failed to publish announcement")
 			return
 		}
 		if err := h.recordAnnouncementAudit("announcement_published", a); err != nil {
-			httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+			log.Printf("[SYSTEM] announcement audit failed: %v", err)
+			httpapi.WriteError(w, http.StatusInternalServerError, "action succeeded but audit log failed")
 			return
 		}
 		httpapi.WriteOK(w, map[string]interface{}{"announcement": a, "id": a.ID})
@@ -118,6 +126,9 @@ type MachineInfo struct {
 }
 
 func (h *Handler) HandleAdminMachines(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
 	if h.db == nil {
 		httpapi.WriteOK(w, map[string]interface{}{"machines": []MachineInfo{}})
 		return
@@ -135,7 +146,7 @@ func (h *Handler) HandleAdminMachines(w http.ResponseWriter, r *http.Request) {
 	`
 	rows, err := h.db.QueryContext(r.Context(), query)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to list machines")
 		return
 	}
 	defer rows.Close()
@@ -145,7 +156,7 @@ func (h *Handler) HandleAdminMachines(w http.ResponseWriter, r *http.Request) {
 		var m MachineInfo
 		var lastSeen sql.NullTime
 		if err := rows.Scan(&m.MachineID, &m.CardCount, &lastSeen); err != nil {
-			httpapi.WriteError(w, http.StatusInternalServerError, "failed to scan machine row: "+err.Error())
+			httpapi.WriteError(w, http.StatusInternalServerError, "failed to list machines")
 			return
 		}
 		if lastSeen.Valid {
@@ -154,14 +165,14 @@ func (h *Handler) HandleAdminMachines(w http.ResponseWriter, r *http.Request) {
 		machines = append(machines, m)
 	}
 	if err := rows.Err(); err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "error iterating machine rows: "+err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to list machines")
 		return
 	}
 
 	if h.blacklistSvc != nil {
 		blacklisted, err := h.blacklistSvc.List(r.Context())
 		if err != nil {
-			httpapi.WriteError(w, http.StatusInternalServerError, "failed to query blacklist: "+err.Error())
+			httpapi.WriteError(w, http.StatusInternalServerError, "failed to list machines")
 			return
 		}
 		blacklistSet := make(map[string]bool)

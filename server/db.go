@@ -93,17 +93,29 @@ func applySchema(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS invites (
 			code       TEXT PRIMARY KEY,
 			created_at DATETIME NOT NULL,
-			created_by TEXT,
-			used_by    TEXT,
+			created_by TEXT NOT NULL DEFAULT '',
+			used_by    TEXT NOT NULL DEFAULT '',
 			used_at    DATETIME,
-			max_uses   INTEGER,
-			use_count  INTEGER
+			max_uses   INTEGER NOT NULL DEFAULT 0,
+			use_count  INTEGER NOT NULL DEFAULT 0
 		)`,
+		`CREATE INDEX IF NOT EXISTS idx_invites_created_at_code ON invites(created_at DESC, code ASC)`,
 	}
 	for _, stmt := range stmts2 {
 		if _, err := db.Exec(stmt); err != nil {
 			return fmt.Errorf("exec %q: %w", stmt[:min(40, len(stmt))], err)
 		}
+	}
+
+	// Normalize legacy invites rows that predate NOT NULL defaults.
+	if _, err := db.Exec(`
+		UPDATE invites SET
+			created_by = COALESCE(created_by, ''),
+			used_by = COALESCE(used_by, ''),
+			max_uses = COALESCE(max_uses, 0),
+			use_count = COALESCE(use_count, 0)
+	`); err != nil {
+		return fmt.Errorf("normalize invites defaults: %w", err)
 	}
 
 	// Add risk control columns for agents

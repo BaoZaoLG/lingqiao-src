@@ -85,6 +85,9 @@ type nonceTracker struct {
 var usedNonces = &nonceTracker{nonces: make(map[string]time.Time)}
 
 func (nt *nonceTracker) checkAndStore(nonce string, ts time.Time) bool {
+	if nonce == "" {
+		return false
+	}
 	nt.mu.Lock()
 	defer nt.mu.Unlock()
 
@@ -180,6 +183,9 @@ func GetDLLKey(clientID string) ([]byte, error) {
 // VerifyHMAC verifies an HMAC-SHA256 signature with timestamp + nonce anti-replay.
 // signedData format: "timestamp|nonce|body"
 func VerifyHMAC(clientID, body, signature, timestamp, nonce string) error {
+	if clientID == "" || signature == "" || timestamp == "" || nonce == "" {
+		return fmt.Errorf("missing HMAC fields")
+	}
 	// Validate timestamp (must be within ±30 seconds)
 	var ts int64
 	if _, err := fmt.Sscanf(timestamp, "%d", &ts); err != nil {

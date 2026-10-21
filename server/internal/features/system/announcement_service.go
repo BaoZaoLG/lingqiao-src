@@ -34,6 +34,7 @@ type AnnouncementService struct {
 	dataDir      string
 	announcement Announcement
 	annMu        sync.RWMutex
+	indexMu      sync.Mutex
 }
 
 func NewAnnouncementService(dataDir string) *AnnouncementService {
@@ -67,15 +68,14 @@ func (s *AnnouncementService) Get() *Announcement {
 }
 
 func (s *AnnouncementService) Set(content string) error {
-	a, err := s.SaveRevision(content, true)
-	if err != nil {
-		return err
-	}
-	s.setActive(*a)
-	return nil
+	_, err := s.SaveRevision(content, true)
+	return err
 }
 
 func (s *AnnouncementService) SaveRevision(content string, publish bool) (*Announcement, error) {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+
 	if len([]byte(content)) > maxAnnouncementBytes {
 		return nil, fmt.Errorf("content exceeds %d bytes", maxAnnouncementBytes)
 	}
@@ -113,6 +113,9 @@ func (s *AnnouncementService) SaveRevision(content string, publish bool) (*Annou
 }
 
 func (s *AnnouncementService) PublishRevision(id string) (*Announcement, error) {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+
 	idx, err := s.readIndex()
 	if err != nil {
 		return nil, err
@@ -141,6 +144,9 @@ func (s *AnnouncementService) PublishRevision(id string) (*Announcement, error) 
 }
 
 func (s *AnnouncementService) DeleteRevision(id string) error {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+
 	idx, err := s.readIndex()
 	if err != nil {
 		return err
@@ -165,6 +171,9 @@ func (s *AnnouncementService) DeleteRevision(id string) error {
 }
 
 func (s *AnnouncementService) ListRevisions() ([]Announcement, string, error) {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+
 	idx, err := s.readIndex()
 	if err != nil {
 		return nil, "", err

@@ -2,6 +2,7 @@ package authorizations
 
 import (
 	"encoding/json"
+	"log"
 	"errors"
 	"net/http"
 	"strconv"
@@ -64,7 +65,8 @@ func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 		MaxSessions:     maxSessions,
 	})
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("[AUTHORIZATIONS] list failed: %v", err)
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to list authorizations")
 		return
 	}
 	httpapi.WriteJSON(w, http.StatusOK, map[string]interface{}{
@@ -96,10 +98,11 @@ func (h *Handler) HandleDetail(w http.ResponseWriter, r *http.Request) {
 	item, err := h.svc.Detail(r.Context(), code)
 	if err != nil {
 		if errors.Is(err, cards.ErrNotFound) {
-			httpapi.WriteError(w, http.StatusNotFound, err.Error())
+			httpapi.WriteError(w, http.StatusNotFound, "authorization not found")
 			return
 		}
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("[AUTHORIZATIONS] detail failed: %v", err)
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load authorization")
 		return
 	}
 	httpapi.WriteJSON(w, http.StatusOK, map[string]interface{}{
@@ -117,17 +120,18 @@ func (h *Handler) HandleImpact(w http.ResponseWriter, r *http.Request) {
 		ExtendHours int    `json:"extend_hours"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	code := authorizationCodeFromPath(strings.TrimSuffix(r.URL.Path, "/impact"))
 	preview, err := h.svc.PreviewAction(r.Context(), []string{code}, req.Action, req.ExtendHours)
 	if err != nil {
 		if errors.Is(err, cards.ErrNotFound) {
-			httpapi.WriteError(w, http.StatusNotFound, err.Error())
+			httpapi.WriteError(w, http.StatusNotFound, "authorization not found")
 			return
 		}
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("[AUTHORIZATIONS] impact preview failed: %v", err)
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to preview authorization action")
 		return
 	}
 	httpapi.WriteJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "preview": preview})
@@ -142,13 +146,18 @@ func (h *Handler) HandleAction(w http.ResponseWriter, r *http.Request) {
 		ExtendHours int    `json:"extend_hours"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	code := authorizationCodeFromPath(strings.TrimSuffix(r.URL.Path, "/actions"))
 	result, err := h.svc.ExecuteAction(r.Context(), []string{code}, req.Action, req.ExtendHours)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		if errors.Is(err, cards.ErrNotFound) {
+			httpapi.WriteError(w, http.StatusNotFound, "authorization not found")
+			return
+		}
+		log.Printf("[AUTHORIZATIONS] action failed: %v", err)
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to execute authorization action")
 		return
 	}
 	if h.auditSink != nil && result.Updated > 0 {
@@ -167,12 +176,13 @@ func (h *Handler) HandleBulkImpact(w http.ResponseWriter, r *http.Request) {
 		ExtendHours int      `json:"extend_hours"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	preview, err := h.svc.PreviewAction(r.Context(), req.Codes, req.Action, req.ExtendHours)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("[AUTHORIZATIONS] bulk impact failed: %v", err)
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to preview bulk authorization action")
 		return
 	}
 	httpapi.WriteJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "preview": preview})
@@ -188,12 +198,13 @@ func (h *Handler) HandleBulkAction(w http.ResponseWriter, r *http.Request) {
 		ExtendHours int      `json:"extend_hours"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	result, err := h.svc.ExecuteAction(r.Context(), req.Codes, req.Action, req.ExtendHours)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("[AUTHORIZATIONS] bulk action failed: %v", err)
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to execute bulk authorization action")
 		return
 	}
 	if h.auditSink != nil && result.Updated > 0 {

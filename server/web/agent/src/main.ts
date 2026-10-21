@@ -145,7 +145,7 @@ function renderCards(): void {
   const status = qs<HTMLSelectElement>('#cardStatusFilter').value;
   const list = cards.filter((card) => {
     if (status && card.status !== status) return false;
-    return !query || card.code.includes(query) || String(card.note ?? '').toUpperCase().includes(query);
+    return !query || String(card.code).toUpperCase().includes(query) || String(card.note ?? '').toUpperCase().includes(query);
   });
   qs<HTMLElement>('#cardsTable').innerHTML = list.length ? list.map(renderCardRow).join('') : '<tr><td colspan="6"><div class="empty-state">暂无卡密</div></td></tr>';
 }

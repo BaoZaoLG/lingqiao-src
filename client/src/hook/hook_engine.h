@@ -39,9 +39,15 @@ LONG HookAttach(PVOID* ppPointer, PVOID pDetour);
  *   OUT: pointer restored to original function address
  *
  * Returns ERROR_SUCCESS on success, Win32 error code on failure.
+ * Returns ERROR_NOT_FOUND if the trampoline is not in the registry.
  *
  * Thread-safe. Can be called from any thread. */
 LONG HookDetach(PVOID* ppPointer);
+
+/* Remove ALL hooks in reverse installation order.
+ * Call during runtime shutdown to ensure clean unloading.
+ * Thread-safe. */
+void HookDetachAll(void);
 
 #ifdef __cplusplus
 }

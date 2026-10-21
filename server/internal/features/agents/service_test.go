@@ -180,12 +180,13 @@ func setupTestDB(t *testing.T) *sql.DB {
 	CREATE TABLE invites (
 		code TEXT PRIMARY KEY,
 		created_at DATETIME NOT NULL,
-		created_by TEXT,
-		used_by TEXT,
+		created_by TEXT NOT NULL DEFAULT '',
+		used_by TEXT NOT NULL DEFAULT '',
 		used_at DATETIME,
-		max_uses INTEGER,
-		use_count INTEGER
+		max_uses INTEGER NOT NULL DEFAULT 0,
+		use_count INTEGER NOT NULL DEFAULT 0
 	);
+	CREATE INDEX idx_invites_created_at_code ON invites(created_at DESC, code ASC);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()

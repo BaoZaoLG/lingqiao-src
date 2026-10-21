@@ -50,6 +50,9 @@ func NewSessionService(now Clock, sessionTTL time.Duration) *SessionService {
 	if now == nil {
 		now = time.Now
 	}
+	if sessionTTL <= 0 {
+		sessionTTL = 4 * time.Hour
+	}
 	return &SessionService{now: now, sessionTTL: sessionTTL}
 }
 

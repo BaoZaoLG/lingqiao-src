@@ -31,13 +31,19 @@ type AdminHandler struct {
 	pwChangeLimiter *httpapi.RateLimiter
 }
 
-func NewAdminHandler(cardsSvc *cards.Service, sessionsSvc *sessions.Service, agentsSvc *agents.Service, inviteSvc *agents.InviteService, blacklistSvc *blacklist.Service, auditRecorder *audit.Recorder, db *sql.DB) *AdminHandler {
+func NewAdminHandler(cardsSvc *cards.Service, sessionsSvc *sessions.Service, agentsSvc *agents.Service, inviteSvc *agents.InviteService, blacklistSvc *blacklist.Service, auditRecorder *audit.Recorder, db *sql.DB) (*AdminHandler, error) {
 	return NewAdminHandlerWithTTL(cardsSvc, sessionsSvc, agentsSvc, inviteSvc, blacklistSvc, auditRecorder, db, currentSessionTTL())
 }
 
-func NewAdminHandlerWithTTL(cardsSvc *cards.Service, sessionsSvc *sessions.Service, agentsSvc *agents.Service, inviteSvc *agents.InviteService, blacklistSvc *blacklist.Service, auditRecorder *audit.Recorder, db *sql.DB, sessionTTL time.Duration) *AdminHandler {
-	repo, _ := admin.NewRepositorySQLite(db)
-	adminSvc := admin.NewService(repo, sessionTTL, dataDir())
+func NewAdminHandlerWithTTL(cardsSvc *cards.Service, sessionsSvc *sessions.Service, agentsSvc *agents.Service, inviteSvc *agents.InviteService, blacklistSvc *blacklist.Service, auditRecorder *audit.Recorder, db *sql.DB, sessionTTL time.Duration) (*AdminHandler, error) {
+	repo, err := admin.NewRepositorySQLite(db)
+	if err != nil {
+		return nil, err
+	}
+	adminSvc, err := admin.NewService(repo, sessionTTL, dataDir())
+	if err != nil {
+		return nil, err
+	}
 
 	return &AdminHandler{
 		cardsSvc:       cardsSvc,
@@ -52,7 +58,7 @@ func NewAdminHandlerWithTTL(cardsSvc *cards.Service, sessionsSvc *sessions.Servi
 		db:              db,
 		loginLimiter:    httpapi.NewRateLimiter(15*time.Minute, 5),
 		pwChangeLimiter: httpapi.NewRateLimiter(60*time.Minute, 10),
-	}
+	}, nil
 }
 
 func (h *AdminHandler) checkSession(r *http.Request) (*admin.AdminUser, bool) {
@@ -124,7 +130,11 @@ func (h *AdminHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	h.loginLimiter.Clear(ip)
 
-	token, maxAge := h.adminSvc.CreateSession(r.Context(), adminUser.ID, ip, r.UserAgent())
+	token, maxAge, err := h.adminSvc.CreateSession(r.Context(), adminUser.ID, ip, r.UserAgent())
+	if err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "登录失败，请重试")
+		return
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     "admin_token",
 		Value:    token,
@@ -135,6 +145,7 @@ func (h *AdminHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   maxAge,
 	})
 
+	w.Header().Set("Cache-Control", "no-store")
 	httpapi.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok", "token": token})
 }
 
@@ -158,12 +169,8 @@ func (h *AdminHandler) HandlePasswordChange(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if len(req.NewPassword) < 6 {
-		httpapi.WriteError(w, http.StatusBadRequest, "新密码长度不能少于6位")
-		return
-	}
-	if len(req.NewPassword) > 128 {
-		httpapi.WriteError(w, http.StatusBadRequest, "密码长度不能超过128位")
+	if len(req.NewPassword) < admin.MinPasswordBytes || len(req.NewPassword) > admin.MaxPasswordBytes {
+		httpapi.WriteError(w, http.StatusBadRequest, "新密码长度必须在6-72字节之间")
 		return
 	}
 	adminUser, ok := h.checkSession(r)

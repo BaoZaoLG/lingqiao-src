@@ -24,6 +24,12 @@ type SessionStore struct {
 
 // NewSessionStore ...
 func NewSessionStore(prefix string, ttl time.Duration) *SessionStore {
+	if ttl <= 0 {
+		ttl = 4 * time.Hour
+	}
+	if prefix == "" {
+		prefix = "sess"
+	}
 	return &SessionStore{
 		prefix: prefix,
 		ttl:    ttl,

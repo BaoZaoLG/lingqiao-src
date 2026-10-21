@@ -19,6 +19,7 @@
             "QTextBrowser { background: rgba(255, 255, 255, 0.35); border: 1px solid rgba(200, 200, 210, 0.40); "
             "border-radius: 8px; padding: 10px; color: #1a1a2e; font-size: 12px; }");
         connect(m_chatView, &QTextBrowser::anchorClicked, this, &MainWindow::onChatAnchorClicked);
+        installThemedTextBrowserMenu(m_chatView);
         o->addWidget(m_chatView, 1);
 
         // Reply Banner

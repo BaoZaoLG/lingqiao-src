@@ -71,6 +71,12 @@ func (r *Recorder) Append(event Event) error {
 
 // Query ...
 func (r *Recorder) Query(ctx context.Context, filter Filter, limit int) ([]Event, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 10000 {
+		limit = 10000
+	}
 	if r.repo != nil {
 		return r.repo.List(ctx, filter, limit)
 	}

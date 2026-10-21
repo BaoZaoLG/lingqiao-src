@@ -8,6 +8,7 @@
 #include <functional>
 
 #include <QByteArray>
+#include <QUrl>
 #include <QString>
 
 #include "config.h"
@@ -112,6 +113,16 @@ inline HttpResponse HttpPostJson(const wchar_t* host, int port,
         NULL, &statusCode, &statusCodeSize, NULL);
     result.statusCode = (int)statusCode;
     ReadResponseBody(hRequest.get(), &result.body);
+    if (statusCode >= 300 || statusCode < 200) {
+        char hostUtf8[128] = {0};
+        WideCharToMultiByte(CP_UTF8, 0, host, -1, hostUtf8, sizeof(hostUtf8), NULL, NULL);
+        char pathUtf8[256] = {0};
+        WideCharToMultiByte(CP_UTF8, 0, path, -1, pathUtf8, sizeof(pathUtf8), NULL, NULL);
+        char dbg[2048];
+        sprintf_s(dbg, "[HTTP-DBG] POST https://%s:%d%s -> %d body=%.200s\n",
+                  hostUtf8, port, pathUtf8, (int)statusCode, result.body.constData());
+        OutputDebugStringA(dbg);
+    }
     return result;
 }
 
@@ -249,6 +260,55 @@ inline HttpResponse HttpGetBearer(const wchar_t* host, const wchar_t* path, cons
         buf[bytesRead] = 0;
         result.body.append(buf, (int)bytesRead);
     }
+    return result;
+}
+
+// Generic HTTPS/HTTP GET with Bearer auth using WinHTTP/Windows Schannel.
+// This avoids requiring a Qt OpenSSL backend in the deployed client.
+inline HttpResponse HttpGetBearerUrl(const QUrl& url, const QString& bearerToken)
+{
+    HttpResponse result = {0, QByteArray()};
+    const bool secure = url.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) == 0;
+    const INTERNET_PORT defaultPort = secure ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT;
+    const INTERNET_PORT port = url.port(defaultPort);
+    const QString encodedPath = url.path(QUrl::FullyEncoded).isEmpty()
+        ? QStringLiteral("/") : url.path(QUrl::FullyEncoded);
+    const QString encodedQuery = url.query(QUrl::FullyEncoded);
+    const QString requestPath = encodedQuery.isEmpty()
+        ? encodedPath : encodedPath + QStringLiteral("?") + encodedQuery;
+    const std::wstring host = url.host().toStdWString();
+    const std::wstring path = requestPath.toStdWString();
+
+    WinHttpHandle hSession(WinHttpOpen(_WS(L"CefBridge/2.0"),
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0));
+    if (!hSession) { result.error = QString::fromUtf8(_S("无法初始化网络")); return result; }
+    WinHttpHandle hConnect(WinHttpConnect(hSession.get(), host.c_str(), port, 0));
+    if (!hConnect) { result.error = QString::fromUtf8(_S("连接服务器失败")); return result; }
+    WinHttpHandle hRequest(WinHttpOpenRequest(hConnect.get(), L"GET", path.c_str(), NULL, NULL, NULL,
+        secure ? WINHTTP_FLAG_SECURE : 0));
+    if (!hRequest) { result.error = QString::fromUtf8(_S("创建请求失败")); return result; }
+
+    std::wstring auth = L"Authorization: Bearer " + bearerToken.toStdWString()
+                      + L"\r\nAccept: application/json";
+    WinHttpAddRequestHeaders(hRequest.get(), auth.c_str(), (DWORD)-1L, WINHTTP_ADDREQ_FLAG_ADD);
+    WinHttpSetTimeouts(hRequest.get(), 5000, 5000, 5000, 10000);
+    if (!WinHttpSendRequest(hRequest.get(), NULL, 0, NULL, 0, 0, 0)) {
+        DWORD e = GetLastError();
+        result.error = (e == ERROR_WINHTTP_TIMEOUT) ? QString::fromUtf8(_S("请求超时"))
+            : QString::fromUtf8(_S("请求失败 (错误: %1)")).arg(e);
+        return result;
+    }
+    if (!WinHttpReceiveResponse(hRequest.get(), NULL)) {
+        DWORD e = GetLastError();
+        result.error = (e == ERROR_WINHTTP_TIMEOUT) ? QString::fromUtf8(_S("响应超时"))
+            : QString::fromUtf8(_S("接收响应失败 (错误: %1)")).arg(e);
+        return result;
+    }
+    DWORD statusCode = 0, statusCodeSize = sizeof(statusCode);
+    WinHttpQueryHeaders(hRequest.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+        NULL, &statusCode, &statusCodeSize, NULL);
+    result.statusCode = (int)statusCode;
+    ReadResponseBody(hRequest.get(), &result.body);
     return result;
 }
 

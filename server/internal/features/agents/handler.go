@@ -130,15 +130,18 @@ func hashToken(token string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func (h *AgentHandler) createSession() string {
+func (h *AgentHandler) createSession() (string, error) {
 	b := make([]byte, 32)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		log.Printf("[AGENT] Failed to generate session token: %v", err)
+		return "", err
+	}
 	token := "agent_" + hex.EncodeToString(b)
 	h.mu.Lock()
 	h.sessions[hashToken(token)] = time.Now().Add(h.sessionTTL)
 	h.mu.Unlock()
 	h.saveSessions()
-	return token
+	return token, nil
 }
 
 func extractToken(r *http.Request, cookieName string) string {
@@ -239,7 +242,7 @@ func (h *AgentHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		Password   string `json:"password"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	req.Username = strings.TrimSpace(req.Username)
@@ -260,29 +263,7 @@ func (h *AgentHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 1. Validate invite code exists and has uses left (pre-check)
-	invites, err := h.inviteSvc.List()
-	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "failed to read invites: "+err.Error())
-		return
-	}
-	var inviteFound bool
-	for _, invite := range invites {
-		if invite.Code == req.InviteCode {
-			inviteFound = true
-			if invite.MaxUses > 0 && invite.UseCount >= invite.MaxUses {
-				httpapi.WriteError(w, http.StatusBadRequest, "邀请码已用完")
-				return
-			}
-			break
-		}
-	}
-	if !inviteFound {
-		httpapi.WriteError(w, http.StatusBadRequest, "邀请码无效")
-		return
-	}
-
-	// 2. Call the transactional RegisterAgent method
+	// 1. Call the transactional RegisterAgent method
 	agent, err := h.svc.RegisterAgent(r.Context(), req.Username, req.Password, "", req.InviteCode, h.inviteSvc)
 	if err != nil {
 		if errors.Is(err, ErrUsernameExists) {
@@ -292,7 +273,8 @@ func (h *AgentHandler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		} else if strings.Contains(err.Error(), "邀请码") {
 			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		} else {
-			httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+			log.Printf("[AGENT] register failed: %v", err)
+			httpapi.WriteError(w, http.StatusInternalServerError, "注册失败，请稍后重试")
 		}
 		return
 	}
@@ -320,7 +302,7 @@ func (h *AgentHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -340,7 +322,11 @@ func (h *AgentHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	h.loginLimiter.Clear("login_" + ip)
 
-	token := h.createSession()
+	token, err := h.createSession()
+	if err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "登录失败，请重试")
+		return
+	}
 	h.mapTokenToAgent(token, agent.ID)
 
 	http.SetCookie(w, &http.Cookie{
@@ -362,6 +348,9 @@ func (h *AgentHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AgentHandler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
 	agentID := r.Header.Get("X-Agent-ID")
 	total, active, expired := h.reader.AgentStats(agentID)
 	httpapi.WriteOK(w, map[string]interface{}{
@@ -372,11 +361,17 @@ func (h *AgentHandler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AgentHandler) HandleListCards(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
 	agentID := r.Header.Get("X-Agent-ID")
 	httpapi.WriteOK(w, map[string]interface{}{"cards": h.reader.AgentCards(agentID)})
 }
 
 func (h *AgentHandler) HandleAgentInfo(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
 	agentID := r.Header.Get("X-Agent-ID")
 	agent, err := h.svc.GetAgent(r.Context(), agentID)
 	if err != nil || agent == nil {
@@ -405,7 +400,7 @@ func (h *AgentHandler) HandleGenerateCard(w http.ResponseWriter, r *http.Request
 		Note        string `json:"note"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -417,7 +412,8 @@ func (h *AgentHandler) HandleGenerateCard(w http.ResponseWriter, r *http.Request
 
 	card, err := h.issuer.GenerateCard(time.Duration(req.Duration)*time.Hour, req.Note, req.MaxSessions, agentID)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("[AGENT] generate card failed: %v", err)
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to generate card")
 		return
 	}
 
@@ -442,7 +438,7 @@ func (h *AgentHandler) HandleBatchGenerate(w http.ResponseWriter, r *http.Reques
 		Note        string `json:"note"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -452,7 +448,8 @@ func (h *AgentHandler) HandleBatchGenerate(w http.ResponseWriter, r *http.Reques
 
 	cards, err := h.issuer.BatchGenerateCards(req.Count, time.Duration(req.Duration)*time.Hour, req.Note, req.MaxSessions, agentID)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("[AGENT] batch generate failed: %v", err)
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to batch generate cards")
 		return
 	}
 
@@ -482,7 +479,7 @@ func (h *AgentHandler) HandlePasswordChange(w http.ResponseWriter, r *http.Reque
 		NewPassword string `json:"new_password"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -496,7 +493,8 @@ func (h *AgentHandler) HandlePasswordChange(w http.ResponseWriter, r *http.Reque
 		if errors.Is(err, ErrInvalidPassword) {
 			httpapi.WriteError(w, http.StatusUnauthorized, "旧密码错误")
 		} else {
-			httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+			log.Printf("[AGENT] password change failed: %v", err)
+			httpapi.WriteError(w, http.StatusInternalServerError, "密码修改失败，请稍后重试")
 		}
 		return
 	}

@@ -36,6 +36,7 @@
           <button class="nav-item" data-page-target="cards"><span>▤</span><span>卡密授权</span></button>
           <button class="nav-item" data-page-target="sessions"><span>●</span><span>在线会话</span></button>
           <button class="nav-item" data-page-target="machines"><span>▣</span><span>机器画像</span></button>
+          <button class="nav-item" data-page-target="exam"><span>✓</span><span>答题记录</span></button>
           <div class="nav-section">发布中心</div>
           <button class="nav-item" data-page-target="updates"><span>⇧</span><span>客户端发布</span></button>
           <button class="nav-item" data-page-target="scripts"><span>{}</span><span>脚本仓库</span></button>
@@ -235,6 +236,14 @@
           <div class="page-header"><h2>载荷管理</h2><p>加密载荷的启用、回滚和下线</p></div>
           <section class="panel">
             <div class="action-bar"><button class="btn btn-ghost" id="refreshPayloadsButton">刷新</button></div>
+            <div class="form-row" style="margin-bottom: 1rem;">
+              <label>上传 DLL 载荷</label>
+              <input type="file" id="payloadDllFile" accept=".dll" />
+              <input type="text" id="payloadIdInput" placeholder="可选载荷 ID（留空自动生成）" style="margin-left: 0.5rem; min-width: 220px;" />
+              <label style="margin-left: 0.5rem;"><input type="checkbox" id="payloadActivateAfterUpload" checked /> 上传后立即启用</label>
+              <button class="btn btn-primary" id="uploadPayloadDllButton" style="margin-left: 0.5rem;">上传</button>
+              <span id="payloadUploadProgress"></span>
+            </div>
             <div id="payloadCurrentInfo" class="empty-state">加载中...</div>
             <div class="table-wrap"><table><thead><tr><th>载荷 ID</th><th>状态</th><th>大小</th><th>分片</th><th>SHA256</th><th>上传时间</th><th>操作</th></tr></thead><tbody id="payloadsTable"></tbody></table></div>
           </section>
@@ -272,6 +281,38 @@
           <div class="page-header"><h2>系统状态</h2><p>服务健康、请求量和运行时间</p></div>
           <section class="panel"><h3>资源状态</h3><div id="resourceInfo">加载中...</div></section>
           <section class="panel"><div id="healthInfo">加载中...</div></section>
+        </div>
+
+        <div class="page" id="page-exam">
+          <div class="page-header"><h2>答题记录</h2><p>查看 AutoExam 自动答题的历史记录和统计</p></div>
+          <section class="panel">
+            <div class="action-bar">
+              <input id="examSearch" type="text" placeholder="搜索题目内容或ID..." />
+              <input id="examCardFilter" type="text" placeholder="卡密筛选..." />
+              <button class="btn btn-primary" id="examRefreshButton">刷新</button>
+              <button class="btn btn-ghost" id="examClearFiltersButton">清除</button>
+              <button class="btn btn-success" id="examExportButton">导出CSV</button>
+            </div>
+            <div id="examStats" class="stats-row"></div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>时间</th>
+                    <th>卡密</th>
+                    <th>题型</th>
+                    <th>题目</th>
+                    <th>作答</th>
+                    <th>模型</th>
+                    <th>耗时</th>
+                    <th>状态</th>
+                  </tr>
+                </thead>
+                <tbody id="examTable"></tbody>
+              </table>
+            </div>
+            <div class="pagination" id="examPagination"></div>
+          </section>
         </div>
       </section>
     </main>

@@ -245,3 +245,40 @@ func TestHandler_Activate_Blacklisted(t *testing.T) {
 		t.Errorf("expected 403 Forbidden for blacklisted card, got %d. body: %s", rr.Code, rr.Body.String())
 	}
 }
+
+
+func TestAdminSessionHandlersRejectWrongMethod(t *testing.T) {
+	h := sessions.NewHandler(nil, nil, nil, nil)
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		call   func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "list", method: http.MethodPost, path: "/admin/api/sessions", call: h.HandleListSessions},
+		{name: "force logout", method: http.MethodGet, path: "/admin/api/force-logout", call: h.HandleForceLogout},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			rec := httptest.NewRecorder()
+			tt.call(rec, req)
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("status=%d want %d body=%s", rec.Code, http.StatusMethodNotAllowed, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestForceLogoutRejectsInvalidJSONWithoutLeak(t *testing.T) {
+	h := sessions.NewHandler(nil, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/force-logout", strings.NewReader("{"))
+	rec := httptest.NewRecorder()
+	h.HandleForceLogout(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want %d body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "unexpected") {
+		t.Fatalf("leaked internal detail: %s", rec.Body.String())
+	}
+}

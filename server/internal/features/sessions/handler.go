@@ -60,37 +60,6 @@ func writeCompatOK(w http.ResponseWriter, data map[string]interface{}) {
 	json.NewEncoder(w).Encode(data)
 }
 
-// writeError writes a standard JSON error response
-func writeError(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"code":    status,
-		"message": message,
-	})
-}
-
-// writeJSON writes a standard JSON response without code/message wrapping
-func writeJSON(w http.ResponseWriter, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
-}
-
-// requireMethod ensures the request uses the expected method
-func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
-	if r.Method != method {
-		httpapi.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return false
-	}
-	return true
-}
-
-// readJSON is a helper to read JSON payloads
-func readJSON(r *http.Request, dst interface{}) error {
-	defer r.Body.Close()
-	return json.NewDecoder(r.Body).Decode(dst)
-}
-
 func (h *Handler) HandleActivate(w http.ResponseWriter, r *http.Request) {
 	if !httpapi.RequireMethod(w, r, http.MethodPost) {
 		return
@@ -242,7 +211,7 @@ func (h *Handler) HandleListSessions(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.List(r.Context(), filter)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to list sessions")
 		return
 	}
 
@@ -279,7 +248,7 @@ func (h *Handler) HandleForceLogout(w http.ResponseWriter, r *http.Request) {
 		SessionToken string `json:"session_token"`
 	}
 	if err := httpapi.ReadJSON(r, &reqPayload); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -298,7 +267,7 @@ func (h *Handler) HandleForceLogout(w http.ResponseWriter, r *http.Request) {
 			httpapi.WriteError(w, http.StatusNotFound, "session not found")
 			return
 		}
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to terminate session")
 		return
 	}
 

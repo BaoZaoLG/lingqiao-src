@@ -78,6 +78,7 @@ func setCredentialedCORSOrigin(w http.ResponseWriter, r *http.Request, allowedOr
 func applyBodyLimit(w http.ResponseWriter, r *http.Request) {
 	limit := int64(1 << 20) // 1MB default
 	if strings.HasPrefix(r.URL.Path, "/admin/api/payload/upload") ||
+		strings.HasPrefix(r.URL.Path, "/admin/api/payloads/upload-dll") ||
 		strings.HasPrefix(r.URL.Path, "/admin/api/update/upload") ||
 		strings.Contains(r.URL.Path, "/packages") {
 		limit = 200 << 20 // 200MB for uploads

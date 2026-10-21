@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "alphabet": "0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+  "normalized_length": 18,
+  "format": "XXXXXX-XXXXXX-XXXXXX",
+  "normalize": [
+    {"input": " abcd-efgh ijkl ", "normalized": "ABCDEFGHIJKL"},
+    {"input": "ABCDEF-GHJKMN-PQRSTV", "normalized": "ABCDEFGHJKMNPQRSTV"},
+    {"input": "abcdef-ghjkmn-pqrstv", "normalized": "ABCDEFGHJKMNPQRSTV"}
+  ],
+  "same": [
+    {"a": "ABCD-EFGH", "b": "abcd efgh", "equal": true},
+    {"a": "ABCDEF-GHJKMN-PQRSTV", "b": "abcdefghjkmnpqrstv", "equal": true},
+    {"a": "ABCDEF-GHJKMN-PQRSTV", "b": "ABCDEF-GHJKMN-PQRSTW", "equal": false}
+  ],
+  "format_cases": [
+    {"input": "abcdefghjkmnpqrstv", "formatted": "ABCDEF-GHJKMN-PQRSTV"},
+    {"input": "ABCDEF-GHJKMN-PQRSTV", "formatted": "ABCDEF-GHJKMN-PQRSTV"},
+    {"input": "SHORT", "formatted": "SHORT"}
+  ],
+  "validate": [
+    {"input": "abcdef-ghjkmn-pqrstv", "valid": true, "normalized": "ABCDEFGHJKMNPQRSTV"},
+    {"input": "ABCDEFGHJKMNPQRSTV", "valid": true, "normalized": "ABCDEFGHJKMNPQRSTV"},
+    {"input": "ABCDEFGHJKMNPQRST", "valid": false, "reason": "length"},
+    {"input": "ABCDEFGHJKMNPQRSTU", "valid": false, "reason": "alphabet"},
+    {"input": "ABCDEFGHJKMNPQRST!", "valid": false, "reason": "alphabet"}
+  ]
+}

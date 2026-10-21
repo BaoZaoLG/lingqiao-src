@@ -2,6 +2,7 @@ package chat
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -71,25 +72,25 @@ func (h *Handler) HandleChatSend(w http.ResponseWriter, r *http.Request) {
 	}
 	req, err := h.readSignedRequest(r)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	msg, err := h.chat.Add(&domainSession, req.Content, req.ReplyToID)
 	if err != nil {
-		if err.Error() == "muted" {
+		if errors.Is(err, ErrMuted) {
 			httpapi.WriteError(w, http.StatusForbidden, "你已被禁言，暂时无法发送消息")
 			return
 		}
-		if err.Error() == "rate limited" {
+		if errors.Is(err, ErrRateLimited) {
 			httpapi.WriteError(w, http.StatusTooManyRequests, "发送过于频繁，请稍后再试")
 			return
 		}
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 	httpapi.WriteOK(w, map[string]interface{}{"message": msg})
@@ -101,12 +102,12 @@ func (h *Handler) HandleChatProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	req, err := h.readSignedRequest(r)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	var profile ChatProfile
@@ -116,11 +117,11 @@ func (h *Handler) HandleChatProfile(w http.ResponseWriter, r *http.Request) {
 		profile, err = h.chat.Profile(&domainSession)
 	}
 	if err != nil {
-		if err.Error() == "muted" {
+		if errors.Is(err, ErrMuted) {
 			httpapi.WriteError(w, http.StatusForbidden, "你已被禁言，暂时无法修改昵称")
 			return
 		}
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 	httpapi.WriteOK(w, map[string]interface{}{"profile": profile})
@@ -132,21 +133,21 @@ func (h *Handler) HandleChatReact(w http.ResponseWriter, r *http.Request) {
 	}
 	req, err := h.readSignedRequest(r)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	msg, err := h.chat.React(&domainSession, req.MessageID, req.Reaction)
 	if err != nil {
-		if err.Error() == "muted" {
+		if errors.Is(err, ErrMuted) {
 			httpapi.WriteError(w, http.StatusForbidden, "你已被禁言，暂时无法添加表情")
 			return
 		}
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 	httpapi.WriteOK(w, map[string]interface{}{"message": msg})
@@ -158,17 +159,17 @@ func (h *Handler) HandleChatPresence(w http.ResponseWriter, r *http.Request) {
 	}
 	req, err := h.readSignedRequest(r)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	online, err := h.chat.TouchPresence(&domainSession)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 	httpapi.WriteOK(w, map[string]interface{}{"online": online})
@@ -180,12 +181,12 @@ func (h *Handler) HandleChatMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	req, err := h.readSignedRequest(r)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	domainSession, err := h.sessionsSvc.ValidateBound(r.Context(), req.SessionToken, req.MachineID, req.Card)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 	httpapi.WriteOK(w, map[string]interface{}{"messages": h.chat.List(req.AfterID, &domainSession)})
@@ -216,7 +217,7 @@ func (h *Handler) HandleChatDelete(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.ID <= 0 {
@@ -243,12 +244,12 @@ func (h *Handler) HandleChatSystem(w http.ResponseWriter, r *http.Request) {
 		Content string `json:"content"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	msg, err := h.chat.AddSystem(req.Content)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 	httpapi.WriteOK(w, map[string]interface{}{"message": msg})
@@ -269,13 +270,13 @@ func (h *Handler) HandleChatMute(w http.ResponseWriter, r *http.Request) {
 		Reason          string `json:"reason"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	duration := time.Duration(req.DurationMinutes) * time.Minute
 	mute, err := h.chat.Mute(req.AuthorID, duration, req.Reason)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 	httpapi.WriteOK(w, map[string]interface{}{"mute": mute})

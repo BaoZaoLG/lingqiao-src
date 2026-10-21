@@ -28,20 +28,22 @@ export class ApiClient {
   constructor(private readonly options: ApiClientOptions = {}) {}
 
   async get<T extends JsonRecord>(path: string): Promise<T> {
-    return this.request<T>(path);
+    return this.request<T>('GET', path);
   }
 
   async post<T extends JsonRecord>(path: string, body?: JsonRecord | FormData): Promise<T> {
-    return this.request<T>(path, body);
+    return this.request<T>('POST', path, body);
   }
 
-  private async request<T extends JsonRecord>(path: string, body?: JsonRecord | FormData): Promise<T> {
-    const init: RequestInit = { credentials: 'include', headers: {} };
+  async delete<T extends JsonRecord>(path: string): Promise<T> {
+    return this.request<T>('DELETE', path);
+  }
+
+  private async request<T extends JsonRecord>(method: string, path: string, body?: JsonRecord | FormData): Promise<T> {
+    const init: RequestInit = { method, credentials: 'include', headers: {} };
     if (body instanceof FormData) {
-      init.method = 'POST';
       init.body = body;
     } else if (body) {
-      init.method = 'POST';
       init.headers = { 'Content-Type': 'application/json' };
       init.body = JSON.stringify(body);
     }

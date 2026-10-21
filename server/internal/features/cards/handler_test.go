@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -236,5 +237,73 @@ func TestHandlerUpdateCardDetails_MaxSessionsBoundary(t *testing.T) {
 	h.HandleUpdateCardDetails(w1, req1)
 	if w1.Code != http.StatusOK {
 		t.Errorf("Expected 200 OK for max_sessions=1, got %d", w1.Code)
+	}
+}
+
+func TestCardHandlersRejectWrongMethod(t *testing.T) {
+	h := NewHandler(nil, nil)
+	tests := []struct {
+		name    string
+		method  string
+		path    string
+		handler http.HandlerFunc
+	}{
+		{name: "list cards", method: http.MethodPost, path: "/admin/api/cards", handler: h.HandleListCards},
+		{name: "generate card", method: http.MethodGet, path: "/admin/api/card/generate", handler: h.HandleGenerateCard},
+		{name: "batch generate", method: http.MethodGet, path: "/admin/api/card/batch-generate", handler: h.HandleBatchGenerateCards},
+		{name: "update card", method: http.MethodGet, path: "/admin/api/card/update", handler: h.HandleUpdateCard},
+		{name: "update details", method: http.MethodGet, path: "/admin/api/card/update-details", handler: h.HandleUpdateCardDetails},
+		{name: "bulk cards", method: http.MethodGet, path: "/admin/api/cards/bulk", handler: h.HandleBulkCards},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			rec := httptest.NewRecorder()
+			tt.handler(rec, req)
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusMethodNotAllowed, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestCardUpdateHandlersRejectInvalidJSONWithoutLeak(t *testing.T) {
+	h := NewHandler(nil, nil)
+	tests := []struct {
+		name    string
+		path    string
+		handler http.HandlerFunc
+	}{
+		{name: "update card", path: "/admin/api/card/update", handler: h.HandleUpdateCard},
+		{name: "update details", path: "/admin/api/card/update-details", handler: h.HandleUpdateCardDetails},
+		{name: "bulk cards", path: "/admin/api/cards/bulk", handler: h.HandleBulkCards},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tt.path, bytes.NewBufferString("{"))
+			rec := httptest.NewRecorder()
+			tt.handler(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+			body := rec.Body.String()
+			if strings.Contains(body, "unexpected") || strings.Contains(body, "sql:") {
+				t.Fatalf("leaked internal detail: %s", body)
+			}
+		})
+	}
+}
+
+func TestHandleUpdateCardNotFoundSanitized(t *testing.T) {
+	h, _ := setupHandlerTest(t)
+	body := []byte(`{"code":"MISSING","action":"disable"}`)
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/card/update", bytes.NewBuffer(body))
+	rec := httptest.NewRecorder()
+	h.HandleUpdateCard(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "card not found") {
+		t.Fatalf("expected sanitized not found body, got %s", rec.Body.String())
 	}
 }

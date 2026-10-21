@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -190,4 +191,152 @@ func TestDeduplicateAgentUsernames(t *testing.T) {
 	if _, err := db.Exec(`CREATE UNIQUE INDEX idx_agents_username ON agents(username)`); err != nil {
 		t.Fatalf("failed to create unique index, duplicates still exist: %v", err)
 	}
+}
+
+func TestApplySchemaInvitesLegacyCompatibility(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy-invites.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`
+		CREATE TABLE invites (
+			code TEXT PRIMARY KEY,
+			created_at DATETIME NOT NULL,
+			created_by TEXT,
+			used_by TEXT,
+			used_at DATETIME,
+			max_uses INTEGER,
+			use_count INTEGER
+		);
+		INSERT INTO invites (code, created_at, created_by, used_by, used_at, max_uses, use_count)
+		VALUES ('INV-LEGACY', '2026-01-02T03:04:05Z', NULL, NULL, NULL, NULL, NULL);
+	`); err != nil {
+		t.Fatalf("failed to create legacy schema: %v", err)
+	}
+
+	if err := applySchema(db); err != nil {
+		t.Fatalf("first schema application failed: %v", err)
+	}
+	if err := applySchema(db); err != nil {
+		t.Fatalf("second schema application failed: %v", err)
+	}
+
+	var createdBy, usedBy string
+	var maxUses, useCount int
+	if err := db.QueryRow(`
+		SELECT created_by, used_by, max_uses, use_count
+		FROM invites
+		WHERE code = 'INV-LEGACY'
+	`).Scan(&createdBy, &usedBy, &maxUses, &useCount); err != nil {
+		t.Fatalf("legacy invite defaults were not normalized: %v", err)
+	}
+	if createdBy != "" || usedBy != "" || maxUses != 0 || useCount != 0 {
+		t.Fatalf("unexpected normalized values: created_by=%q used_by=%q max_uses=%d use_count=%d",
+			createdBy, usedBy, maxUses, useCount)
+	}
+
+	var indexSQL string
+	if err := db.QueryRow(`
+		SELECT sql
+		FROM sqlite_master
+		WHERE type = 'index' AND name = 'idx_invites_created_at_code'
+	`).Scan(&indexSQL); err != nil {
+		t.Fatalf("invite list index missing: %v", err)
+	}
+	if !strings.Contains(indexSQL, "created_at DESC, code ASC") {
+		t.Fatalf("unexpected invite list index definition: %s", indexSQL)
+	}
+}
+
+func TestMigrateJSONInvitesToSQLiteAtomicAndIdempotent(t *testing.T) {
+	t.Run("imports legacy rows once", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		storage := NewJSONStorage(tmpDir)
+		if err := os.WriteFile(filepath.Join(tmpDir, "invites.json"), []byte(`[
+			{
+				"code": "INV-OLD-1",
+				"created_at": "2026-01-02T03:04:05Z",
+				"created_by": "legacy-admin",
+				"max_uses": 2,
+				"use_count": 1
+			}
+		]`), 0600); err != nil {
+			t.Fatalf("failed to write invites.json: %v", err)
+		}
+
+		db, err := sql.Open("sqlite", filepath.Join(tmpDir, "migration.db"))
+		if err != nil {
+			t.Fatalf("failed to open sqlite: %v", err)
+		}
+		defer db.Close()
+		if err := applySchema(db); err != nil {
+			t.Fatalf("failed to apply schema: %v", err)
+		}
+
+		if err := migrateJSONInvitesToSQLite(db, storage); err != nil {
+			t.Fatalf("invite migration failed: %v", err)
+		}
+		if err := migrateJSONInvitesToSQLite(db, storage); err != nil {
+			t.Fatalf("repeated invite migration failed: %v", err)
+		}
+
+		var count, maxUses, useCount int
+		var createdBy, usedBy string
+		var usedAt sql.NullTime
+		if err := db.QueryRow(`
+			SELECT COUNT(*), created_by, used_by, used_at, max_uses, use_count
+			FROM invites
+			WHERE code = 'INV-OLD-1'
+		`).Scan(&count, &createdBy, &usedBy, &usedAt, &maxUses, &useCount); err != nil {
+			t.Fatalf("failed to read migrated invite: %v", err)
+		}
+		if count != 1 || createdBy != "legacy-admin" || usedBy != "" || usedAt.Valid || maxUses != 2 || useCount != 1 {
+			t.Fatalf("unexpected migrated invite: count=%d created_by=%q used_by=%q used_at=%v max_uses=%d use_count=%d",
+				count, createdBy, usedBy, usedAt, maxUses, useCount)
+		}
+	})
+
+	t.Run("rolls back the whole import on insert failure", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		storage := NewJSONStorage(tmpDir)
+		if err := os.WriteFile(filepath.Join(tmpDir, "invites.json"), []byte(`[
+			{"code":"INV-GOOD","created_at":"2026-01-02T03:04:05Z","max_uses":1},
+			{"code":"INV-BAD","created_at":"2026-01-02T03:04:05Z","max_uses":1}
+		]`), 0600); err != nil {
+			t.Fatalf("failed to write invites.json: %v", err)
+		}
+
+		db, err := sql.Open("sqlite", filepath.Join(tmpDir, "atomic.db"))
+		if err != nil {
+			t.Fatalf("failed to open sqlite: %v", err)
+		}
+		defer db.Close()
+		if _, err := db.Exec(`
+			CREATE TABLE invites (
+				code TEXT PRIMARY KEY CHECK (code <> 'INV-BAD'),
+				created_at DATETIME NOT NULL,
+				created_by TEXT NOT NULL DEFAULT '',
+				used_by TEXT NOT NULL DEFAULT '',
+				used_at DATETIME,
+				max_uses INTEGER NOT NULL DEFAULT 0,
+				use_count INTEGER NOT NULL DEFAULT 0
+			)
+		`); err != nil {
+			t.Fatalf("failed to create constrained schema: %v", err)
+		}
+
+		if err := migrateJSONInvitesToSQLite(db, storage); err == nil {
+			t.Fatal("expected invite migration to fail")
+		}
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM invites`).Scan(&count); err != nil {
+			t.Fatalf("failed to count invites: %v", err)
+		}
+		if count != 0 {
+			t.Fatalf("expected atomic rollback, found %d rows", count)
+		}
+	})
 }

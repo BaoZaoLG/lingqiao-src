@@ -27,7 +27,7 @@ func NewService(store Store, sessionTTL time.Duration, generateToken TokenGenera
 		now = time.Now
 	}
 	if sessionTTL <= 0 {
-		sessionTTL = 30 * time.Minute
+		sessionTTL = 4 * time.Hour
 	}
 	if generateToken == nil {
 		generateToken = GenerateToken

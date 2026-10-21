@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "algorithm": "Ed25519",
+  "signature_encoding": "hex",
+  "canonical_form": "JSON object with Go struct field order, omitempty semantics, RFC3339 UTC timestamps",
+  "seed_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+  "public_key_hex": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+  "cases": [
+    {
+      "name": "full-manifest",
+      "manifest": {
+        "release_id": "rel-001",
+        "version": "2.4.0",
+        "channel": "stable",
+        "min_version": "2.0.0",
+        "force_update": true,
+        "release_notes": "golden",
+        "package_id": "pkg-001",
+        "package_kind": "installer",
+        "package_url": "https://example.invalid/pkg.zip",
+        "package_size": 123456,
+        "package_sha256": "abc123",
+        "script_id": "script-1",
+        "script_version": "1.0.0",
+        "script_sha256": "def456",
+        "rollout_percent": 50,
+        "created_at": "2026-07-01T00:00:00Z"
+      },
+      "canonical": "{\"release_id\":\"rel-001\",\"version\":\"2.4.0\",\"channel\":\"stable\",\"min_version\":\"2.0.0\",\"force_update\":true,\"release_notes\":\"golden\",\"package_id\":\"pkg-001\",\"package_kind\":\"installer\",\"package_url\":\"https://example.invalid/pkg.zip\",\"package_size\":123456,\"package_sha256\":\"abc123\",\"script_id\":\"script-1\",\"script_version\":\"1.0.0\",\"script_sha256\":\"def456\",\"rollout_percent\":50,\"created_at\":\"2026-07-01T00:00:00Z\"}",
+      "signature": "59c99ffa7145f8705d3becb293e9419a95484cac78ada0020ed51e1dc92a699ede0f2374ec599140072340e98947ac51b380d5a863aadb8d29aa849ebc8d9f0c"
+    },
+    {
+      "name": "minimal-manifest-omitempty",
+      "manifest": {
+        "release_id": "rel-min",
+        "version": "1.0.0",
+        "channel": "beta",
+        "force_update": false,
+        "package_id": "pkg-min",
+        "package_url": "https://example.invalid/min.zip",
+        "package_size": 1,
+        "package_sha256": "0",
+        "rollout_percent": 0,
+        "created_at": "2026-01-02T03:04:05Z"
+      },
+      "canonical": "{\"release_id\":\"rel-min\",\"version\":\"1.0.0\",\"channel\":\"beta\",\"force_update\":false,\"package_id\":\"pkg-min\",\"package_url\":\"https://example.invalid/min.zip\",\"package_size\":1,\"package_sha256\":\"0\",\"rollout_percent\":0,\"created_at\":\"2026-01-02T03:04:05Z\"}",
+      "signature": "7245f213e12564d0e08750cfe854caed10d627a649c3730b429ee1e2c82ca5b85dcdfbd34cbce44fa3925f0ce86ddd720e72bcb9cee89e3e5a7ca803e1f0370a"
+    }
+  ]
+}

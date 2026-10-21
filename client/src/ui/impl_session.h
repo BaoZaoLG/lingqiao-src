@@ -53,12 +53,12 @@
         m_sessionToken.clear();
         m_machineID.clear();
         m_cardExpiresAt = 0;
-        m_heartbeatFailCount = 0;
-        m_heartbeatInProgress = false;
+        m_injectInProgress = false;
         SetEnvironmentVariableW(L"INJECTOR_SESSION_TOKEN", NULL);
+        SetEnvironmentVariableW(L"INJECTOR_AI_API_KEY", NULL);
+        SetEnvironmentVariableW(L"INJECTOR_CARD_CODE", NULL);
         if (m_cardInput) m_cardInput->clear();
         clearExpiryStatus();
-        if (m_balanceLabel) m_balanceLabel->setVisible(false);
         stopChatPolling();
         setUiLocked(true);
         updateTrayIcon();
@@ -204,93 +204,28 @@
             static QRegularExpression re(_S("^[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}-[0-9A-HJKMNP-TV-Z]{6}$"),
                 QRegularExpression::CaseInsensitiveOption);
             if (re.match(clip).hasMatch()) {
-                // Check if card input is empty or different
-                if (m_cardInput->text().trimmed() != clip) {
-                    if (m_cardInput->text().trimmed().isEmpty()) {
-                        m_cardInput->setText(clip);
-                        playSound("info");
-                        setStatus("info", QString::fromUtf8(_S("已自动填入剪贴板中的卡密")));
-                        logEvent("CLIPBOARD", "Auto-filled empty input with card code: " + maskCard(clip));
-                    } else {
-                        setStatus("info", QString::fromUtf8(_S("剪贴板包含卡密，可手动粘贴")));
-                        logEvent("CLIPBOARD", "Detected card code in clipboard but input not empty: " + maskCard(clip));
-                    }
+                if (m_cardInput->text().trimmed().isEmpty()) {
+                    m_cardInput->setText(clip);
+                    m_lastClipboardCardNotified = clip;
+                    playSound("info");
+                    setStatus("info", QString::fromUtf8(_S("已自动填入剪贴板中的卡密")));
+                    logEvent("CLIPBOARD", "Auto-filled empty input with card code: " + maskCard(clip));
+                } else if (m_cardInput->text().trimmed() != clip
+                           && m_lastClipboardCardNotified != clip) {
+                    m_lastClipboardCardNotified = clip;
+                    setStatus("info", QString::fromUtf8(_S("剪贴板包含卡密，可手动粘贴")));
+                    logEvent("CLIPBOARD", "Detected card code in clipboard but input not empty: " + maskCard(clip));
                 }
             }
         });
         t->start(2000); // check every 2 seconds
     }
 
-    // ── Environment Detection ────────────────────────────────────
+    // ── Environment Detection / Temp cleanup ─────────────────────
     bool isTargetAlreadyInjected(const QString& targetPath) {
-        // Check if target process already has our DLL loaded
-        QFileInfo fi(targetPath);
-        QString procName = fi.fileName();
-
-        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if (snap == INVALID_HANDLE_VALUE) return false;
-
-        PROCESSENTRY32W pe = {0};
-        pe.dwSize = sizeof(pe);
-        bool found = false;
-
-        if (Process32FirstW(snap, &pe)) {
-            do {
-                if (_wcsicmp(pe.szExeFile, (LPCWSTR)procName.utf16()) == 0) {
-                    // Found the process, check if it has CefHook.dll loaded
-                    HANDLE hProc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pe.th32ProcessID);
-                    if (hProc) {
-                        HMODULE mods[1024]; DWORD cbNeeded;
-                        if (EnumProcessModules(hProc, mods, sizeof(mods), &cbNeeded)) {
-                            for (DWORD i = 0; i < cbNeeded / sizeof(HMODULE); i++) {
-                                WCHAR modName[MAX_PATH];
-                                if (GetModuleFileNameExW(hProc, mods[i], modName, MAX_PATH)) {
-                                    if (wcsstr(modName, L"CefHook") || wcsstr(modName, L"cefhook")) {
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        CloseHandle(hProc);
-                    }
-                    if (found) break;
-                }
-            } while (Process32NextW(snap, &pe));
-        }
-        CloseHandle(snap);
-        return found;
+        return IsTargetAlreadyInjected(targetPath);
     }
 
-    // ── Temp File Cleanup ────────────────────────────────────────
     void cleanupTempFiles() {
-        WCHAR tempPath[MAX_PATH];
-        GetTempPathW(MAX_PATH, tempPath);
-        // Clean up old LingQiao temp files
-        WIN32_FIND_DATAW fd;
-        WCHAR pattern[MAX_PATH];
-        swprintf_s(pattern, MAX_PATH, L"%s\\*.*", tempPath);
-        HANDLE hFind = FindFirstFileW(pattern, &fd);
-        if (hFind != INVALID_HANDLE_VALUE) {
-            do {
-                if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-                // Delete old update downloads
-                if (wcsstr(fd.cFileName, L"update_v") && wcsstr(fd.cFileName, L".exe")) {
-                    WCHAR fullPath[MAX_PATH];
-                    swprintf_s(fullPath, MAX_PATH, L"%s\\%s", tempPath, fd.cFileName);
-                    // Only delete if older than 1 hour
-                    FILETIME ft;
-                    SYSTEMTIME st;
-                    GetSystemTime(&st);
-                    SystemTimeToFileTime(&st, &ft);
-                    ULARGE_INTEGER ul1, ul2;
-                    ul1.LowPart = ft.dwLowDateTime; ul1.HighPart = ft.dwHighDateTime;
-                    ul2.LowPart = fd.ftLastWriteTime.dwLowDateTime; ul2.HighPart = fd.ftLastWriteTime.dwHighDateTime;
-                    if ((ul1.QuadPart - ul2.QuadPart) > 36000000000ULL) {
-                        DeleteFileW(fullPath);
-                    }
-                }
-            } while (FindNextFileW(hFind, &fd));
-            FindClose(hFind);
-        }
+        CleanupOldUpdateTempFiles();
     }

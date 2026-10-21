@@ -19,27 +19,43 @@ Write-Host "Starting Release Pipeline..." -ForegroundColor Green
 if (-not $SkipWeb) {
     Write-Host "Building Web UI..." -ForegroundColor Cyan
     Push-Location server/web
-    npm install
-    npm run build
-    if ($LASTEXITCODE -ne 0) { throw "npm build failed" }
-    Pop-Location
+    try {
+        if (Test-Path "package-lock.json") {
+            npm ci
+            if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
+        } else {
+            npm install
+            if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+        }
+        npm run build
+        if ($LASTEXITCODE -ne 0) { throw "npm build failed" }
+    } finally {
+        Pop-Location
+    }
 }
 
 # 2. Build Go Server
 if (-not $SkipGo) {
     Write-Host "Building Go Server..." -ForegroundColor Cyan
+    if (-not (Test-Path "dist/server")) { New-Item -ItemType Directory -Path "dist/server" | Out-Null }
     Push-Location server
-    go build -ldflags "-s -w" -o ../dist/server/lingqiao-server.exe .
-    if ($LASTEXITCODE -ne 0) { throw "go build failed" }
-    Pop-Location
+    try {
+        go build -ldflags "-s -w" -o ../dist/server/lingqiao-server.exe .
+        if ($LASTEXITCODE -ne 0) { throw "go build failed" }
+    } finally {
+        Pop-Location
+    }
 }
 
 # 3. Build AutoExam Script
 Write-Host "Building AutoExam Script..." -ForegroundColor Cyan
 Push-Location packages/autoexam
-.\build.ps1
-if ($LASTEXITCODE -ne 0) { throw "autoexam build failed" }
-Pop-Location
+try {
+    .\build.ps1
+    if ($LASTEXITCODE -ne 0) { throw "autoexam build failed" }
+} finally {
+    Pop-Location
+}
 
 # 4. Build C++ Client
 if (-not $SkipCpp) {
@@ -57,10 +73,10 @@ if (-not $SkipCpp) {
 # 5. Build Wix Installer
 if (-not $SkipWix) {
     Write-Host "Building Installer..." -ForegroundColor Cyan
-    Push-Location installer
-    .\build_installer.ps1 -SourceDir "$Root\$SourceDir"
+    $ResolvedSourceDir = if ([System.IO.Path]::IsPathRooted($SourceDir)) { $SourceDir } else { Join-Path $Root $SourceDir }
+    $InstallerOutputDir = Join-Path $Root "dist\installer"
+    & (Join-Path $Root "installer\build_installer.ps1") -SourceDir $ResolvedSourceDir -OutputDir $InstallerOutputDir
     if ($LASTEXITCODE -ne 0) { throw "wix installer build failed" }
-    Pop-Location
 }
 
 # 6. Generate Release Artifacts
@@ -78,19 +94,19 @@ $ScriptManifestPath = "packages/autoexam/dist/autoexam.manifest.json"
 if (-not (Test-Path $ScriptBundlePath)) { throw "AutoExam bundle not found: $ScriptBundlePath" }
 if (-not (Test-Path $ScriptManifestPath)) { throw "AutoExam manifest not found: $ScriptManifestPath" }
 
-$MsiPath = "installer/Output/LingqiaoSetup.msi"
-if (Test-Path $MsiPath) {
-    Copy-Item $MsiPath -Destination "$ReleaseDir\LingqiaoSetup.msi" -Force
-    Copy-Item $ScriptBundlePath -Destination "$ReleaseDir\autoexam.bundle.js" -Force
-    
-    # Optional code signing
-    if ($env:SIGNING_CERT_THUMBPRINT) {
-        Write-Host "Signing MSI..."
-        Set-AuthenticodeSignature -FilePath "$ReleaseDir\LingqiaoSetup.msi" -Thumbprint $env:SIGNING_CERT_THUMBPRINT -TimestampServer "http://timestamp.digicert.com"
-    }
+$MsiPath = "dist/installer/Lingqiao-$ClientVersion.msi"
+$BundlePath = "dist/installer/LingqiaoSetup-$ClientVersion.exe"
+if (Test-Path $MsiPath -and Test-Path $BundlePath) {
+    $ReleaseMsi = "$ReleaseDir\Lingqiao-$ClientVersion.msi"
+    $ReleaseBundle = "$ReleaseDir\LingqiaoSetup-$ClientVersion.exe"
+    $ReleaseScript = "$ReleaseDir\autoexam.bundle.js"
+    Copy-Item $MsiPath -Destination $ReleaseMsi -Force
+    Copy-Item $BundlePath -Destination $ReleaseBundle -Force
+    Copy-Item $ScriptBundlePath -Destination $ReleaseScript -Force
 
-    $MsiHash = (Get-FileHash "$ReleaseDir\LingqiaoSetup.msi" -Algorithm SHA256).Hash.ToLower()
-    $ScriptHash = (Get-FileHash "$ReleaseDir\autoexam.bundle.js" -Algorithm SHA256).Hash.ToLower()
+    $MsiHash = (Get-FileHash $ReleaseMsi -Algorithm SHA256).Hash.ToLower()
+    $BundleHash = (Get-FileHash $ReleaseBundle -Algorithm SHA256).Hash.ToLower()
+    $ScriptHash = (Get-FileHash $ReleaseScript -Algorithm SHA256).Hash.ToLower()
     $ScriptManifest = Get-Content $ScriptManifestPath | ConvertFrom-Json
     if ($ScriptManifest.sha256 -and $ScriptManifest.sha256.ToLower() -ne $ScriptHash) {
         throw "AutoExam bundle hash does not match manifest"
@@ -101,6 +117,9 @@ if (Test-Path $MsiPath) {
 
     $ReleaseInfo = @{
         version = $ClientVersion
+        bundle = (Split-Path -Leaf $ReleaseBundle)
+        bundle_sha256 = $BundleHash
+        msi = (Split-Path -Leaf $ReleaseMsi)
         msi_sha256 = $MsiHash
         script_version = $ScriptManifest.version
         script_sha256 = $ScriptHash
@@ -110,12 +129,13 @@ if (Test-Path $MsiPath) {
     $ReleaseInfo | ConvertTo-Json | Out-File -FilePath "$ReleaseDir\release-info.json" -Encoding utf8 -Force
     
 $Checksums = @"
-$MsiHash *LingqiaoSetup.msi
+$BundleHash *$(Split-Path -Leaf $ReleaseBundle)
+$MsiHash *$(Split-Path -Leaf $ReleaseMsi)
 $ScriptHash *autoexam.bundle.js
 "@
     Set-Content -Path "$ReleaseDir\checksums.txt" -Value $Checksums -Encoding utf8
 } elseif (-not $SkipWix) {
-    throw "MSI not found: $MsiPath"
+    throw "Installer artifacts not found: $MsiPath and $BundlePath"
 }
 
 Write-Host "Pipeline Completed Successfully!" -ForegroundColor Green

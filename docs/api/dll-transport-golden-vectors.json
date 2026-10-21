@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "dll_key": {
+    "kdf": "PBKDF2-HMAC-SHA256",
+    "salt": "CefBridge-DLL-Salt-v1",
+    "iterations": 100000,
+    "key_length": 32,
+    "cases": [
+      {
+        "client_secret": "test-secret",
+        "expected_key_hex": "2f740bca42f7ff4fb7617e1c83c95eb4fe1c6f5b6a3919dd49da45de5520c455"
+      }
+    ]
+  },
+  "dll_transport": {
+    "cipher": "AES-256-GCM",
+    "nonce_bytes": 12,
+    "tag_bytes": 16,
+    "wire_format": "nonce || ciphertext || tag"
+  }
+}

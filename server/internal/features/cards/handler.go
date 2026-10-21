@@ -45,25 +45,33 @@ func clampInt(val *int, min, max, def int) {
 	}
 }
 
-func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
-	if r.Method != method {
-		httpapi.WriteError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return false
-	}
-	return true
-}
-
-func readJSON(r *http.Request, dst interface{}) error {
-	defer r.Body.Close()
-	return json.NewDecoder(r.Body).Decode(dst)
-}
-
 func writeCompatOK(w http.ResponseWriter, data map[string]interface{}) {
 	res := map[string]interface{}{"status": "ok"}
 	for k, v := range data {
 		res[k] = v
 	}
 	httpapi.WriteJSON(w, http.StatusOK, res)
+}
+
+func writeCardMutationError(w http.ResponseWriter, err error, notFoundMsg, internalMsg string) {
+	if err == nil {
+		return
+	}
+	if errors.Is(err, ErrNotFound) || strings.Contains(strings.ToLower(err.Error()), "not found") {
+		httpapi.WriteError(w, http.StatusNotFound, notFoundMsg)
+		return
+	}
+	if errors.Is(err, ErrInvalidSessions) || errors.Is(err, ErrInvalidDuration) {
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "extendhours") || strings.Contains(msg, "unknown action") || strings.Contains(msg, "invalid") || strings.Contains(msg, "unsupported") {
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	log.Printf("[CARDS] %s: %v", internalMsg, err)
+	httpapi.WriteError(w, http.StatusInternalServerError, internalMsg)
 }
 
 func effectiveStatus(card Card, now time.Time) Status {
@@ -74,6 +82,10 @@ func effectiveStatus(card Card, now time.Time) Status {
 }
 
 func (h *Handler) HandleListCards(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+
 	q := r.URL.Query()
 	requestedStatus := Status(q.Get("status"))
 	filter := ListFilter{
@@ -87,7 +99,7 @@ func (h *Handler) HandleListCards(w http.ResponseWriter, r *http.Request) {
 
 	cards, err := h.repo.List(r.Context(), filter)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to list cards")
 		return
 	}
 
@@ -156,7 +168,7 @@ func (h *Handler) HandleGenerateCard(w http.ResponseWriter, r *http.Request) {
 		Note        string `json:"note"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -168,7 +180,7 @@ func (h *Handler) HandleGenerateCard(w http.ResponseWriter, r *http.Request) {
 
 	card, err := h.svc.Create(r.Context(), time.Duration(req.Duration)*time.Hour, req.Note, req.MaxSessions, "")
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to generate card")
 		return
 	}
 	log.Printf("[ADMIN] Generated card: %s", card.Code)
@@ -188,7 +200,7 @@ func (h *Handler) HandleBatchGenerateCards(w http.ResponseWriter, r *http.Reques
 		Note        string `json:"note"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -201,7 +213,7 @@ func (h *Handler) HandleBatchGenerateCards(w http.ResponseWriter, r *http.Reques
 
 	cards, err := h.svc.BatchCreate(r.Context(), req.Count, time.Duration(req.Duration)*time.Hour, req.Note, req.MaxSessions, "")
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to batch generate cards")
 		return
 	}
 	log.Printf("[ADMIN] Batch generated %d cards", len(cards))
@@ -220,7 +232,7 @@ func (h *Handler) HandleUpdateCard(w http.ResponseWriter, r *http.Request) {
 		ExtendHours int    `json:"extend_hours"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Code == "" {
@@ -254,7 +266,7 @@ func (h *Handler) HandleUpdateCard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		httpapi.WriteError(w, http.StatusNotFound, err.Error())
+		writeCardMutationError(w, err, "card not found", "failed to update card")
 		return
 	}
 
@@ -288,13 +300,13 @@ func (h *Handler) HandleUpdateCardDetails(w http.ResponseWriter, r *http.Request
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	r.Body.Close()
 
 	if err := json.Unmarshal(body, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Code == "" {
@@ -313,11 +325,7 @@ func (h *Handler) HandleUpdateCardDetails(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := h.svc.UpdateDetails(r.Context(), req.Code, notePtr, maxSessPtr); err != nil {
-		if errors.Is(err, ErrInvalidSessions) {
-			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
-		} else {
-			httpapi.WriteError(w, http.StatusNotFound, err.Error())
-		}
+		writeCardMutationError(w, err, "card not found", "failed to update card details")
 		return
 	}
 	log.Printf("[ADMIN] Updated card details: %s", req.Code)
@@ -337,7 +345,7 @@ func (h *Handler) HandleBulkCards(w http.ResponseWriter, r *http.Request) {
 		DryRun      bool     `json:"dry_run"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if len(req.Codes) == 0 {
@@ -347,7 +355,7 @@ func (h *Handler) HandleBulkCards(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.BulkUpdateCardsDetailed(r.Context(), req.Codes, req.Action, req.ExtendHours, req.DryRun)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		writeCardMutationError(w, err, "card not found", "failed to bulk update cards")
 		return
 	}
 

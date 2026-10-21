@@ -164,3 +164,26 @@ func TestPublishReleaseRequiresPackage(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
 	}
 }
+
+func TestGetActiveScriptPrefersCurrentIndexOverLegacyFile(t *testing.T) {
+	dataDir := t.TempDir()
+	scriptDir := filepath.Join(dataDir, "scripts")
+	if err := os.MkdirAll(scriptDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(scriptDir, "active.json"),
+		[]byte(`{"id":"legacy","version":"1.0.0","sha256":"old"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(scriptDir, "index.json"),
+		[]byte(`{"active_id":"current","scripts":[{"id":"current","version":"2.0.0","sha256":"new"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHandler(&releaseService{dataDir: dataDir}, nil, nil)
+
+	id, version, sha256, err := h.getActiveScript()
+
+	if err != nil || id != "current" || version != "2.0.0" || sha256 != "new" {
+		t.Fatalf("script=%s version=%s sha=%s err=%v", id, version, sha256, err)
+	}
+}

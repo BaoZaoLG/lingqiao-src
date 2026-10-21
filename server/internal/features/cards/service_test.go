@@ -19,7 +19,7 @@ func newMemoryRepo() *memoryRepo {
 func (r *memoryRepo) Get(ctx context.Context, code string) (Card, error) {
 	card, ok := r.cards[code]
 	if !ok {
-		return Card{}, errors.New("not found")
+		return Card{}, ErrNotFound
 	}
 	return card, nil
 }

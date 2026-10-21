@@ -22,6 +22,10 @@ import (
 // The following handlers are pending migration or are related to Import/Export.
 
 func (h *AdminHandler) HandleExportCards(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
+
 	cardsList, err := h.cardsSvc.AllCards(r.Context())
 	if err != nil {
 		httpapi.WriteError(w, http.StatusInternalServerError, "failed to get cards")
@@ -69,7 +73,7 @@ func (h *AdminHandler) HandleImportCards(w http.ResponseWriter, r *http.Request)
 		DryRun      bool   `json:"dry_run"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.CSV == "" {
@@ -83,13 +87,14 @@ func (h *AdminHandler) HandleImportCards(w http.ResponseWriter, r *http.Request)
 	reader.FieldsPerRecord = -1
 	records, err := reader.ReadAll()
 	if err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, "invalid CSV: "+err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid CSV data")
 		return
 	}
 
 	report, err := h.importCardsFromRecords(r.Context(), records, time.Duration(req.Duration)*time.Hour, req.MaxSessions, req.DryRun)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("[ADMIN] card import failed: %v", err)
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to import cards")
 		return
 	}
 	if !req.DryRun && report.Imported > 0 {
@@ -97,7 +102,8 @@ func (h *AdminHandler) HandleImportCards(w http.ResponseWriter, r *http.Request)
 			Action: "cards_import_completed",
 			Detail: fmt.Sprintf("imported=%d duplicates=%d invalid=%d skipped=%d", report.Imported, report.Duplicates, report.Invalid, report.Skipped),
 		}); err != nil {
-			httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+			log.Printf("[ADMIN] card import audit failed: %v", err)
+			httpapi.WriteError(w, http.StatusInternalServerError, "import succeeded but audit log failed")
 			return
 		}
 	}
@@ -181,7 +187,8 @@ func (h *AdminHandler) importCardsFromRecords(ctx context.Context, records [][]s
 				report.Invalid++
 				report.ValidRows--
 				item.Status = "invalid"
-				item.Message = err.Error()
+				item.Message = "failed to create card"
+				log.Printf("[ADMIN] import create failed for %s: %v", formatted, err)
 			} else {
 				report.Imported++
 				item.Status = "imported"
@@ -192,7 +199,7 @@ func (h *AdminHandler) importCardsFromRecords(ctx context.Context, records [][]s
 					Detail: fmt.Sprintf("duration=%s max_sessions=%d", duration, maxSessions),
 				}); err != nil {
 					item.Status = "error"
-					item.Message = "Audit log failed: " + err.Error()
+					item.Message = "audit log failed"
 					report.Items = append(report.Items, item)
 					return report, fmt.Errorf("action succeeded partially but audit log failed to save: %w", err)
 				}

@@ -41,16 +41,29 @@ func (s *InviteService) List() ([]InviteCode, error) {
 	var res []InviteCode
 	for rows.Next() {
 		var c InviteCode
+		var createdBy sql.NullString
 		var usedBy sql.NullString
 		var ut sql.NullTime
-		if err := rows.Scan(&c.Code, &c.CreatedAt, &c.CreatedBy, &usedBy, &ut, &c.MaxUses, &c.UseCount); err != nil {
+		var maxUses sql.NullInt64
+		var useCount sql.NullInt64
+		if err := rows.Scan(&c.Code, &c.CreatedAt, &createdBy, &usedBy, &ut, &maxUses, &useCount); err != nil {
 			return nil, err
+		}
+		c.CreatedAt = c.CreatedAt.UTC()
+		if createdBy.Valid {
+			c.CreatedBy = createdBy.String
 		}
 		if usedBy.Valid {
 			c.UsedBy = usedBy.String
 		}
 		if ut.Valid {
-			c.UsedAt = ut.Time
+			c.UsedAt = ut.Time.UTC()
+		}
+		if maxUses.Valid {
+			c.MaxUses = int(maxUses.Int64)
+		}
+		if useCount.Valid {
+			c.UseCount = int(useCount.Int64)
 		}
 		res = append(res, c)
 	}
@@ -65,11 +78,14 @@ func (s *InviteService) List() ([]InviteCode, error) {
 
 // Create generates a new invite code.
 func (s *InviteService) Create(maxUses int, createdBy string) (InviteCode, error) {
+	if maxUses < 0 {
+		return InviteCode{}, fmt.Errorf("max_uses must be >= 0")
+	}
 	code, err := generateInviteCode()
 	if err != nil {
 		return InviteCode{}, err
 	}
-	now := time.Now()
+	now := time.Now().UTC()
 	invite := InviteCode{
 		Code:      code,
 		CreatedAt: now,
@@ -99,19 +115,10 @@ func (s *InviteService) Delete(code string) (bool, error) {
 }
 
 // ValidateAndUseTx validates and consumes an invite code inside a transaction.
+// It uses a single conditional UPDATE to avoid the SELECT/UPDATE race.
 func (s *InviteService) ValidateAndUseTx(ctx context.Context, tx *sql.Tx, code string, usedBy string) error {
 	if code == "" {
 		return fmt.Errorf("邀请码不能为空")
-	}
-	var maxUses, useCount int
-	err := tx.QueryRowContext(ctx, `SELECT max_uses, use_count FROM invites WHERE code = ?`, code).Scan(&maxUses, &useCount)
-	if err == sql.ErrNoRows {
-		return fmt.Errorf("邀请码无效")
-	} else if err != nil {
-		return err
-	}
-	if maxUses > 0 && useCount >= maxUses {
-		return fmt.Errorf("邀请码已用完")
 	}
 
 	query := `
@@ -121,7 +128,7 @@ func (s *InviteService) ValidateAndUseTx(ctx context.Context, tx *sql.Tx, code s
 			used_at = ?
 		WHERE code = ? AND (max_uses = 0 OR use_count < max_uses)
 	`
-	res, err := tx.ExecContext(ctx, query, usedBy, time.Now(), code)
+	res, err := tx.ExecContext(ctx, query, usedBy, time.Now().UTC(), code)
 	if err != nil {
 		return err
 	}
@@ -130,6 +137,15 @@ func (s *InviteService) ValidateAndUseTx(ctx context.Context, tx *sql.Tx, code s
 		return err
 	}
 	if affected == 0 {
+		// Either the code does not exist or its uses have been exhausted.
+		var exists bool
+		err := tx.QueryRowContext(ctx, `SELECT 1 FROM invites WHERE code = ?`, code).Scan(&exists)
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("邀请码无效")
+		}
+		if err != nil {
+			return err
+		}
 		return fmt.Errorf("邀请码已用完")
 	}
 	return nil

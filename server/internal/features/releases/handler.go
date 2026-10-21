@@ -362,25 +362,28 @@ func (s *releaseService) resolvePackagePath(pkg releasesvc.ReleasePackage) (stri
 }
 
 func (h *Handler) HandleReleases(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet, http.MethodPost:
+	default:
+		httpapi.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
 	svc := h.svc
 	if svc == nil {
 		httpapi.WriteError(w, http.StatusServiceUnavailable, "release service unavailable")
 		return
 	}
-	switch r.Method {
-	case http.MethodGet:
+	if r.Method == http.MethodGet {
 		h.writeReleaseList(w, r, svc)
-	case http.MethodPost:
-		h.createRelease(w, r, svc)
-	default:
-		httpapi.WriteError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
 	}
+	h.createRelease(w, r, svc)
 }
 
 func (h *Handler) writeReleaseList(w http.ResponseWriter, r *http.Request, svc *releaseService) {
 	releases, err := svc.store.ListReleases(r.Context())
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to list releases")
 		return
 	}
 	items := make([]map[string]interface{}, 0, len(releases))
@@ -407,7 +410,7 @@ func (h *Handler) createRelease(w http.ResponseWriter, r *http.Request, svc *rel
 		Targeting      releasesvc.TargetingRules `json:"targeting"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Version == "" {
@@ -447,11 +450,11 @@ func (h *Handler) createRelease(w http.ResponseWriter, r *http.Request, svc *rel
 		CreatedAt:      time.Now().UTC(),
 	}
 	if err := svc.store.SaveRelease(r.Context(), release); err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to create release")
 		return
 	}
 	if err := h.recordReleaseAudit("release_created", release, ""); err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "action succeeded but audit log failed")
 		return
 	}
 	httpapi.WriteOK(w, map[string]interface{}{"release": release})
@@ -522,7 +525,7 @@ func (h *Handler) updateReleaseStatus(w http.ResponseWriter, r *http.Request, sv
 		release.PausedAt = &now
 	}
 	if err := svc.store.SaveRelease(r.Context(), release); err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to update release")
 		return
 	}
 	action := "release_status_changed"
@@ -533,7 +536,7 @@ func (h *Handler) updateReleaseStatus(w http.ResponseWriter, r *http.Request, sv
 		action = "release_paused"
 	}
 	if err := h.recordReleaseAudit(action, release, fmt.Sprintf("status=%s", status)); err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "action succeeded but audit log failed")
 		return
 	}
 	httpapi.WriteOK(w, map[string]interface{}{"release": release})
@@ -559,11 +562,11 @@ func (h *Handler) rollbackRelease(w http.ResponseWriter, r *http.Request, svc *r
 	release.RolledBackAt = &now
 	release.RolledBackTo = req.TargetReleaseID
 	if err := svc.store.SaveRelease(r.Context(), release); err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to rollback release")
 		return
 	}
 	if err := h.recordReleaseAudit("release_rolled_back", release, fmt.Sprintf("target_release_id=%s", req.TargetReleaseID)); err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "action succeeded but audit log failed")
 		return
 	}
 	httpapi.WriteOK(w, map[string]interface{}{"release": release})
@@ -575,12 +578,12 @@ func (h *Handler) releaseEvents(w http.ResponseWriter, r *http.Request, svc *rel
 	}
 	events, err := svc.store.ListEvents(r.Context(), releaseID, 100)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to list release events")
 		return
 	}
 	metrics, err := svc.store.ReleaseMetrics(r.Context(), releaseID)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load release metrics")
 		return
 	}
 	httpapi.WriteOK(w, map[string]interface{}{"events": events, "metrics": metrics})
@@ -595,6 +598,7 @@ func (h *Handler) uploadReleasePackage(w http.ResponseWriter, r *http.Request, s
 		httpapi.WriteError(w, http.StatusNotFound, "release not found")
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 501<<20)
 	if err := r.ParseMultipartForm(500 << 20); err != nil {
 		httpapi.WriteError(w, http.StatusBadRequest, "invalid package upload")
 		return
@@ -647,11 +651,11 @@ func (h *Handler) uploadReleasePackage(w http.ResponseWriter, r *http.Request, s
 		CreatedAt: time.Now().UTC(),
 	}
 	if err := svc.store.SavePackage(r.Context(), pkg); err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to save package metadata")
 		return
 	}
 	if err := h.recordReleaseAudit("release_package_uploaded", release, fmt.Sprintf("package_id=%s kind=%s sha256=%s size=%d", pkg.ID, pkg.Kind, pkg.SHA256, pkg.FileSize)); err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "Action succeeded but audit log failed to save: "+err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "action succeeded but audit log failed")
 		return
 	}
 	httpapi.WriteOK(w, map[string]interface{}{"package": pkg})
@@ -679,8 +683,37 @@ func sanitizePackageFilename(filename, version string) string {
 }
 
 func (h *Handler) getActiveScript() (string, string, string, error) {
-	scriptPath := filepath.Join(h.svc.dataDir, "scripts", "active.json")
-	data, err := os.ReadFile(scriptPath)
+	scriptDir := filepath.Join(h.svc.dataDir, "scripts")
+	var index struct {
+		ActiveID string `json:"active_id"`
+		Scripts  []struct {
+			ID      string `json:"id"`
+			Version string `json:"version"`
+			SHA256  string `json:"sha256"`
+		} `json:"scripts"`
+	}
+	if data, err := os.ReadFile(filepath.Join(scriptDir, "index.json")); err == nil {
+		if err := json.Unmarshal(data, &index); err == nil && index.ActiveID != "" {
+			for _, script := range index.Scripts {
+				if script.ID == index.ActiveID {
+					return script.ID, script.Version, script.SHA256, nil
+				}
+			}
+			modulePath := filepath.Join(scriptDir, index.ActiveID+".json")
+			if data, err := os.ReadFile(modulePath); err == nil {
+				var script struct {
+					ID      string `json:"id"`
+					Version string `json:"version"`
+					SHA256  string `json:"sha256"`
+				}
+				if err := json.Unmarshal(data, &script); err == nil && script.ID != "" {
+					return script.ID, script.Version, script.SHA256, nil
+				}
+			}
+		}
+	}
+
+	data, err := os.ReadFile(filepath.Join(scriptDir, "active.json"))
 	if err != nil {
 		return "", "", "", err
 	}

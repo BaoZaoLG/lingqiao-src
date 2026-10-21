@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "derived_key": {
+    "kdf": "PBKDF2-HMAC-SHA256",
+    "salt": "CefBridge-HMAC-Salt-v2",
+    "iterations": 100000,
+    "key_length": 32,
+    "cases": [
+      {
+        "client_secret": "test-secret",
+        "expected_key_hex": "7e6d549ac3a6e3c0123bf0234cabddd0e101f927ca87fc6742a7597af97d9865"
+      }
+    ]
+  },
+  "manifest_hmac": {
+    "note": "Go signs with SignHMAC(string(derivedKey), payload); []byte -> string -> []byte is lossless in Go, so the MAC key is exactly the derived key bytes.",
+    "cases": [
+      {
+        "client_secret": "test-secret",
+        "payload": "manifest-payload-sample",
+        "expected_hmac_hex": "f89bd9879e49f88c7d226ae40c8c4b0b95ca09e2385b445d30198a96f87f7222"
+      }
+    ]
+  }
+}

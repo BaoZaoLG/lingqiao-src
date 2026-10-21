@@ -320,11 +320,6 @@
         o->setContentsMargins(14, 7, 14, 7);
         o->setSpacing(0);
 
-        m_cardExpiry = new QLabel();
-        m_cardExpiry->setProperty("role", "warning");
-        m_cardExpiry->setStyleSheet("font-size: 11px; background: transparent; color: #f59e0b; font-weight: 600;");
-        m_cardExpiry->setVisible(false);
-
         QHBoxLayout* row = new QHBoxLayout();
         row->setContentsMargins(0, 0, 0, 0);
         row->setSpacing(10);
@@ -373,15 +368,34 @@
         QVBoxLayout* o = new QVBoxLayout(c);
         o->setContentsMargins(18, 16, 18, 16);
         o->setSpacing(12);
-        o->addWidget(heading(QString::fromUtf8(_S("API 密钥"))));
-        m_providerCombo = new QComboBox();
-        m_providerCombo->setFixedHeight(36);
-        for (const auto& provider : aiProviders()) {
-            m_providerCombo->addItem(provider.displayName, provider.id);
-        }
-        installThemedComboBox(m_providerCombo);
-        m_providerCombo->setEnabled(false);
-        o->addWidget(m_providerCombo);
+        o->addWidget(heading(QString::fromUtf8(_S("AI 模型配置"))));
+        m_baseUrlInput = new QLineEdit();
+        m_baseUrlInput->setPlaceholderText(QStringLiteral("BaseURL，例如 https://api.example.com/v1"));
+        m_baseUrlInput->setFixedHeight(38);
+        m_baseUrlInput->setEnabled(false);
+        m_baseUrlInput->setClearButtonEnabled(true);
+        m_baseUrlInput->setAccessibleName(QStringLiteral("BaseUrl"));
+        installThemedLineEditMenu(m_baseUrlInput);
+        o->addWidget(m_baseUrlInput);
+
+        m_modelNameInput = new NoWheelComboBox();
+        m_modelNameInput->setEditable(true);
+        m_modelNameInput->setPlaceholderText(QString::fromUtf8(_S("模型名称（可手动输入或点击获取模型）")));
+        m_modelNameInput->setFixedHeight(38);
+        m_modelNameInput->setEnabled(false);
+        m_modelNameInput->setAccessibleName(QString::fromUtf8(_S("模型名称")));
+        installThemedComboBox(m_modelNameInput);
+
+        m_fetchModelsBtn = new AnimatedButton(QString::fromUtf8(_S("获取模型")), AnimatedButton::GhostStyle);
+        m_fetchModelsBtn->setFixedSize(96, 38);
+        m_fetchModelsBtn->setEnabled(false);
+        connect(m_fetchModelsBtn, &QPushButton::clicked, this, &MainWindow::fetchModels);
+        QHBoxLayout* modelRow = new QHBoxLayout();
+        modelRow->setContentsMargins(0, 0, 0, 0);
+        modelRow->setSpacing(8);
+        modelRow->addWidget(m_modelNameInput, 1);
+        modelRow->addWidget(m_fetchModelsBtn);
+        o->addLayout(modelRow);
 
         QHBoxLayout* keyRow = new QHBoxLayout();
         keyRow->setContentsMargins(0, 0, 0, 0);
@@ -391,27 +405,20 @@
         m_apiKeyInput->setFixedHeight(38);
         m_apiKeyInput->setEchoMode(QLineEdit::Password);
         m_apiKeyInput->setEnabled(false);
+        m_apiKeyInput->setAccessibleName(QStringLiteral("API Key"));
         installThemedLineEditMenu(m_apiKeyInput);
         keyRow->addWidget(m_apiKeyInput, 1);
 
-        QPushButton* toggleBtn = new QPushButton(QString::fromUtf8(_S("显示")));
-        toggleBtn->setFixedSize(64, 32);
-        toggleBtn->setCursor(Qt::PointingHandCursor);
-        toggleBtn->setStyleSheet("QPushButton { background: #4a9eff; border: none; border-radius: 6px; font-size: 13px; color: #ffffff; font-weight: bold; padding: 2px 10px; } QPushButton:hover { background: #3b82f6; }");
-        toggleBtn->setCheckable(true);
-        connect(toggleBtn, &QPushButton::toggled, this, [this, toggleBtn](bool checked) {
+        m_apiKeyToggleBtn = new AnimatedButton(QString::fromUtf8(_S("显示")), AnimatedButton::GhostStyle);
+        m_apiKeyToggleBtn->setFixedSize(64, 38);
+        m_apiKeyToggleBtn->setCheckable(true);
+        connect(m_apiKeyToggleBtn, &QPushButton::toggled, this, [this](bool checked) {
             m_apiKeyInput->setEchoMode(checked ? QLineEdit::Normal : QLineEdit::Password);
-            toggleBtn->setText(QString::fromUtf8(checked ? _S("隐藏") : _S("显示")));
+            m_apiKeyToggleBtn->setText(QString::fromUtf8(checked ? _S("隐藏") : _S("显示")));
         });
-        keyRow->addWidget(toggleBtn);
+        keyRow->addWidget(m_apiKeyToggleBtn);
 
         o->addLayout(keyRow);
-
-        m_balanceLabel = new QLabel();
-        m_balanceLabel->setStyleSheet(
-            "font-size: 11px; padding: 4px 2px; background: transparent; color: #7ec8e3; font-weight: 500;");
-        m_balanceLabel->setVisible(false);
-        o->addWidget(m_balanceLabel);
 
         return c;
     }

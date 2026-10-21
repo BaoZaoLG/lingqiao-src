@@ -28,6 +28,7 @@
 #include <QDropEvent>
 #include <QMouseEvent>
 #include <QResizeEvent>
+#include <QShowEvent>
 #include <QtConcurrent>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -48,6 +49,9 @@
 #include <QUrl>
 #include <QTextEdit>
 #include <QTextBrowser>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 
 #include <windows.h>
 #include <dwmapi.h>
@@ -69,6 +73,17 @@
 #include "antidebug.h"
 #include "strcrypt.h"
 #include "controllers/session_controller.h"
+#include "services/network_service.h"
+#include "injector/injection_runner.h"
+#include "injector/update_package_utils.h"
+#include "security/process_utils.h"
+#include "window_hit_test.h"
+#include "layout_scale.h"
+#include "button_styles.h"
+#include "themed_controls.h"
+#include "no_wheel_combo.h"
+#include "chat_scale_styles.h"
+#include "home_scale_styles.h"
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
@@ -99,11 +114,28 @@ typedef BOOL(WINAPI* pfnSetWindowCompositionAttribute)(HWND, WINCOMPATTR_DATA*);
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
+    static double systemUiScale() {
+        // Process is DPI-aware and Qt high-Dpi scaling is disabled, so
+        // physical pixels == logical pixels. Scale the default window up
+        // on >96 DPI displays so the first layout matches applyUiScale().
+        UINT dpi = 96;
+        HDC hdc = GetDC(nullptr);
+        if (hdc) {
+            dpi = (UINT)GetDeviceCaps(hdc, LOGPIXELSX);
+            ReleaseDC(nullptr, hdc);
+        }
+        if (dpi <= 96) return 1.0;
+        return qBound(1.0, (double)dpi / 96.0, 1.8);
+    }
+
     explicit MainWindow(QWidget* parent = nullptr) : QMainWindow(parent) {
         setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
         setAttribute(Qt::WA_TranslucentBackground, true);
         setAutoFillBackground(false);
-        resize(WINDOW_WIDTH, WINDOW_HEIGHT);
+        const double uiScale = systemUiScale();
+        const int initW = qRound(WINDOW_WIDTH * uiScale);
+        const int initH = qRound(WINDOW_HEIGHT * uiScale);
+        resize(initW, initH);
         setMinimumSize(WINDOW_WIDTH, WINDOW_HEIGHT);
         setAcceptDrops(true);
         setStyleSheet(CSS);
@@ -120,6 +152,62 @@ public:
 
         // Initialize SessionController
         m_sessionController = new SessionController(new ApiClient(SERVER_HOST, SERVER_PORT), this);
+        m_networkService = new NetworkService(this);
+        connect(m_networkService, &NetworkService::dllFinished, this, [this](const QString& err) {
+            if (err.isEmpty()) {
+                m_lastDllStatus = QString::fromUtf8(_S("正常"));
+                if (!m_targetInput->text().trimmed().isEmpty()) {
+                    setStatus("ok", QString::fromUtf8(_S("就绪，可启动注入")));
+                } else {
+                    setStatus("ok", QString::fromUtf8(_S("就绪，请选择目标程序")));
+                }
+                m_injectBtn->setEnabled(!m_forceUpdateBlocked);
+                logEvent("DLL", "Download OK");
+            } else {
+                QString readable = readableHttpFailure(QString::fromUtf8(_S("核心组件下载")), err);
+                m_lastDllStatus = readable;
+                setStatus("error", readable);
+                logEvent("DLL", "Download failed: " + readable);
+            }
+        });
+        connect(m_networkService, &NetworkService::modelsFinished, this,
+            [this](const QStringList& models, const QString& error) {
+                m_fetchingModels = false;
+                m_fetchModelsBtn->setText(QString::fromUtf8(_S("获取模型")));
+                updateFetchModelsButtonState();
+                if (!error.isEmpty()) {
+                    setStatus("error", QString::fromUtf8(_S("获取模型失败：%1")).arg(error));
+                    return;
+                }
+                if (models.isEmpty()) {
+                    setStatus("warn", QString::fromUtf8(_S("接口返回中没有可用模型")));
+                    return;
+                }
+                const QString selected = m_modelNameInput->currentText();
+                m_modelNameInput->clear();
+                m_modelNameInput->addItems(models);
+                m_modelNameInput->setCurrentText(models.contains(selected) ? selected : models.first());
+                saveAiConfig();
+                setStatus("ok", QString::fromUtf8(_S("已获取 %1 个模型")).arg(models.size()));
+            });
+        connect(m_networkService, &NetworkService::announcementFinished, this,
+            [this](const QString& content, const QString& minVer, const QString& latest,
+                   const QString& downloadUrl, const QString& sha256, bool force,
+                   const QString& error) {
+                if (!error.isEmpty()) {
+                    m_lastServerStatus = readableHttpFailure(QString::fromUtf8(_S("公告接口")), error);
+                    return;
+                }
+                m_announceLabel->setText(content);
+                m_announcement->setVisible(!content.isEmpty());
+                if (!minVer.isEmpty() && CompareVersion(GetClientVersion(), minVer) < 0) {
+                    applyForceUpdateBlock(minVer, downloadUrl, sha256);
+                    return;
+                }
+                if (!latest.isEmpty()) {
+                    handleUpdateCheck(latest, downloadUrl, force, sha256);
+                }
+            });
         connect(m_sessionController, &SessionController::onActivated, this, [this](const QString& token, qint64 exp) {
             m_sessionToken = token;
             m_machineID = GetMachineFingerprint();
@@ -132,7 +220,6 @@ public:
             playSound("success");
             logEvent("ACTIVATE", "Success");
             downloadDllAsync();
-            fetchBalance();
             startChatPolling();
             CheckEnterpriseUpdateAsync();
             if (exp > 0) {
@@ -174,7 +261,7 @@ public:
                     m_sessionToken.clear();
                     m_machineID.clear();
                     m_cardExpiresAt = 0;
-                    m_activated = false;
+                    setUiLocked(true);
                     m_cardInput->setText(savedCard);
                     setStatus("idle", QString::fromUtf8(_S("连接中断，正在重新激活...")));
                     onActivate();
@@ -195,38 +282,24 @@ public:
 
         // Load saved settings
         QSettings settings(_S("LingQiao"), _S("Injector"));
-        m_currentProviderId = settings.value(_S("aiProvider"), _S("deepseek")).toString();
-        setProviderComboById(m_currentProviderId);
-        migrateLegacyApiKey(settings);
-        loadApiKeyForProvider(m_currentProviderId);
-        applyProviderUi();
+        loadAiConfig();
 
         // Restore saved target path
         QString savedTarget = settings.value(_S("targetPath")).toString();
         if (!savedTarget.isEmpty() && QFileInfo::exists(savedTarget))
             m_targetInput->setText(savedTarget);
-        connect(m_providerCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
-            if (m_switchingProvider) return;
-            saveApiKeyForProvider(m_currentProviderId, m_apiKeyInput->text().trimmed());
-            m_currentProviderId = currentProvider().id;
-            QSettings(_S("LingQiao"), _S("Injector")).setValue("aiProvider", m_currentProviderId);
-            loadApiKeyForProvider(m_currentProviderId);
-            applyProviderUi();
-            fetchBalance();
+        connect(m_modelNameInput, &QComboBox::editTextChanged, this, [this]() {
+            if (!m_loadingAiConfig) saveAiConfig();
+            updateFetchModelsButtonState();
         });
-        connect(m_apiKeyInput, &QLineEdit::textChanged, this, [this](const QString& text) {
-            if (m_loadingProviderKey) return;
-            saveApiKeyForProvider(currentProvider().id, text);
+        connect(m_baseUrlInput, &QLineEdit::textChanged, this, [this]() {
+            if (!m_loadingAiConfig) saveAiConfig();
+            updateFetchModelsButtonState();
         });
-
-        // Debounced balance fetch on API key change
-        QTimer* balanceTimer = new QTimer(this);
-        balanceTimer->setSingleShot(true);
-        balanceTimer->setInterval(800);
-        connect(m_apiKeyInput, &QLineEdit::textChanged, this, [this, balanceTimer]() {
-            balanceTimer->start();
+        connect(m_apiKeyInput, &QLineEdit::textChanged, this, [this]() {
+            if (!m_loadingAiConfig) saveAiConfig();
+            updateFetchModelsButtonState();
         });
-        connect(balanceTimer, &QTimer::timeout, this, &MainWindow::fetchBalance);
 
         // Periodic anti-debug check (every 3 seconds)
         QTimer* antiDbg = new QTimer(this);
@@ -260,15 +333,25 @@ public:
             }
         });
 
-        // Periodic balance refresh (every 5 minutes)
-        QTimer* balanceRefresh = new QTimer(this);
-        connect(balanceRefresh, &QTimer::timeout, this, [this]() {
-            if (m_activated) fetchBalance();
-        });
-        balanceRefresh->start(300000);
-
         QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
         move((screen.width() - width()) / 2, (screen.height() - height()) / 2);
+    }
+
+    void showEvent(QShowEvent* event) override {
+        QMainWindow::showEvent(event);
+        // Frameless + acrylic often paints with a stale layout on first show.
+        // Re-apply scale and geometry after the native window exists.
+        QTimer::singleShot(0, this, [this]() {
+            applyUiScale(true);
+            if (QWidget* central = centralWidget()) {
+                if (central->layout()) central->layout()->activate();
+            }
+            if (layout()) layout()->activate();
+            updateGeometry();
+            update();
+            QRect screen = QGuiApplication::primaryScreen()->availableGeometry();
+            move((screen.width() - width()) / 2, (screen.height() - height()) / 2);
+        });
     }
 
     ~MainWindow() {
@@ -310,6 +393,7 @@ public:
 private:
     TitleBar*      m_titleBar      = nullptr;
     SessionController* m_sessionController = nullptr;
+    NetworkService* m_networkService = nullptr;
     InlineStatus*  m_status        = nullptr;
     QStackedWidget* m_pageStack     = nullptr;
     AnimatedButton* m_homeNavBtn    = nullptr;
@@ -319,9 +403,7 @@ private:
     AnimatedButton* m_chatNicknameSaveBtn = nullptr;
     QLineEdit*     m_cardInput     = nullptr;
     AnimatedButton* m_activateBtn   = nullptr;
-    QLabel*        m_cardExpiry    = nullptr;
     QLineEdit*     m_targetInput   = nullptr;
-    int            m_heartbeatFailCount = 0;   // consecutive heartbeat failures
     qint64         m_cardExpiresAt = 0;        // cached card expiry (unix seconds)
     QString        m_logPath;                  // local log file path
     QSystemTrayIcon* m_trayIcon = nullptr;     // system tray
@@ -330,8 +412,11 @@ private:
     QStringList    m_injectHistory;            // recent inject targets
     QLabel*        m_historyLabel = nullptr;   // history display
     AnimatedButton* m_browseBtn     = nullptr;
+    QLineEdit*     m_baseUrlInput  = nullptr;
+    QComboBox*     m_modelNameInput = nullptr;
     QLineEdit*     m_apiKeyInput   = nullptr;
-    QLabel*        m_balanceLabel  = nullptr;
+    AnimatedButton* m_apiKeyToggleBtn = nullptr;
+    QPushButton*   m_fetchModelsBtn = nullptr;
     AnimatedButton* m_injectBtn     = nullptr;
     QWidget*       m_chatPanel     = nullptr;
     QTextBrowser*   m_chatView      = nullptr;
@@ -367,114 +452,33 @@ private:
     QString  m_lastChatStatus = QString::fromUtf8(_S("未连接"));
     QString  m_lastServerStatus = QString::fromUtf8(_S("未检查"));
     double   m_uiScale = 0.0;
-    struct AiProviderConfig {
-        QString id;
-        QString displayName;
-        QString apiKeyPlaceholder;
-        QString baseUrl;
-        QString textModel;
-        QString visionModel;
-        QString adapter;
-        bool supportsBalance;
-        bool supportsVision;
-    };
-    QComboBox*    m_providerCombo = nullptr;
-    QString       m_currentProviderId = QStringLiteral("deepseek");
-    bool          m_loadingProviderKey = false;
-    bool          m_switchingProvider = false;
+    bool          m_loadingAiConfig = false;
+    bool          m_fetchingModels = false;
 
     QString  m_sessionToken, m_machineID;
     bool     m_activated        = false;
     bool     m_forceUpdateBlocked = false;
     bool     m_heartbeatRunning = false;
-    bool     m_heartbeatInProgress = false;
     bool     m_updateDismissed  = false;   // session-level: suppress update banner after "稍后提醒"
+    bool     m_injectInProgress = false;
+    QString  m_lastClipboardCardNotified;
 
-    static const std::vector<AiProviderConfig>& aiProviders() {
-        static const std::vector<AiProviderConfig> providers = {
-            { QStringLiteral("openai"), QStringLiteral("OpenAI"), QString::fromUtf8(_S("输入 OpenAI API Key")),
-              QStringLiteral("https://api.openai.com/v1"), QStringLiteral("gpt-5.5"), QStringLiteral("gpt-5.5"),
-              QStringLiteral("openai-chat"), false, true },
-            { QStringLiteral("qwen"), QString::fromUtf8(_S("通义千问/Qwen")), QString::fromUtf8(_S("输入通义千问 API Key")),
-              QStringLiteral("https://dashscope.aliyuncs.com/compatible-mode/v1"), QStringLiteral("qwen3.7-plus"), QStringLiteral("qwen3.7-plus"),
-              QStringLiteral("openai-chat"), false, true },
-            { QStringLiteral("glm"), QString::fromUtf8(_S("智谱 GLM")), QString::fromUtf8(_S("输入智谱 GLM API Key")),
-              QStringLiteral("https://open.bigmodel.cn/api/paas/v4"), QStringLiteral("glm-4.7-flash"), QStringLiteral("glm-4.5v"),
-              QStringLiteral("openai-chat"), false, true },
-            { QStringLiteral("doubao"), QString::fromUtf8(_S("豆包/火山")), QString::fromUtf8(_S("输入豆包/火山 API Key")),
-              QStringLiteral("https://ark.cn-beijing.volces.com/api/v3"), QStringLiteral("doubao-seed-1-6"), QStringLiteral("doubao-seed-1-6-vision"),
-              QStringLiteral("openai-chat"), false, true },
-            { QStringLiteral("deepseek"), QStringLiteral("DeepSeek"), QString::fromUtf8(_S("输入 DeepSeek API Key")),
-              QStringLiteral("https://api.deepseek.com"), QStringLiteral("deepseek-v4-flash"), QStringLiteral("deepseek-v4-flash"),
-              QStringLiteral("openai-chat"), true, false },
-            { QStringLiteral("mimo"), QString::fromUtf8(_S("小米 mimo")), QString::fromUtf8(_S("输入小米 mimo API Key")),
-              QStringLiteral("https://api.xiaomimimo.com/v1"), QStringLiteral("mimo-v2.5"), QStringLiteral("mimo-v2.5"),
-              QStringLiteral("openai-chat"), false, true },
-        };
-        return providers;
-    }
-
-    const AiProviderConfig& providerById(const QString& id) const {
-        const auto& providers = aiProviders();
-        for (const auto& p : providers) {
-            if (p.id == id) return p;
-        }
-        return providers.front();
-    }
-
-    const AiProviderConfig& currentProvider() const {
-        if (m_providerCombo) {
-            QString id = m_providerCombo->currentData().toString();
-            if (!id.isEmpty()) return providerById(id);
-        }
-        return providerById(m_currentProviderId);
-    }
-
-    QString apiKeySettingName(const QString& providerId) const {
-        return QStringLiteral("apiKeyEnc/%1").arg(providerId);
-    }
-
-    void saveApiKeyForProvider(const QString& providerId, const QString& key) {
-        if (providerId.isEmpty()) return;
+    void saveAiConfig() {
         QSettings s(_S("LingQiao"), _S("Injector"));
-        s.setValue(apiKeySettingName(providerId), DpapiProtect(key.toUtf8()));
+        s.setValue(_S("aiBaseUrl"), m_baseUrlInput->text().trimmed());
+        s.setValue(_S("aiModel"), m_modelNameInput->currentText().trimmed());
+        s.setValue(_S("apiKeyEnc"), DpapiProtect(m_apiKeyInput->text().trimmed().toUtf8()));
     }
 
-    void loadApiKeyForProvider(const QString& providerId) {
+    void loadAiConfig() {
         QSettings s(_S("LingQiao"), _S("Injector"));
-        m_loadingProviderKey = true;
-        QByteArray plain = DpapiUnprotect(s.value(apiKeySettingName(providerId)).toString());
+        m_loadingAiConfig = true;
+        m_baseUrlInput->setText(s.value(_S("aiBaseUrl")).toString());
+        m_modelNameInput->setCurrentText(s.value(_S("aiModel")).toString());
+        QByteArray plain = DpapiUnprotect(s.value(_S("apiKeyEnc")).toString());
         m_apiKeyInput->setText(QString::fromUtf8(plain));
-        m_loadingProviderKey = false;
-    }
-
-    void migrateLegacyApiKey(QSettings& settings) {
-        if (settings.contains(_S("apiKeyEnc")) && !settings.contains(apiKeySettingName(QStringLiteral("deepseek")))) {
-            settings.setValue(apiKeySettingName(QStringLiteral("deepseek")), settings.value(_S("apiKeyEnc")).toString());
-            settings.remove(_S("apiKeyEnc"));
-        }
-        QString legacyKey = settings.value(_S("apiKey")).toString();
-        if (!legacyKey.isEmpty() && !settings.contains(apiKeySettingName(QStringLiteral("deepseek")))) {
-            settings.setValue(apiKeySettingName(QStringLiteral("deepseek")), DpapiProtect(legacyKey.toUtf8()));
-            settings.remove(_S("apiKey"));
-        }
-    }
-
-    void setProviderComboById(const QString& providerId) {
-        if (!m_providerCombo) return;
-        m_switchingProvider = true;
-        int idx = m_providerCombo->findData(providerId);
-        m_providerCombo->setCurrentIndex(idx >= 0 ? idx : 0);
-        m_currentProviderId = currentProvider().id;
-        m_switchingProvider = false;
-    }
-
-    void applyProviderUi() {
-        const auto& provider = currentProvider();
-        if (m_apiKeyInput) m_apiKeyInput->setPlaceholderText(provider.apiKeyPlaceholder);
-        if (m_balanceLabel && !provider.supportsBalance) {
-            m_balanceLabel->setVisible(false);
-        }
+        m_loadingAiConfig = false;
+        updateFetchModelsButtonState();
     }
 
     // ── Session, Logging, Tray, History ──
@@ -515,7 +519,10 @@ private:
         m_activated = !locked;
         m_targetInput->setEnabled(!locked);
         m_browseBtn->setEnabled(!locked);
-        if (m_providerCombo) m_providerCombo->setEnabled(!locked);
+        if (m_fetchModelsBtn) m_fetchModelsBtn->setEnabled(!locked && !m_fetchingModels &&
+            !m_baseUrlInput->text().trimmed().isEmpty() && !m_apiKeyInput->text().trimmed().isEmpty());
+        if (m_baseUrlInput) m_baseUrlInput->setEnabled(!locked);
+        if (m_modelNameInput) m_modelNameInput->setEnabled(!locked);
         m_apiKeyInput->setEnabled(!locked);
         m_injectBtn->setEnabled(!locked && g_dllReady && !m_forceUpdateBlocked);
         if (m_chatInput) m_chatInput->setEnabled(!locked);
@@ -579,11 +586,9 @@ private:
     }
     void setExpiryStatus(const QString& text, const QString& tone = QStringLiteral("normal")) {
         if (m_status) m_status->setExpiryText(text, tone);
-        if (m_cardExpiry) m_cardExpiry->setVisible(false);
     }
     void clearExpiryStatus() {
         if (m_status) m_status->clearExpiryText();
-        if (m_cardExpiry) m_cardExpiry->setVisible(false);
     }
     void setConnDot(const QString& state) {
         if (m_titleBar) m_titleBar->setDot(state);
@@ -592,8 +597,7 @@ private:
 
 
     int spx(double base) const {
-        double scale = m_uiScale > 0.0 ? m_uiScale : 1.0;
-        return qMax(1, (int)qRound(base * scale));
+        return SpX(m_uiScale, base);
     }
 
     enum ButtonTone {
@@ -603,42 +607,10 @@ private:
     };
 
     QString buttonStyle(ButtonTone tone, int fontPx, int radiusPx = 8, int paddingXPx = 14, int paddingYPx = 8) const {
-        if (tone == ButtonAccent) {
-            return QString(
-                "QPushButton { background: rgba(74,158,255,0.85); "
-                "border: 1px solid rgba(74,158,255,0.60); color: #ffffff; "
-                "font-size: %1px; font-weight: 600; letter-spacing: 0.5px; "
-                "border-radius: %2px; padding: %3px %4px; }"
-                "QPushButton:hover { background: rgba(109,179,255,0.90); "
-                "border-color: rgba(74,158,255,0.80); }"
-                "QPushButton:pressed { background: rgba(59,130,246,0.90); "
-                "border-color: rgba(74,158,255,0.70); }"
-                "QPushButton:disabled { background: rgba(74,158,255,0.40); "
-                "border-color: rgba(74,158,255,0.30); color: rgba(255,255,255,0.55); }")
-                .arg(fontPx).arg(radiusPx).arg(spx(paddingYPx)).arg(spx(paddingXPx));
-        }
-        if (tone == ButtonSuccess) {
-            return QString(
-                "QPushButton { background: #34d27b; border: 1px solid #34d27b; "
-                "color: #ffffff; font-size: %1px; font-weight: 600; letter-spacing: 0.5px; "
-                "border-radius: %2px; padding: %3px %4px; }"
-                "QPushButton:hover { background: #3ae085; border-color: #3ae085; }"
-                "QPushButton:pressed { background: #22c55e; border-color: #22c55e; }"
-                "QPushButton:disabled { background: rgba(52,210,123,0.40); "
-                "border-color: rgba(52,210,123,0.30); color: rgba(255,255,255,0.55); }")
-                .arg(fontPx).arg(radiusPx).arg(spx(paddingYPx)).arg(spx(paddingXPx));
-        }
-        return QString(
-            "QPushButton { background: transparent; "
-            "border: 1px solid rgba(200,200,210,0.50); color: #1a1a2e; "
-            "font-size: %1px; font-weight: 600; letter-spacing: 0.5px; "
-            "border-radius: %2px; padding: %3px %4px; }"
-            "QPushButton:hover { background: rgba(255,255,255,0.38); "
-            "border-color: rgba(180,180,190,0.65); }"
-            "QPushButton:pressed { background: rgba(235,235,242,0.42); }"
-            "QPushButton:disabled { background: rgba(255,255,255,0.14); "
-            "border-color: rgba(220,220,230,0.26); color: #94a3b8; }")
-            .arg(fontPx).arg(radiusPx).arg(spx(paddingYPx)).arg(spx(paddingXPx));
+        UiButtonTone t = UiButtonTone::Neutral;
+        if (tone == ButtonAccent) t = UiButtonTone::Accent;
+        else if (tone == ButtonSuccess) t = UiButtonTone::Success;
+        return BuildButtonStyle(t, fontPx, radiusPx, spx(paddingYPx), spx(paddingXPx));
     }
 
     QString primaryButtonStyle(int fontPx, int radiusPx = 8, int paddingXPx = 14, int paddingYPx = 8) const {
@@ -646,105 +618,44 @@ private:
     }
 
     void installThemedLineEditMenu(QLineEdit* edit) {
-        if (!edit) return;
-        edit->setContextMenuPolicy(Qt::CustomContextMenu);
-        connect(edit, &QLineEdit::customContextMenuRequested, this, [edit](const QPoint& pos) {
-            QMenu* menu = edit->createStandardContextMenu();
-            if (!menu) return;
-            menu->setAttribute(Qt::WA_DeleteOnClose);
-            menu->setStyleSheet(POPUP_CSS);
-            menu->popup(edit->mapToGlobal(pos));
-        });
+        InstallThemedLineEditMenu(this, edit);
     }
 
     void installThemedComboBox(QComboBox* combo) {
-        if (!combo) return;
-        combo->setView(new QListView(combo));
-        combo->view()->setStyleSheet(
-            "QListView {"
-            " background: rgba(255, 255, 255, 0.98);"
-            " border: 1px solid rgba(200, 200, 210, 0.60);"
-            " color: #1a1a2e;"
-            " outline: none;"
-            " padding: 4px;"
-            " selection-background-color: #4a9eff;"
-            " selection-color: #ffffff;"
-            "}"
-            "QListView::item {"
-            " min-height: 26px;"
-            " padding: 5px 10px;"
-            " color: #1a1a2e;"
-            " background: rgba(255, 255, 255, 0.98);"
-            "}"
-            "QListView::item:hover {"
-            " background: rgba(240, 240, 245, 0.95);"
-            " color: #0f172a;"
-            "}"
-            "QListView::item:selected {"
-            " background: #4a9eff;"
-            " color: #ffffff;"
-            "}"
-        );
+        InstallThemedComboBox(combo);
+        InstallThemedComboBoxMenu(this, combo);
+    }
+
+    void installThemedTextBrowserMenu(QTextBrowser* browser) {
+        InstallThemedTextBrowserMenu(this, browser);
     }
 
     void applyUiScale(bool force = false) {
-        double sx = (double)width() / (double)WINDOW_WIDTH;
-        double sy = (double)height() / (double)WINDOW_HEIGHT;
-        double next = qBound(1.0, qMin(sx, sy), 1.8);
+        double next = ComputeUiScale(width(), height(), WINDOW_WIDTH, WINDOW_HEIGHT);
         if (!force && qAbs(next - m_uiScale) < 0.03) return;
         m_uiScale = next;
 
-        setStyleSheet(QString(CSS) + QString(
-            "#MainWindow { background: transparent; border: 1px solid rgba(200, 200, 210, 0.40); border-radius: %1px; }"
-            "* { font-size: %2px; }"
-            "QLabel[role=\"heading\"] { font-size: %3px; font-weight: 600; color: #334155; letter-spacing: 0.6px; }"
-            "QLabel[role=\"caption\"], QLabel[role=\"success\"], QLabel[role=\"danger\"], QLabel[role=\"warning\"] { font-size: %3px; }"
-            "QLineEdit { font-size: %4px; border-radius: %5px; padding: %6px %7px; }"
-            "QComboBox { font-size: %4px; border-radius: %5px; padding: %9px %10px %9px %7px; }"
-            "QComboBox::drop-down { width: %11px; border-top-right-radius: %5px; border-bottom-right-radius: %5px; }"
-            "QComboBox QAbstractItemView::item { min-height: %12px; padding: %13px %14px; }"
-            "QPushButton { font-size: %2px; border-radius: %5px; padding: %6px %8px; }")
-            .arg(spx(16)).arg(spx(12)).arg(spx(11)).arg(spx(13))
-            .arg(spx(8)).arg(spx(9)).arg(spx(12)).arg(spx(18))
-            .arg(spx(8)).arg(spx(34)).arg(spx(30)).arg(spx(26))
-            .arg(spx(5)).arg(spx(10)));
+        setStyleSheet(QString(CSS) + BuildScaledMainWindowCssheet(m_uiScale));
 
         if (m_cardInput) {
             m_cardInput->setFixedHeight(spx(38));
-            m_cardInput->setStyleSheet(QString(
-                "QLineEdit { font-size: %1px; font-family: \"Cascadia Code\", \"Consolas\", monospace; "
-                "letter-spacing: 0.5px; border-radius: %2px; }")
-                .arg(spx(13)).arg(spx(8)));
+            m_cardInput->setStyleSheet(CardInputMonospaceCss(m_uiScale));
         }
         if (m_targetInput) m_targetInput->setFixedHeight(spx(38));
-        if (m_providerCombo) m_providerCombo->setFixedHeight(spx(36));
+        if (m_modelNameInput) m_modelNameInput->setFixedHeight(spx(38));
+        if (m_fetchModelsBtn) m_fetchModelsBtn->setFixedSize(spx(96), spx(38));
+        if (m_baseUrlInput) m_baseUrlInput->setFixedHeight(spx(38));
         if (m_apiKeyInput) m_apiKeyInput->setFixedHeight(spx(38));
+        if (m_apiKeyToggleBtn) m_apiKeyToggleBtn->setFixedSize(spx(64), spx(38));
         if (m_activateBtn) {
             m_activateBtn->setFixedSize(spx(72), spx(38));
             if (!m_activated) m_activateBtn->setStyleSheet(primaryButtonStyle(spx(12), spx(8)));
         }
         if (m_browseBtn) m_browseBtn->setFixedSize(spx(64), spx(38));
         if (m_status) m_status->setFixedHeight(spx(26));
-        if (m_balanceLabel) {
-            m_balanceLabel->setStyleSheet(QString(
-                "font-size: %1px; padding: %2px %3px; background: transparent; color: #7ec8e3; font-weight: 500;")
-                .arg(spx(11)).arg(spx(4)).arg(spx(2)));
-        }
-        if (m_historyLabel) {
-            m_historyLabel->setStyleSheet(QString(
-                "font-size: %1px; color: #7ec8e3; background: transparent;")
-                .arg(spx(11)));
-        }
-        if (m_announceLabel) {
-            m_announceLabel->setStyleSheet(QString(
-                "font-size: %1px; color: #fbbf3a; background: transparent; font-weight: 500;")
-                .arg(spx(11)));
-        }
-        if (m_updateLabel) {
-            m_updateLabel->setStyleSheet(QString(
-                "font-size: %1px; color: #4a9eff; background: transparent; font-weight: 500;")
-                .arg(spx(11)));
-        }
+        if (m_historyLabel) m_historyLabel->setStyleSheet(HistoryLabelCss(m_uiScale));
+        if (m_announceLabel) m_announceLabel->setStyleSheet(AnnounceLabelCss(m_uiScale));
+        if (m_updateLabel) m_updateLabel->setStyleSheet(UpdateLabelCss(m_uiScale));
         if (m_updateNowBtn) m_updateNowBtn->setStyleSheet(buttonStyle(ButtonAccent, spx(11), spx(4)));
         if (m_remindLaterBtn) m_remindLaterBtn->setStyleSheet(buttonStyle(ButtonNeutral, spx(11), spx(4)));
         if (m_diagnosticsBtn) {
@@ -753,72 +664,25 @@ private:
         }
         if (m_homeNavBtn) m_homeNavBtn->setFixedSize(spx(80), spx(30));
         if (m_communityNavBtn) m_communityNavBtn->setFixedSize(spx(90), spx(30));
-        if (m_communityState) {
-            m_communityState->setStyleSheet(QString(
-                "font-size: %1px; color: #475569; font-weight: 600;")
-                .arg(spx(12)));
+        if (m_communityState) m_communityState->setStyleSheet(CommunityStateCss(m_uiScale));
+        if (m_chatNicknameSaveBtn) {
+            m_chatNicknameSaveBtn->setFixedSize(spx(48), spx(26));
+            m_chatNicknameSaveBtn->setStyleSheet(buttonStyle(ButtonNeutral, spx(11), spx(6), 6, 2));
         }
+        updatePageNav();
+        ApplyChatScaleStyles(m_uiScale, ChatWidgets{
+            m_chatView, m_replyBanner, m_replyLabel, m_chatInput,
+            m_chatHeading, m_chatSendBtn, m_chatNicknameInput
+        });
         if (m_chatNicknameInput) {
-            m_chatNicknameInput->setFixedSize(spx(100), spx(26));
-            m_chatNicknameInput->setStyleSheet(QString(
-                "QLineEdit { font-size: %1px; border-radius: %2px; padding: %3px %4px; "
-                "background: rgba(255, 255, 255, 0.45); border: 1px solid rgba(200, 200, 210, 0.45); color: #0f172a; } "
-                "QLineEdit:focus { border-color: #4a9eff; background: #ffffff; }")
-                .arg(spx(11)).arg(spx(6)).arg(spx(2)).arg(spx(4)));
             if (QWidget* p = m_chatNicknameInput->parentWidget()) {
                 if (QLabel* nickLabel = p->findChild<QLabel*>("chatNicknameLabel")) {
                     nickLabel->setStyleSheet(QString("font-size: %1px; color: #64748b; font-weight: 500;").arg(spx(11)));
                 }
             }
         }
-        if (m_chatNicknameSaveBtn) {
-            m_chatNicknameSaveBtn->setFixedSize(spx(48), spx(26));
-            m_chatNicknameSaveBtn->setStyleSheet(buttonStyle(ButtonNeutral, spx(11), spx(6), 6, 2));
-        }
-        updatePageNav();
         if (m_chatView) {
-            m_chatView->setStyleSheet(QString(
-                "QTextBrowser { background: rgba(255, 255, 255, 0.35); border: 1px solid rgba(200, 200, 210, 0.40); "
-                "border-radius: %1px; padding: %2px; color: #1a1a2e; font-size: %3px; }")
-                .arg(spx(8)).arg(spx(10)).arg(spx(12)));
             updateChatView(m_localMessages, true);
-        }
-        if (m_replyBanner) {
-            m_replyBanner->setStyleSheet(QString(
-                "QFrame#replyBanner { background: rgba(74, 158, 255, 0.12); border: 1px solid rgba(74, 158, 255, 0.25); "
-                "border-radius: %1px; padding: %2px %3px; }")
-                .arg(spx(6)).arg(spx(4)).arg(spx(8)));
-            if (m_replyLabel) {
-                m_replyLabel->setStyleSheet(QString("font-size: %1px; color: #1e40af; font-weight: 500;").arg(spx(11)));
-            }
-            QPushButton* cancelBtn = m_replyBanner->findChild<QPushButton*>();
-            if (cancelBtn) {
-                cancelBtn->setFixedSize(spx(24), spx(24));
-                cancelBtn->setStyleSheet(QString(
-                    "QPushButton { border: none; background: transparent; color: #1e40af; font-weight: bold; font-size: %1px; margin: 0; padding: 0; } "
-                    "QPushButton:hover { color: #ef4444; }").arg(spx(16)));
-            }
-        }
-        if (m_chatInput) {
-            m_chatInput->setFixedHeight(spx(34));
-            m_chatInput->setStyleSheet(QString(
-                "QLineEdit { font-size: %1px; border-radius: %2px; padding: %3px %4px; "
-                "background: rgba(255, 255, 255, 0.50); border: 1px solid rgba(200, 200, 210, 0.45); color: #0f172a; } "
-                "QLineEdit:focus { border-color: #4a9eff; background: #ffffff; }")
-                .arg(spx(12)).arg(spx(8)).arg(spx(6)).arg(spx(10)));
-        }
-        if (m_chatHeading) {
-            m_chatHeading->setStyleSheet(QString("font-size: %1px; font-weight: 700; color: #1e293b;").arg(spx(12)));
-        }
-        if (m_chatSendBtn) {
-            m_chatSendBtn->setFixedSize(spx(64), spx(34));
-            m_chatSendBtn->setStyleSheet(QString(
-                "QPushButton { font-size: %1px; border-radius: %2px; "
-                "background: rgba(74, 158, 255, 0.85); border: 1px solid rgba(74, 158, 255, 0.60); "
-                "color: #ffffff; font-weight: 600; } "
-                "QPushButton:hover { background: rgba(109, 179, 255, 0.90); } "
-                "QPushButton:disabled { background: rgba(74, 158, 255, 0.40); color: rgba(255,255,255,0.5); }")
-                .arg(spx(12)).arg(spx(8)));
         }
         if (m_injectBtn) {
             m_injectBtn->setFixedSize(spx(200), spx(44));
@@ -842,88 +706,19 @@ private:
         p.fillPath(path, QColor(255, 255, 255, 24));
     }
 
-    bool isNonDraggableWidget(QWidget* w) const {
-        if (!w) return false;
-        // Walk up to find the actual interactive widget
-        while (w && w != this) {
-            if (qobject_cast<QPushButton*>(w)   ||
-                qobject_cast<QLineEdit*>(w)     ||
-                qobject_cast<QScrollBar*>(w)    ||
-                qobject_cast<QComboBox*>(w)     ||
-                qobject_cast<QMenu*>(w))
-                return true;
-            // ScrollArea viewport — allow scrolling, not dragging
-            if (qobject_cast<QAbstractScrollArea*>(w))
-                return true;
-            // QLabel with openExternalLinks or rich text links
-            if (auto* lbl = qobject_cast<QLabel*>(w)) {
-                if (lbl->openExternalLinks() || lbl->textFormat() == Qt::RichText)
-                    return true;
-            }
-            w = w->parentWidget();
-        }
-        return false;
-    }
-
     bool nativeEvent(const QByteArray& eventType, void* message, long* result) override {
         if (eventType == "windows_generic_MSG" || eventType == "windows_dispatcher_MSG") {
             MSG* msg = static_cast<MSG*>(message);
             if (msg->message == WM_NCHITTEST) {
                 QPoint globalPos(GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
                 QPoint localPos = mapFromGlobal(globalPos);
-
-                // Bounds check — outside client rect, let system handle
-                if (!rect().contains(localPos))
-                    return QMainWindow::nativeEvent(eventType, message, result);
-
-                constexpr int resizeBorder = 8;
-                const bool left = localPos.x() <= resizeBorder;
-                const bool right = localPos.x() >= width() - resizeBorder;
-                const bool top = localPos.y() <= resizeBorder;
-                const bool bottom = localPos.y() >= height() - resizeBorder;
-
-                if (!isMaximized()) {
-                    if (top && left) {
-                        *result = HTTOPLEFT;
-                        return true;
-                    }
-                    if (top && right) {
-                        *result = HTTOPRIGHT;
-                        return true;
-                    }
-                    if (bottom && left) {
-                        *result = HTBOTTOMLEFT;
-                        return true;
-                    }
-                    if (bottom && right) {
-                        *result = HTBOTTOMRIGHT;
-                        return true;
-                    }
-                    if (left) {
-                        *result = HTLEFT;
-                        return true;
-                    }
-                    if (right) {
-                        *result = HTRIGHT;
-                        return true;
-                    }
-                    if (top) {
-                        *result = HTTOP;
-                        return true;
-                    }
-                    if (bottom) {
-                        *result = HTBOTTOM;
-                        return true;
-                    }
-                }
-
-                // Only title bar region is draggable
-                if (localPos.y() < TITLE_BAR_H) {
-                    QWidget* hit = childAt(localPos);
-                    if (!isNonDraggableWidget(hit)) {
-                        *result = HTCAPTION;
-                        return true;
-                    }
+                LRESULT ht = FramelessHitTest(
+                    localPos, rect(), isMaximized(), TITLE_BAR_H, 8,
+                    [this](const QPoint& p) { return childAt(p); },
+                    this);
+                if (ht != 0) {
+                    *result = ht;
+                    return true;
                 }
             }
         }

@@ -2,6 +2,7 @@ package authorizations
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/lingqiao/server/internal/features/cards"
@@ -105,6 +106,7 @@ func (s *Service) PreviewAction(ctx context.Context, codes []string, action Acti
 	for machine := range machineSet {
 		preview.Machines = append(preview.Machines, machine)
 	}
+	sort.Strings(preview.Machines)
 	return preview, nil
 }
 

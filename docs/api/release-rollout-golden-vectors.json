@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "rollout": {
+    "hash": "SHA-256",
+    "key_format": "releaseId + \"|\" + firstNonEmpty(machineId, cardCode, agentId, version, \"anonymous\")",
+    "bucket": "unsigned big-endian uint64 of digest[0:8] mod 100",
+    "rule": "included when bucket < rolloutPercent; percent<=0 excludes all, percent>=100 includes all",
+    "buckets": [
+      {"release_id": "rel-001", "key": "MACHINE-A", "bucket": 35},
+      {"release_id": "rel-001", "key": "MACHINE-B", "bucket": 44},
+      {"release_id": "rel-002", "key": "MACHINE-A", "bucket": 38},
+      {"release_id": "rel-002", "key": "anonymous", "bucket": 65},
+      {"release_id": "rel-003", "key": "CARD-XYZ", "bucket": 80}
+    ]
+  },
+  "version_compare": [
+    {"candidate": "2.4.1", "current": "2.4.0", "greater": true},
+    {"candidate": "2.4.0", "current": "2.4.0", "greater": false},
+    {"candidate": "2.4", "current": "2.4.0", "greater": false},
+    {"candidate": "2.10.0", "current": "2.9.9", "greater": true},
+    {"candidate": "3", "current": "2.99.99", "greater": true},
+    {"candidate": "bad.version", "current": "0.0.1", "greater": false}
+  ]
+}

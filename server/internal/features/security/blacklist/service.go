@@ -2,6 +2,8 @@ package blacklist
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"time"
 )
 
@@ -33,6 +35,10 @@ func NewService(repo Repository) *Service {
 
 // Add adds an entry to the blacklist.
 func (s *Service) Add(ctx context.Context, typ, value, reason string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("value is required")
+	}
 	return s.repo.Add(ctx, Entry{
 		Type:      typ,
 		Value:     value,

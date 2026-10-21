@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sort"
 	"sync/atomic"
@@ -94,19 +95,23 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	adminUser, err := h.svc.VerifyLogin(r.Context(), req.Username, req.Password)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
+		httpapi.WriteError(w, http.StatusUnauthorized, "用户名或密码错误")
 		return
 	}
 
 	h.loginLimiter.Clear(ip)
 
-	token, maxAge := h.svc.CreateSession(r.Context(), adminUser.ID, ip, r.UserAgent())
+	token, maxAge, err := h.svc.CreateSession(r.Context(), adminUser.ID, ip, r.UserAgent())
+	if err != nil {
+		httpapi.WriteError(w, http.StatusInternalServerError, "登录失败，请重试")
+		return
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     "admin_token",
 		Value:    token,
@@ -117,6 +122,7 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   maxAge,
 	})
 
+	w.Header().Set("Cache-Control", "no-store")
 	httpapi.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok", "token": token})
 }
 
@@ -136,7 +142,7 @@ func (h *Handler) HandlePasswordChange(w http.ResponseWriter, r *http.Request) {
 		NewPassword string `json:"new_password"`
 	}
 	if err := httpapi.ReadJSON(r, &req); err != nil {
-		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -149,10 +155,10 @@ func (h *Handler) HandlePasswordChange(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.svc.ChangePassword(r.Context(), adminUser.ID, req.OldPassword, req.NewPassword); err != nil {
-		if err.Error() == "旧密码错误" {
-			httpapi.WriteError(w, http.StatusUnauthorized, err.Error())
+		if errors.Is(err, ErrWrongOldPassword) {
+			httpapi.WriteError(w, http.StatusUnauthorized, "旧密码错误")
 		} else {
-			httpapi.WriteError(w, http.StatusBadRequest, err.Error())
+			httpapi.WriteError(w, http.StatusBadRequest, "failed to change password")
 		}
 		return
 	}
@@ -161,9 +167,12 @@ func (h *Handler) HandlePasswordChange(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
 	cardsList, err := h.cardsSvc.AllCards(r.Context())
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards: "+err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards")
 		return
 	}
 
@@ -192,6 +201,9 @@ func (h *Handler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleServerStats(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
 	activeCount := 0
 	if res, err := h.sessionsSvc.List(r.Context(), sessions.ListFilter{ActiveOnly: true}); err == nil {
 		activeCount = res.Total
@@ -199,7 +211,7 @@ func (h *Handler) HandleServerStats(w http.ResponseWriter, r *http.Request) {
 
 	cardsList, err := h.cardsSvc.AllCards(r.Context())
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards: "+err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards")
 		return
 	}
 
@@ -217,16 +229,19 @@ func (h *Handler) HandleServerStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
+	if !httpapi.RequireMethod(w, r, http.MethodGet) {
+		return
+	}
 	now := time.Now()
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	cardsList, err := h.cardsSvc.AllCards(r.Context())
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards: "+err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to load cards")
 		return
 	}
-	auditLog, err := h.auditRecorder.Query(r.Context(), audit.Filter{}, 10000)
+	auditLog, err := h.auditRecorder.Query(r.Context(), audit.Filter{}, 1000)
 	if err != nil {
-		httpapi.WriteError(w, http.StatusInternalServerError, "failed to query audit log: "+err.Error())
+		httpapi.WriteError(w, http.StatusInternalServerError, "failed to query audit log")
 		return
 	}
 

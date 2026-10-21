@@ -1,12 +1,8 @@
 package main
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/csv"
-	"encoding/hex"
 	"fmt"
-	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -15,43 +11,7 @@ import (
 	"github.com/lingqiao/server/internal/audit"
 	agentsvc "github.com/lingqiao/server/internal/features/agents"
 	"github.com/lingqiao/server/internal/features/cards"
-	"golang.org/x/crypto/bcrypt"
 )
-
-func hashPassword(pw string) string {
-	hash, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
-	if err != nil {
-		log.Printf("[WARN] bcrypt failed, falling back to sha256: %v", err)
-		h := sha256.Sum256([]byte(pw))
-		return hex.EncodeToString(h[:])
-	}
-	return string(hash)
-}
-
-func isBcryptHash(h string) bool {
-	return len(h) >= 4 && h[0] == '$' && h[1] == '2'
-}
-
-func verifyPassword(pw, storedHash string) (match bool, newHash string) {
-	if isBcryptHash(storedHash) {
-		return bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(pw)) == nil, ""
-	}
-	h := sha256.Sum256([]byte(pw))
-	legacyHash := hex.EncodeToString(h[:])
-	if subtle.ConstantTimeCompare([]byte(legacyHash), []byte(storedHash)) != 1 {
-		return false, ""
-	}
-	bcryptHash, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
-	if err != nil {
-		return true, ""
-	}
-	return true, string(bcryptHash)
-}
-
-func hashToken(s string) string {
-	h := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(h[:])
-}
 
 func extractToken(r *http.Request, cookieName string) string {
 	if cookie, err := r.Cookie(cookieName); err == nil && cookie.Value != "" {
